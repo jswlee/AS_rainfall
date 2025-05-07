@@ -1,0 +1,82 @@
+Top Trials Summary:
+
+Rank 1 (Trial trial_052):
+  Validation Loss: 1.044927
+  Hyperparameters:
+    na: 512
+    nb: 384
+    dropout_rate: 0.1
+    l2_reg: 1e-06
+    learning_rate: 0.01
+    weight_decay: 1e-07
+    local_dem_units: 64
+    regional_dem_units: 32
+    month_units: 16
+    climate_units: 384
+    use_residual: False
+    activation: relu
+
+Rank 2 (Trial trial_056):
+  Validation Loss: 1.053487
+  Hyperparameters:
+    na: 512
+    nb: 640
+    dropout_rate: 0.1
+    l2_reg: 1e-06
+    learning_rate: 0.01
+    weight_decay: 1e-07
+    local_dem_units: 32
+    regional_dem_units: 32
+    month_units: 16
+    climate_units: 64
+    use_residual: False
+    activation: relu
+
+Rank 3 (Trial trial_061):
+  Validation Loss: 1.067547
+  Hyperparameters:
+    na: 512
+    nb: 256
+    dropout_rate: 0.1
+    l2_reg: 1e-06
+    learning_rate: 0.01
+    weight_decay: 1e-07
+    local_dem_units: 128
+    regional_dem_units: 32
+    month_units: 16
+    climate_units: 192
+    use_residual: False
+    activation: relu
+
+Rank 4 (Trial trial_085):
+  Validation Loss: 1.067659
+  Hyperparameters:
+    na: 384
+    nb: 640
+    dropout_rate: 0.1
+    l2_reg: 1e-06
+    learning_rate: 0.01
+    weight_decay: 1e-07
+    local_dem_units: 128
+    regional_dem_units: 32
+    month_units: 80
+    climate_units: 64
+    use_residual: False
+    activation: relu
+
+Rank 5 (Trial trial_039):
+  Validation Loss: 1.071593
+  Hyperparameters:
+    na: 448
+    nb: 768
+    dropout_rate: 0.1
+    l2_reg: 1e-06
+    learning_rate: 0.01
+    weight_decay: 1e-07
+    local_dem_units: 256
+    regional_dem_units: 32
+    month_units: 16
+    climate_units: 64
+    use_residual: False
+    activation: relu
+

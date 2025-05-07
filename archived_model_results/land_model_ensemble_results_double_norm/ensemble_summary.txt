@@ -1,0 +1,27 @@
+Ensemble Model with 5-Fold Cross-Validation
+Each fold contains 5 models
+
+Hyperparameters:
+  na: 320
+  nb: 256
+  dropout_rate: 0.4
+  l2_reg: 1.7352550593878845e-05
+  learning_rate: 0.0007256000814102282
+  weight_decay: 1.1574311893640013e-06
+  local_dem_units: 128
+  regional_dem_units: 96
+  month_units: 32
+  climate_units: 256
+
+Cross-Validation Results:
+  Fold 1: R² = 0.4281, RMSE = 86.4608 mm, MAE = 18.1628 mm
+  Fold 2: R² = 0.7090, RMSE = 63.0774 mm, MAE = 16.1526 mm
+  Fold 3: R² = 0.4810, RMSE = 54.0305 mm, MAE = 15.8115 mm
+  Fold 4: R² = 0.3564, RMSE = 87.1664 mm, MAE = 15.6994 mm
+  Fold 5: R² = 0.6081, RMSE = 64.1367 mm, MAE = 15.0832 mm
+
+Average CV: R² = 0.5165, RMSE = 70.9744 mm, MAE = 16.1819 mm
+
+Test Set: R² = 0.6313, RMSE = 60.9881 mm, MAE = 15.9884 mm
+
+Training completed in 00:15:57

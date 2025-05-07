@@ -1,0 +1,11 @@
+Hyperparameter Importance (based on correlation with validation loss):
+l2_reg: 0.717551
+dropout_rate: 0.682223
+weight_decay: 0.520060
+regional_dem_units: 0.515204
+learning_rate: 0.412481
+na: 0.391899
+month_units: 0.380616
+climate_units: 0.132335
+local_dem_units: 0.038361
+nb: 0.025927

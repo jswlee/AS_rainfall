@@ -1,0 +1,4 @@
+Test Loss: 2895.0989
+Test MAE: 15.9974 mm
+Test R²: 0.6950
+Test RMSE: 53.8061 mm

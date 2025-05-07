@@ -1,0 +1,14 @@
+Best hyperparameters from 100 trials:
+
+na: 512
+nb: 384
+dropout_rate: 0.1
+l2_reg: 1e-06
+learning_rate: 0.01
+weight_decay: 1e-07
+local_dem_units: 64
+regional_dem_units: 32
+month_units: 16
+climate_units: 384
+use_residual: False
+activation: relu

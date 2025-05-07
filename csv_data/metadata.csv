@@ -1,0 +1,2 @@
+climate_var_names,climate_var_count,local_patch_shape,regional_patch_shape,month_encoding_shape,total_samples,creation_date
+"air_2m,air_temp_diff_1000_500,hgt_1000,hgt_500,merid_moist_700,merid_moist_925,omega_500,pottmp_diff_1000_500,pottmp_diff_1000_850,pr_wtr,shum_700,shum_925,skin_temp,slp,zon_moist_700,zon_moist_925",16,3x3,3x3,12,18900,2025-04-22T07:17:12.142846
