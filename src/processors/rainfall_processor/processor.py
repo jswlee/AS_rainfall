@@ -54,35 +54,15 @@ class RainfallProcessor:
             if not all(col in df.columns for col in required_cols):
                 raise ValueError(f"Station locations file must contain columns: {required_cols}")
             
-            # Create a mapping of normalized station names to actual station names
-            # This will help match station names from different sources
-            df['normalized_name'] = df['station_name'].apply(self._normalize_station_name)
-            
             self.station_locations = df
             print(f"Loaded locations for {len(df)} stations")
             
-            # Create a mapping from normalized names to original names
-            self.station_name_map = dict(zip(df['normalized_name'], df['station_name']))
-            print(f"Created mapping for {len(self.station_name_map)} normalized station names")
+            # No need for name mapping anymore
         
         except Exception as e:
             print(f"Error loading station locations: {e}")
-            self.station_locations = pd.DataFrame(columns=['station_name', 'latitude', 'longitude', 'normalized_name'])
-            self.station_name_map = {}
-    
-    def _normalize_station_name(self, name):
-        """Normalize station name for better matching."""
-        if not isinstance(name, str):
-            return ""
-        
-        # Convert to lowercase, remove special characters and spaces
-        normalized = name.lower().replace('_', '').replace('-', '').replace(' ', '')
-        
-        # Remove common suffixes that might differ between datasets
-        for suffix in ['_uh', '_wrcc', '_usgs', '_monthly']:
-            normalized = normalized.replace(suffix, '')
-        
-        return normalized
+            self.station_locations = pd.DataFrame(columns=['station_name', 'latitude', 'longitude'])
+
     
     def _load_rainfall_data(self):
         """Load all rainfall data from processed monthly files."""
@@ -98,22 +78,21 @@ class RainfallProcessor:
             
             print(f"Found {len(rainfall_files)} rainfall files")
             
-            # Create a mapping of normalized file names to actual file names
+            # Create a mapping of station names to file paths
             file_name_map = {}
             for file in rainfall_files:
                 station_name = file.stem.replace('_monthly', '')
-                normalized_name = self._normalize_station_name(station_name)
-                file_name_map[normalized_name] = file
+                file_name_map[station_name] = file
             
-            # Print the available normalized file names for debugging
-            print(f"Available normalized file names: {sorted(list(file_name_map.keys()))}")
+            # Print the available file names for debugging
+            print(f"Available station names: {sorted(list(file_name_map.keys()))}")
             
-            # Print the available normalized station names from the station locations
-            available_normalized_stations = self.station_locations['normalized_name'].tolist()
-            print(f"Available normalized station names: {sorted(available_normalized_stations)}")
+            # Print the available station names from the station locations
+            available_stations = self.station_locations['station_name'].tolist()
+            print(f"Available station names: {sorted(available_stations)}")
             
             # Find the intersection of available files and stations
-            common_stations = set(file_name_map.keys()).intersection(set(available_normalized_stations))
+            common_stations = set(file_name_map.keys()).intersection(set(available_stations))
             print(f"Found {len(common_stations)} stations with both location and rainfall data")
             
             if not common_stations:
@@ -121,87 +100,39 @@ class RainfallProcessor:
                 print("This will result in zero rainfall values in the dataset")
                 return
             
-            # Process only files that have matching station locations
-            for normalized_name in common_stations:
-                file = file_name_map[normalized_name]
-                station_name = self.station_name_map.get(normalized_name, file.stem.replace('_monthly', ''))
-                
+            # Organize rainfall data by date (not by station)
+            for station_name in common_stations:
+                file = file_name_map[station_name]
                 df = pd.read_csv(file)
-                # Convert year_month to string format 'YYYY-MM'
+
+                # Convert year_month to string format 'YYYY-MM', or use first date-like column
                 if 'year_month' in df.columns:
-                    # Ensure year_month is in the correct format
                     df['date'] = df['year_month'].astype(str)
                 else:
-                    # If using a different column name, adjust accordingly
                     date_col = [col for col in df.columns if 'date' in col.lower() or 'year' in col.lower()][0]
                     df['date'] = df[date_col].astype(str)
-                
-                # Get the rainfall column
+
                 rainfall_col = [col for col in df.columns if 'precip' in col.lower() or 'rain' in col.lower()][0]
-                
-                # Store data by station
-                station_data[station_name] = {
-                    'dates': df['date'].tolist(),
-                    'rainfall': df[rainfall_col].tolist(),
-                    'normalized_name': normalized_name
-                }
-                
-                print(f"Loaded rainfall data for station {station_name} ({len(df)} records)")
-            
-            # Organize data by date
-            all_dates = set()
-            for station in station_data.values():
-                all_dates.update(station['dates'])
-            
-            for date in sorted(all_dates):
-                self.rainfall_data[date] = {
-                    'stations': [],
-                    'locations': [],
-                    'values': []
-                }
-            
-            # Populate data for each date
-            for station_name, data in station_data.items():
+
                 # Get station location
-                normalized_name = data['normalized_name']
-                station_loc = self.station_locations[
-                    self.station_locations['normalized_name'] == normalized_name
-                ]
-                
-                if len(station_loc) == 0:
-                    print(f"Warning: No location found for station {station_name} (normalized: {normalized_name})")
+                loc_row = self.station_locations[self.station_locations['station_name'] == station_name]
+                if loc_row.empty:
+                    print(f"WARNING: No location found for station {station_name}")
                     continue
-                
-                lon = station_loc['longitude'].values[0]
-                lat = station_loc['latitude'].values[0]
-                
-                for i, date in enumerate(data['dates']):
-                    if date in self.rainfall_data:
-                        # Check if rainfall value is valid
-                        rainfall = data['rainfall'][i]
-                        if pd.notna(rainfall) and rainfall >= 0:
-                            # The data is already in inches, so we'll keep it that way
-                            # and not perform any conversion
-                            
-                            self.rainfall_data[date]['stations'].append(station_name)
-                            self.rainfall_data[date]['locations'].append((lon, lat))
-                            self.rainfall_data[date]['values'].append(rainfall)
+                lon = loc_row.iloc[0]['longitude']
+                lat = loc_row.iloc[0]['latitude']
+
+                for i, date in enumerate(df['date']):
+                    value = df[rainfall_col].iloc[i]
+                    if date not in self.rainfall_data:
+                        self.rainfall_data[date] = {'stations': [], 'locations': [], 'values': []}
+                    self.rainfall_data[date]['stations'].append(station_name)
+                    self.rainfall_data[date]['locations'].append((lon, lat))
+                    self.rainfall_data[date]['values'].append(value)
+
+            print(f"Loaded rainfall data for {len(self.rainfall_data)} dates")
             
-            # Count stations with data
-            stations_with_data = set()
-            dates_with_data = 0
-            for date, date_data in self.rainfall_data.items():
-                stations_with_data.update(date_data['stations'])
-                if date_data['stations']:
-                    dates_with_data += 1
-            
-            print(f"Loaded rainfall data for {len(stations_with_data)} stations across {dates_with_data} dates")
-            print(f"Available stations in rainfall data: {sorted(list(stations_with_data))}")
-            
-            # Check if we have any dates with rainfall data
-            if dates_with_data == 0:
-                print("WARNING: No dates with rainfall data found")
-                print("This will result in zero rainfall values in the dataset")
+
         
         except Exception as e:
             print(f"Error loading rainfall data: {e}")

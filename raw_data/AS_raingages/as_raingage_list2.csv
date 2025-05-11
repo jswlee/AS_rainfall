@@ -1,0 +1,27 @@
+Station,Organization,LAT,LONG,elev_ft,elev_src,start_yr,end_yr,range,station_id,source,source_unit,source_freq
+poloa_UH,UH,-14.31958056,-170.8306889,479,DEM,2019,2024,5,1311,HCDP,mm,15min
+aasu_UH,UH,-14.30980833,-170.7715583,1161,DEM,2017,2024,7,1312,HCDP,mm,15min
+vaipito_UH,UH,-14.282975,-170.7106361,295,DEM,2019,2024,5,1313,HCDP,mm,15min
+afono_UH,UH,-14.26737778,-170.6506194,266,DEM,2017,2024,7,1316,HCDP,mm,15min
+aunuu_UH,UH,-14.28516111,-170.5535361,128,DEM,2022,2024,2,1319,HCDP,mm,15min
+siufaga_WRCC,WRCC,-14.276111,-170.721944,480,WRCC,2012,2024,12,,Dave Simeral,in,daily
+toa_ridge_WRCC,WRCC,-14.261131,-170.687222,1285,WRCC,2012,2024,12,,Dave Simeral,in,daily
+pioa_afono,USGS,-14.26643889,-170.6559389,870,USGS,1980,1997,17,141644170391701,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141644170391701,in,daily
+aua,USGS,-14.26755,-170.6606611,240,USGS,1993,1996,3,141621170393401,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141621170393401,in,daily
+mt_alava,USGS,-14.26560556,-170.6889944,1610,USGS,2000,2002,2,141614170411601,https://waterdata.usgs.gov/hi/nwis/dv?referred_module=sw&site_no=141614170411601,mm,daily
+satala,USGS,-14.27060556,-170.6939944,5,USGS,1997,2008,11,141633170413590,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141633170413590,in,daily
+vaipito2000,USGS,-14.28866111,-170.70705,460,USGS,1958,1991,33,141732170422001,https://waterdata.usgs.gov/hi/nwis/dv?referred_module=sw&site_no=141732170422001,in,daily
+vaipito_res,USGS,-14.28294444,-170.7101944,305,USGS,1989,2008,19,141717170423390,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141717170423390,in,daily
+aunuu,USGS,-14.28532778,-170.5534389,140,USGS,1997,2002,5,141725170330890,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141725170330890,in,daily
+fagaitua,USGS,-14.26727222,-170.61705,160,USGS,1997,2008,11,141621170370490,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141621170370490,in,daily
+masefau,USGS,-14.26055556,-170.62,730,USGS,2001,2004,3,141538170371201,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141538170371201,mm,daily
+matatula,USGS,-14.24699722,-170.5642722,260,USGS,2001,2002,1,141507170334701,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141507170334701,mm,daily
+aasufou80,USGS,-14.31393611,-170.7701056,1340,USGS,1980,2000,20,141952170460201,https://waterdata.usgs.gov/hi/nwis/dv?referred_module=sw&site_no=141952170460201,in,daily
+aasufou90,USGS,-14.31421389,-170.7712167,1320,USGS,1999,2000,1,141909170461201,https://waterdata.usgs.gov/nwis/uv?site_no=141909170461201&legacy=1,mm,daily
+airport80,USGS,-14.33893611,-170.7192722,1,DEM,1980,1989,9,142038170430501,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=142038170430501,in,daily
+airport5101,USGS,-14.33166667,-170.7141667,10,USGS,1999,2004,5,141954170425101,https://waterdata.usgs.gov/nwis/dv?cb_99772=on&format=gif_default&site_no=141954170425101&legacy=&referred_module=sw&period=&begin_date=1999-01-01&end_date=2025-03-11,mm,daily
+aoloafou,USGS,-14.30949167,-170.7739944,1340,USGS,2000,2008,8,141852170462201,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141852170462201,in,daily
+iliili,USGS,-14.34180556,-170.7469444,200,USGS,2000,2001,1,142030170444901,https://waterdata.usgs.gov/nwis/uv?site_no=142030170444901&legacy=1,mm,daily
+malaeimi,USGS,-14.31166667,-170.7327778,150,USGS,2003,2004,1,141842170435801,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141842170435801,mm,daily
+malaeimi_1691,USGS,-14.31754722,-170.7392722,140,USGS,1990,2008,18,141921170441691,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141921170441691,in,daily
+maloata,USGS,-14.30726944,-170.8126056,130,USGS,2000,2001,1,141844170484101,https://waterdata.usgs.gov/nwis/dv?referred_module=sw&site_no=141844170484101,mm,daily

@@ -21,9 +21,9 @@ from .data_processing_ops import (
 
 class ClimateDataProcessor:
     """
-    A class to process climate data from NetCDF files.
+    A class to process raw climate data from NetCDF files.
     
-    This class provides methods to load, process, and validate climate data
+    This class provides methods to load, process, and validate raw climate data
     from various NetCDF files, creating a unified dataset with consistent
     dimensions and coordinates.
     """
@@ -134,7 +134,8 @@ class ClimateDataProcessor:
         xarray.DataArray
             Interpolated DataArray
         """
-        return interpolate_to_target_grid(data_array, self.target_lats, self.target_lons)
+        from .config import INTERPOLATION_METHOD
+        return interpolate_to_target_grid(data_array, self.target_lats, self.target_lons, method=INTERPOLATION_METHOD)
     
     def process_variable(self, var_name):
         """

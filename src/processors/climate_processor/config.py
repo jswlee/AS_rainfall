@@ -23,19 +23,19 @@ VARIABLE_MAPPING = {
 TIME_INTERVAL_MAPPING = {
     "monthly": "mon",
     "daily": "day",
-    "6-hourly": "6hr"
 }
 
 # Dictionary to store statistic mappings
 STATISTIC_MAPPING = {
     "mean": "mean",
-    "anomaly": "anom",
-    "climatology": "clim"
 }
 
 # Default time interval and statistic for all variables
 DEFAULT_TIME_INTERVAL = "monthly"
 DEFAULT_STATISTIC = "mean"
+
+# Interpolation method for grid operations
+INTERPOLATION_METHOD = "linear"
 
 # Dictionary to store variable configurations
 DEFAULT_VARIABLE_CONFIGS = {

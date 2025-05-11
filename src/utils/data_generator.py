@@ -66,14 +66,43 @@ class DataGenerator:
             self._load_climate_data()
     
     def _load_climate_data(self):
-        """Load climate data from NetCDF file."""
+        """Load climate data from NetCDF file and interpolate to match grid points."""
         try:
+            print(f"Loading climate data from: {self.climate_data_path}")
+            print(f"File exists: {os.path.exists(self.climate_data_path)}")
+            
+            # Load the dataset with more explicit error handling
             self.climate_ds = xr.open_dataset(self.climate_data_path)
+            
+            # Print basic information for debugging
+            print(f"Dataset dimensions: {self.climate_ds.dims}")
+            print(f"Dataset coordinates: {list(self.climate_ds.coords)}")
+            print(f"Climate data grid - Lats: {self.climate_ds.lat.values}")
+            print(f"Climate data grid - Lons: {self.climate_ds.lon.values}")
+            
+            # Get data variables
             self.climate_vars = list(self.climate_ds.data_vars)
             print(f"Loaded climate data with variables: {self.climate_vars}")
             
-            # Get time values
-            self.climate_times = self.climate_ds.time.values
+            # Check if 'time' is in coordinates
+            if 'time' not in self.climate_ds.coords:
+                print("WARNING: 'time' coordinate not found in dataset!")
+                print(f"Available coordinates: {list(self.climate_ds.coords)}")
+                # Try to find a suitable time-like coordinate
+                time_candidates = [coord for coord in self.climate_ds.coords 
+                                 if any(t in coord.lower() for t in ['time', 'date', 'month', 'year'])]
+                if time_candidates:
+                    time_coord = time_candidates[0]
+                    print(f"Using '{time_coord}' as time coordinate instead")
+                    self.climate_times = self.climate_ds[time_coord].values
+                else:
+                    raise ValueError("No suitable time coordinate found in climate data")
+            else:
+                # Get time values
+                self.climate_times = self.climate_ds.time.values
+                print(f"Found {len(self.climate_times)} time points in climate data")
+                
+            # Note: We'll interpolate climate data to grid points when extracting data for each date
             
             # Convert to string format 'YYYY-MM'
             self.available_dates = []
@@ -83,11 +112,16 @@ class DataGenerator:
                     # For numpy datetime64 objects
                     date_str = str(t)[:7]  # Extract YYYY-MM part
                     self.available_dates.append(date_str)
-                except:
+                except Exception as e:
+                    print(f"Warning: Error converting time value {t}: {e}")
                     # For other formats, try a more general approach
                     date_str = str(t)
                     if len(date_str) >= 7:
                         self.available_dates.append(date_str)
+            
+            print(f"Extracted {len(self.available_dates)} date strings from climate data")
+            if self.available_dates:
+                print(f"Sample dates: {self.available_dates[:5]}...")
             
             print(f"Climate data available for {len(self.available_dates)} dates")
             if self.available_dates:
@@ -186,6 +220,28 @@ class DataGenerator:
         """
         from scipy.interpolate import RegularGridInterpolator
         
+        # Print debugging information
+        if not hasattr(self, '_debug_interpolation_printed'):
+            print(f"Interpolating from climate grid to DEM grid:")
+            print(f"  Climate grid shape: {data.shape}")
+            print(f"  Climate grid lons: {lons}")
+            print(f"  Climate grid lats: {lats}")
+            print(f"  Target grid points: {len(grid_points)} points")
+            print(f"  Sample target points: {grid_points[:3]}")
+            self._debug_interpolation_printed = True
+        
+        # Handle longitude format differences (0-360 vs -180 to 180)
+        points = []
+        for p in grid_points:
+            lon, lat = p
+            # Convert longitude to 0-360 format if needed
+            if lon < 0:
+                lon_360 = lon + 360
+            else:
+                lon_360 = lon
+            points.append((lat, lon_360))
+        points = np.array(points)
+        
         # Create interpolator
         interpolator = RegularGridInterpolator(
             (lats, lons),
@@ -194,13 +250,17 @@ class DataGenerator:
             fill_value=None
         )
         
-        # Prepare grid points for interpolation
-        points = np.array([(p[1], p[0]) for p in grid_points])
-        
         # Interpolate
-        interpolated = interpolator(points)
-        
-        return interpolated
+        try:
+            interpolated = interpolator(points)
+            return interpolated
+        except Exception as e:
+            print(f"Error during interpolation: {e}")
+            print(f"Points shape: {points.shape}")
+            print(f"Points min/max: {np.min(points, axis=0)}, {np.max(points, axis=0)}")
+            print(f"Grid bounds - Lons: {np.min(lons)}-{np.max(lons)}, Lats: {np.min(lats)}-{np.max(lats)}")
+            # Return zeros as fallback
+            return np.zeros(len(grid_points))
     
     def generate_data_for_date(self, date_str):
         """

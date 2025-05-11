@@ -82,7 +82,7 @@ Before running the pipeline, you need to prepare the climate and rainfall data:
 
 #### Climate Data Preprocessing
 
-The climate data file `processed_data/AS_climate_var_ds_updated.nc` is created by:
+The climate data file `processed_data/climate_var_3x3_grid.nc` is created by:
 
 1. Downloading data files from https://psl.noaa.gov/data/gridded/data.ncep.reanalysis.html
 2. Processing the raw NetCDF files to extract relevant climate variables
@@ -234,7 +234,7 @@ The project requires several data sources to function properly:
 - Source: USGS or similar topographical data provider
 
 ### Climate Variables
-- File: `processed_data/AS_climate_var_ds_updated.nc`
+- File: `processed_data/climate_var_3x3_grid.nc`
 - Format: NetCDF4
 - Variables: Temperature, humidity, wind speed, pressure, etc.
 - Source: ERA5 reanalysis data from Copernicus Climate Data Store

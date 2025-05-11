@@ -15,7 +15,12 @@ def get_file_path(data_dir, variable, variable_mapping=VARIABLE_MAPPING,
                  default_time_interval="monthly", default_statistic="mean",
                  surface=False):
     """
-    Construct the file path for a climate variable.
+    Construct the file path for a climate variable using config-based mappings.
+    
+    This function generates a file path that matches the naming conventions of
+    the NCEP-NCAR Reanalysis 1 Database. It uses the provided configuration dictionaries
+    to map variable names, time intervals, and statistics to the correct file components,
+    ensuring compatibility with the expected dataset structure.
     
     Parameters
     ----------
@@ -43,7 +48,7 @@ def get_file_path(data_dir, variable, variable_mapping=VARIABLE_MAPPING,
     Returns
     -------
     str
-        Complete file path
+        Complete file path matching NCEP-NCAR Reanalysis 1 conventions
     """
     if variable not in variable_mapping:
         raise ValueError(f"Unknown variable: {variable}")

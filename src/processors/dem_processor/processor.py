@@ -83,6 +83,7 @@ class DEMProcessor:
     def extract_patch(self, point, patch_size, km_per_cell):
         """
         Extract a patch of DEM data around a grid point.
+        Used to construct local and regional patches for rainfall prediction.
         
         Parameters
         ----------
@@ -211,50 +212,62 @@ class DEMProcessor:
         
         return patch
     
-    def _clean_dem_data(self, data):
+    def _clean_dem_data(self, data, nodata_values=None, impute_strategy="mean"):
         """
-        Clean DEM data by handling NaN, infinite, and extreme values.
-        
+        Clean DEM data by handling NaN, infinite, and NoData/extreme values robustly.
+
         Parameters
         ----------
         data : numpy.ndarray
             DEM data to clean
-        
+        nodata_values : list or None
+            List of known NoData values (e.g., [-9999, -32768, -3.4e38]). If None, uses defaults.
+        impute_strategy : str
+            Strategy for filling NoData/extreme values: "mean", "median", or "zero"
+
         Returns
         -------
         numpy.ndarray
             Cleaned DEM data
         """
-        # Make a copy to avoid modifying the original data
+        import warnings
         cleaned = data.copy()
+
+        # 1. Identify NoData/extreme values
+        if nodata_values is None:
+            nodata_values = [-9999, -32768, -3.4028235e+38, -1e10]
+        mask_nodata = np.isin(cleaned, nodata_values)
+        # Also treat very large negative values as NoData
+        mask_extreme = cleaned < -1e6
+        # Combine masks
+        mask = mask_nodata | mask_extreme | ~np.isfinite(cleaned)
+
+        n_masked = np.sum(mask)
+        if n_masked > 0:
+            print(f"[DEM CLEAN] Found {n_masked} NoData/extreme/invalid values in DEM patch.")
         
-        # Replace extreme negative values (often used as NoData values in DEMs)
-        # Common NoData values include -9999, -3.4e38, etc.
-        extreme_negative = cleaned < -1000  # Threshold for extreme negative values
-        if np.any(extreme_negative):
-            print(f"Found {np.sum(extreme_negative)} extreme negative values in DEM data")
-            
-            # If all values are extreme negative, replace with zeros
-            if np.all(extreme_negative):
-                print("All values are extreme negative, replacing with zeros")
-                cleaned = np.zeros_like(cleaned)
-            else:
-                # Replace extreme values with the mean of non-extreme values
-                non_extreme_mean = np.mean(cleaned[~extreme_negative])
-                cleaned[extreme_negative] = non_extreme_mean
+        # 2. If all values are invalid, replace with zeros and warn
+        if np.all(mask):
+            warnings.warn("All DEM values are invalid/extreme. Replacing with zeros.")
+            return np.zeros_like(cleaned)
+
+        # 3. Impute missing/extreme values
+        valid = cleaned[~mask]
+        if impute_strategy == "mean":
+            fill_value = np.mean(valid)
+        elif impute_strategy == "median":
+            fill_value = np.median(valid)
+        elif impute_strategy == "zero":
+            fill_value = 0.0
+        else:
+            raise ValueError(f"Unknown impute_strategy: {impute_strategy}")
         
-        # Handle NaN and infinite values
+        cleaned[mask] = fill_value
+        
+        # 4. Final check for any remaining invalids
         if np.any(~np.isfinite(cleaned)):
-            print(f"Found {np.sum(~np.isfinite(cleaned))} NaN or infinite values in DEM data")
-            
-            # If all values are NaN or infinite, replace with zeros
-            if np.all(~np.isfinite(cleaned)):
-                print("All values are NaN or infinite, replacing with zeros")
-                cleaned = np.zeros_like(cleaned)
-            else:
-                # Replace NaN and infinite values with the mean of finite values
-                finite_mean = np.mean(cleaned[np.isfinite(cleaned)])
-                cleaned = np.nan_to_num(cleaned, nan=finite_mean, posinf=finite_mean, neginf=finite_mean)
+            warnings.warn("DEM patch still contains NaN or infinite values after cleaning. Setting to fill_value.")
+            cleaned = np.nan_to_num(cleaned, nan=fill_value, posinf=fill_value, neginf=fill_value)
         
         return cleaned
     

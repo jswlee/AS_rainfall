@@ -7,7 +7,9 @@ This module provides functions for processing climate data.
 import numpy as np
 import xarray as xr
 
-def interpolate_to_target_grid(data_array, target_lats, target_lons):
+from .config import INTERPOLATION_METHOD
+
+def interpolate_to_target_grid(data_array, target_lats, target_lons, method=None):
     """
     Interpolate a DataArray to the target grid.
     
@@ -19,16 +21,20 @@ def interpolate_to_target_grid(data_array, target_lats, target_lons):
         Target latitude grid for interpolation
     target_lons : numpy.ndarray
         Target longitude grid for interpolation
+    method : str, optional
+        Interpolation method (e.g., 'linear', 'nearest', 'cubic'). Defaults to config.INTERPOLATION_METHOD.
     
     Returns
     -------
     xarray.DataArray
         Interpolated DataArray
     """
+    if method is None:
+        method = INTERPOLATION_METHOD
     return data_array.interp(
         lat=target_lats,
         lon=target_lons,
-        method="linear"
+        method=method
     )
 
 def compute_difference(dataset, var_key, level1, level2, lon_slice, lat_slice):
