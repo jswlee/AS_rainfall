@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 
 # Paths to NetCDF files
-a_path = "output/processed_climate_data.nc"
-b_path = "processed_data/climate_var_3x3_grid.nc"
+a_path = "/Users/jlee/Desktop/github/AS_rainfall/2_Create_ML_Data/output/processed_climate_data.nc"
+b_path = "/Users/jlee/Desktop/github/AS_rainfall/2_Create_ML_Data/output_old/processed_climate_data.nc"
 
 # Load datasets
 da = xr.open_dataset(a_path)

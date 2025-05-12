@@ -39,7 +39,6 @@ from utils.data_generator import DataGenerator
 # Configuration with absolute paths
 CONFIG = {
     'dem_path': os.path.join(PROJECT_ROOT, 'raw_data/DEM/DEM_Tut1.tif'),
-    # make climate data path to the output directory in this folder
     'climate_data_path': os.path.join(PIPELINE_DIR, 'output/processed_climate_data.nc'),
     'raw_climate_dir': os.path.join(PROJECT_ROOT, 'raw_data/climate_variables'),
     'rainfall_dir': os.path.join(PROJECT_ROOT, '1_Process_Rainfall_Data/output/monthly_rainfall'),
@@ -58,6 +57,27 @@ CONFIG = {
 # Create output directory
 os.makedirs(CONFIG['output_dir'], exist_ok=True)
 
+# Check if climate data exists (either processed file or raw files)
+processed_file_exists = os.path.exists(CONFIG['climate_data_path'])
+raw_files_exist = False
+
+# Check if raw climate data directory exists and has NetCDF files
+if os.path.exists(CONFIG['raw_climate_dir']):
+    nc_files = [f for f in os.listdir(CONFIG['raw_climate_dir']) if f.endswith('.nc')]
+    raw_files_exist = len(nc_files) > 0
+    if raw_files_exist:
+        print(f"Found {len(nc_files)} raw climate data files in {CONFIG['raw_climate_dir']}")
+
+# Set the flag based on whether either source of climate data exists
+CLIMATE_DATA_EXISTS = processed_file_exists or raw_files_exist
+
+if not CLIMATE_DATA_EXISTS:
+    print("Warning: Neither processed climate data nor raw climate files found. Climate-dependent steps will be skipped.")
+elif not processed_file_exists and raw_files_exist:
+    print(f"Processed climate data not found at {CONFIG['climate_data_path']}, but raw files exist and will be processed.")
+elif processed_file_exists:
+    print(f"Found existing processed climate data at: {CONFIG['climate_data_path']}")
+
 # Redirect all stdout and stderr to a log file in the output directory
 log_path = os.path.join(CONFIG['output_dir'], "pipeline_output.log")
 sys.stdout = open(log_path, "w")
@@ -65,19 +85,21 @@ sys.stderr = sys.stdout
 
 def setup_environment():
     """Create necessary directories and check for required files."""
-    
-    # Check if required files exist
+    # Always required files (regardless of climate data)
     required_files = [
         CONFIG['dem_path'],
-        CONFIG['climate_data_path'],
         CONFIG['rainfall_dir'],
         CONFIG['station_locations_path']
     ]
     
+    # Check required files
     for file_path in required_files:
         if not os.path.exists(file_path):
             print(f"ERROR: Required file not found: {file_path}")
             return False
+    
+    # Climate data is already checked at initialization, and CLIMATE_DATA_EXISTS is set
+    # We don't need to check it again here
     
     print("All required files found.")
     return True
@@ -139,28 +161,31 @@ def process_dem():
 
 def process_climate_data():
     """Process climate data and interpolate to grid points."""
+    if not CLIMATE_DATA_EXISTS:
+        print("Warning: No climate data available. Skipping climate data processing.")
+        return None
+    
     print("\nProcessing climate data...")
-    
-    # Check if we already have processed climate data
     existing_processed_data = CONFIG['climate_data_path']
+    raw_climate_dir = CONFIG['raw_climate_dir']
+    
+    # We already know if raw files exist from the initial check
     if os.path.exists(existing_processed_data):
-        print(f"Found existing processed climate data at: {existing_processed_data}")
-    
-    # Check if raw climate data directory exists and has files
-    raw_climate_dir = os.path.join(PROJECT_ROOT, 'raw_data/climate_variables')
-    has_raw_data = False
-    
-    if os.path.exists(raw_climate_dir):
-        # Check if directory has NetCDF files
-        nc_files = [f for f in os.listdir(raw_climate_dir) if f.endswith('.nc')]
-        has_raw_data = len(nc_files) > 0
-        if has_raw_data:
-            print(f"Found {len(nc_files)} raw climate data files in {raw_climate_dir}")
-    
-    # Decide whether to process raw data or use existing processed data
-    if has_raw_data:
+        # Use existing processed data
+        output_climate_path = os.path.join(CONFIG['output_dir'], 'processed_climate_data.nc')
+        
+        # Only copy if the file doesn't already exist in the output directory
+        if not os.path.exists(output_climate_path) or os.path.getmtime(existing_processed_data) > os.path.getmtime(output_climate_path):
+            print(f"Copying existing climate data to output directory: {output_climate_path}")
+            import shutil
+            shutil.copy2(existing_processed_data, output_climate_path)
+        else:
+            print(f"Using existing copy in output directory: {output_climate_path}")
+            
+        return output_climate_path
+    else:
+        # Process raw files
         print("Processing raw climate data files...")
-        # Initialize climate processor with the raw data directory
         climate_processor = ClimateDataProcessor(data_dir=raw_climate_dir)
         
         # Process all climate variables
@@ -174,21 +199,6 @@ def process_climate_data():
         print(f"Saved processed climate data to {climate_data_path}")
         
         return climate_data_path
-    else:
-        print("No raw climate data files found. Using existing processed data.")
-        
-        # Create a copy of the existing processed data in the output directory for consistency
-        output_climate_path = os.path.join(CONFIG['output_dir'], 'processed_climate_data.nc')
-        
-        # Only copy if the file doesn't already exist in the output directory
-        if not os.path.exists(output_climate_path) or os.path.getmtime(existing_processed_data) > os.path.getmtime(output_climate_path):
-            print(f"Copying existing climate data to output directory: {output_climate_path}")
-            import shutil
-            shutil.copy2(existing_processed_data, output_climate_path)
-        else:
-            print(f"Using existing copy in output directory: {output_climate_path}")
-            
-        return output_climate_path
 
 def process_rainfall_data(grid_points):
     """Process rainfall data and interpolate to grid points."""
@@ -279,9 +289,9 @@ def process_rainfall_data(grid_points):
 def generate_training_data(dem_data, climate_data_path, rainfall_data, available_dates):
     """Generate training data for deep learning."""
     print("\nGenerating training data...")
-    
-    # Use the climate data path from the process_climate_data function
-    # This will be either the newly processed data or the existing processed data
+    if not CLIMATE_DATA_EXISTS or climate_data_path is None:
+        print("Warning: Climate data is missing. Skipping training data generation.")
+        return None
     print(f"Using climate data from: {climate_data_path}")
     
     # Initialize data generator
@@ -339,34 +349,32 @@ def generate_training_data(dem_data, climate_data_path, rainfall_data, available
 def main():
     """Main function to run the entire pipeline."""
     print("Starting Rainfall Prediction Pipeline...")
-    
     # Setup environment
     if not setup_environment():
         return
-    
     # Process DEM
     dem_data = process_dem()
-    
     # Process climate data
     climate_data_path = process_climate_data()
-    
     # Process rainfall data
     rainfall_data, available_dates = process_rainfall_data(dem_data['grid_points'])
-    
-    # Generate training data
-    training_data_path = generate_training_data(
-        dem_data, 
-        climate_data_path, 
-        rainfall_data, 
-        available_dates
-    )
-    
-    if training_data_path:
-        print(f"\nPipeline complete! Training data saved to {training_data_path}")
-        print(f"Features: 16 climate variables, month encoding, local and regional DEM patches")
-        print(f"Labels: Interpolated rainfall")
+    # Generate training data only if climate data exists
+    if CLIMATE_DATA_EXISTS and climate_data_path is not None:
+        training_data_path = generate_training_data(
+            dem_data,
+            climate_data_path,
+            rainfall_data,
+            available_dates
+        )
+        if training_data_path:
+            print(f"\nPipeline complete! Training data saved to {training_data_path}")
+            print(f"Features: 16 climate variables, month encoding, local and regional DEM patches")
+            print(f"Labels: Interpolated rainfall")
+        else:
+            print("\nPipeline failed to generate training data. Check the error messages above.")
     else:
-        print("\nPipeline failed to generate training data. Check the error messages above.")
+        print("\nPipeline skipped training data generation due to missing climate data.")
+
 
 if __name__ == "__main__":
     main()
