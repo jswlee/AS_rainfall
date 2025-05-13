@@ -30,7 +30,7 @@ This component creates machine learning datasets by combining processed rainfall
 ## Key Features
 - **Robust Climate Data Handling**: Processes climate data from either raw NetCDF files or existing processed files
 - **DEM Processing**: Creates local (12km) and regional (60km) patches around grid points
-- **Rainfall Interpolation**: Interpolates station rainfall data to grid points
+- **Rainfall Interpolation with Gaussian Processes**: Uses Gaussian Process (GP) regression to interpolate station rainfall data to grid points for each time step. If GP interpolation fails or produces all zeros, the pipeline falls back to RBF or IDW interpolation methods for robustness.
 - **Data Integration**: Combines all data sources with proper alignment
 
 ## Usage
@@ -57,6 +57,15 @@ The pipeline will:
 - **rainfall_prediction_data.h5**: HDF5 file containing the combined dataset with features and labels
 - **processed_climate_data.nc**: NetCDF file with processed climate variables
 - Visualization files for DEM patches and interpolated rainfall
+
+## Notes on Gaussian Process Interpolation
+- **Randomness and Reproducibility**: Gaussian Process interpolation (with optimizer restarts) is sensitive to the state of the global random number generator (RNG). Any code that uses randomness (including visualization functions that sample or shuffle) before or during interpolation can affect results.
+- **Visualization Bug**: Previously, calling the `visualize_gp_interpolation` function inside the interpolation routine altered the RNG state, causing non-reproducible and inconsistent rainfall interpolation results. This was fixed by commenting out the visualization call.
+- **Best Practices**:
+  - Set random seeds (`np.random.seed`, `random.seed`, etc.) at the start of the pipeline for reproducibility.
+  - Avoid calling visualization or any code that uses randomness before critical interpolation steps, or save/restore the RNG state if needed.
+  - If you need to visualize, do so after all data has been generated, or explicitly reset the seed/state before each interpolation.
+- **Fallback Logic**: If GP interpolation produces all-zero rainfall (a sign of failure or insufficient data), the pipeline automatically tries RBF and then IDW interpolation to ensure valid outputs.
 
 ## Dependencies
 - numpy, pandas

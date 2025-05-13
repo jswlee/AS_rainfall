@@ -1,21 +1,37 @@
-Ensemble Model Summary
-Number of Folds: 5
-Models per Fold: 5
-Total Models: 25
+ALL RAINFALL VALUES ARE IN INCHES.
 
-Individual Fold Results:
-  Fold 1 R²: 0.9155, RMSE: 0.0225 in, MAE: 0.0137 in
-  Fold 2 R²: 0.9126, RMSE: 0.0228 in, MAE: 0.0140 in
-  Fold 3 R²: 0.9140, RMSE: 0.0227 in, MAE: 0.0140 in
-  Fold 4 R²: 0.9189, RMSE: 0.0220 in, MAE: 0.0136 in
-  Fold 5 R²: 0.9068, RMSE: 0.0236 in, MAE: 0.0138 in
+K-Fold CV Ensemble Model with 5 Folds
+Each fold contains 1 models
+Total models: 5
+
+Hyperparameters:
+  Best hyperparameters from 25 trials: 
+  na: 512
+  nb: 384
+  dropout_rate: 0.1
+  l2_reg: 1.5153728958098477e-06
+  learning_rate: 0.0007548863496858051
+  weight_decay: 0.0009751882621783799
+  local_dem_units: 64
+  regional_dem_units: 160
+  month_units: 112
+  climate_units: 448
+  use_residual: True
+  activation: relu
+  output_activation: softplus
 
 Cross-Validation Results:
-  Average CV R²: 0.9136
-  Average CV RMSE: 0.0227 in
-  Average CV MAE: 0.0138 in
+  Fold 1: R² = 0.8730, RMSE = 0.0243 in, MAE = 0.0122 in
+  Fold 2: R² = 0.8600, RMSE = 0.0255 in, MAE = 0.0162 in
+  Fold 3: R² = 0.8937, RMSE = 0.0222 in, MAE = 0.0123 in
+  Fold 4: R² = 0.8804, RMSE = 0.0236 in, MAE = 0.0140 in
+  Fold 5: R² = 0.8879, RMSE = 0.0228 in, MAE = 0.0128 in
 
-Final Ensemble Results:
-  Test R²: 0.9199
-  Test RMSE: 0.0219 in
-  Test MAE: 0.0133 in
+Average CV: R² = 0.8790, RMSE = 0.0237 in, MAE = 0.0135 in
+
+Final Ensemble Test Results:
+  R²: 0.9048
+  RMSE: 0.0210 in
+  MAE: 0.0114 in
+
+Training completed in 00:45:41

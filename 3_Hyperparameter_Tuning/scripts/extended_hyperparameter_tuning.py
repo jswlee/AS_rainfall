@@ -181,7 +181,7 @@ def main():
     parser.add_argument('--output_dir', type=str, 
                         default=os.path.join(SCRIPT_DIR, '../output/land_model_extended_tuner'),
                         help='Directory to save tuner results')
-    parser.add_argument('--max_trials', type=int, default=50,
+    parser.add_argument('--max_trials', type=int, default=25,
                         help='Maximum number of hyperparameter tuning trials')
     parser.add_argument('--executions_per_trial', type=int, default=1,
                         help='Number of executions per trial')
@@ -297,19 +297,35 @@ def main():
     
     # Plot hyperparameter importance
     try:
-        importances = tuner.results_summary.get_importance()
-        plt.figure(figsize=(12, 8))
-        params = list(importances.keys())
-        values = list(importances.values())
-        plt.barh(params, values)
-        plt.xlabel('Importance')
-        plt.ylabel('Hyperparameter')
-        plt.title('Hyperparameter Importance')
-        plt.tight_layout()
-        plt.savefig(os.path.join(args.output_dir, 'hyperparameter_importance.png'))
-        plt.close()
-    except:
-        print("Could not generate hyperparameter importance plot")
+        # Check if we have enough trials for meaningful importance calculation
+        # Keras Tuner needs at least 10 trials for reliable importance calculation
+        if len(tuner.oracle.trials) < 10:
+            print(f"Not enough trials ({len(tuner.oracle.trials)}) for reliable hyperparameter importance calculation. Need at least 10.")
+        else:
+            # Get hyperparameter importance
+            try:
+                importances = tuner.results_summary.get_importance()
+                if not importances:
+                    print("No hyperparameter importance data available.")
+                else:
+                    plt.figure(figsize=(12, 8))
+                    params = list(importances.keys())
+                    values = list(importances.values())
+                    plt.barh(params, values)
+                    plt.xlabel('Importance')
+                    plt.ylabel('Hyperparameter')
+                    plt.title('Hyperparameter Importance')
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(args.output_dir, 'hyperparameter_importance.png'))
+                    plt.close()
+                    print(f"Hyperparameter importance plot saved to {os.path.join(args.output_dir, 'hyperparameter_importance.png')}")
+            except AttributeError:
+                print("Error: results_summary.get_importance() method not available in this version of Keras Tuner.")
+                print("Try upgrading keras-tuner to the latest version.")
+    except Exception as e:
+        print(f"Could not generate hyperparameter importance plot: {str(e)}")
+        import traceback
+        traceback.print_exc()
     
     return 0
 

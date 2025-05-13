@@ -266,8 +266,8 @@ def evaluate_model(model, data, output_dir=None):
         
         # Scatter plot: Actual vs Predicted
         plt.figure(figsize=(6,6))
-        plt.scatter(y_true, y_pred, alpha=0.5, label='Predictions')
-        lims = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
+        plt.scatter(y_true*100, y_pred*100, alpha=0.5, label='Predictions')
+        lims = [min(y_true.min()*100, y_pred.min()*100), max(y_true.max()*100, y_pred.max()*100)]
         plt.plot(lims, lims, 'r--', label='1:1 Line')
         plt.xlabel('Actual Rainfall (inches)')
         plt.ylabel('Predicted Rainfall (inches)')

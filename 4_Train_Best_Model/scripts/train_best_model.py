@@ -310,9 +310,9 @@ def main():
     if 'r2' in metrics:
         print(f"Test R²: {metrics['r2']:.4f}")
     if 'rmse' in metrics:
-        print(f"Test RMSE: {metrics['rmse']:.4f} mm")
-    print(f"Test MSE: {metrics['loss']:.4f}")
-    print(f"Test MAE: {metrics['mae']:.4f} mm")
+        print(f"Test RMSE: {metrics['rmse']*100:.4f} in")
+    print(f"Test MSE: {metrics['loss']*100:.4f}")
+    print(f"Test MAE: {metrics['mae']*100:.4f} in")
     
     # Calculate and print training time
     minutes = int(training_time // 60)

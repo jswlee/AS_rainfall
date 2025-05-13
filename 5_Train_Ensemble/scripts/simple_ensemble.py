@@ -632,7 +632,7 @@ def main():
                         help='Directory to save model weights and results')
     parser.add_argument('--n_folds', type=int, default=5,
                         help='Number of cross-validation folds')
-    parser.add_argument('--n_models_per_fold', type=int, default=5,
+    parser.add_argument('--n_models_per_fold', type=int, default=1,
                         help='Number of models to train in each fold')
     parser.add_argument('--epochs', type=int, default=150,
                         help='Number of epochs for training')

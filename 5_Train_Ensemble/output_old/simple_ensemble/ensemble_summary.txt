@@ -1,0 +1,21 @@
+Ensemble Model Summary
+Number of Folds: 5
+Models per Fold: 5
+Total Models: 25
+
+Individual Fold Results:
+  Fold 1 R²: 0.9155, RMSE: 0.0225 in, MAE: 0.0137 in
+  Fold 2 R²: 0.9126, RMSE: 0.0228 in, MAE: 0.0140 in
+  Fold 3 R²: 0.9140, RMSE: 0.0227 in, MAE: 0.0140 in
+  Fold 4 R²: 0.9189, RMSE: 0.0220 in, MAE: 0.0136 in
+  Fold 5 R²: 0.9068, RMSE: 0.0236 in, MAE: 0.0138 in
+
+Cross-Validation Results:
+  Average CV R²: 0.9136
+  Average CV RMSE: 0.0227 in
+  Average CV MAE: 0.0138 in
+
+Final Ensemble Results:
+  Test R²: 0.9199
+  Test RMSE: 0.0219 in
+  Test MAE: 0.0133 in

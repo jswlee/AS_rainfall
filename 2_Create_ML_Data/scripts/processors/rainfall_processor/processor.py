@@ -296,18 +296,6 @@ class RainfallProcessor:
                 print(f"DEBUG: GP interpolated rainfall stats - min: {np.min(interpolated)}, max: {np.max(interpolated)}, mean: {np.mean(interpolated):.2f}")
                 print(f"DEBUG: GP uncertainty (std dev) - min: {np.min(std_predictions)}, max: {np.max(std_predictions)}, mean: {np.mean(std_predictions):.2f}")
                 
-                # Optionally visualize the GP interpolation (uncomment if needed)
-                # output_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-                # output_path = os.path.join(output_dir, 'output', 'gp_interpolation.png')
-                # visualize_gp_interpolation(
-                #     list(zip(lons, lats)),
-                #     values,
-                #     grid_points,
-                #     mean_predictions,
-                #     std_predictions,
-                #     output_path=output_path
-                # )
-                
                 return interpolated
                 
             except Exception as e:
