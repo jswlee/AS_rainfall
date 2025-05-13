@@ -11,6 +11,9 @@ from pathlib import Path
 from scipy.interpolate import Rbf, griddata
 import matplotlib.pyplot as plt
 
+# Import GP utilities
+from .gp_utils import gp_interpolate, visualize_gp_interpolation
+
 class RainfallProcessor:
     """
     A class to process rainfall data and interpolate it to grid points.
@@ -215,7 +218,7 @@ class RainfallProcessor:
             print(f"No rainfall data available for {date_str}")
             return {'stations': [], 'locations': [], 'values': []}
     
-    def interpolate_to_grid(self, rainfall_data, grid_points, method='rbf'):
+    def interpolate_to_grid(self, rainfall_data, grid_points, method='gp'):
         """
         Interpolate rainfall data to grid points.
         
@@ -226,7 +229,10 @@ class RainfallProcessor:
         grid_points : list
             List of (lon, lat) coordinates for grid points
         method : str, optional
-            Interpolation method ('rbf' or 'idw')
+            Interpolation method ('gp', 'rbf', or 'idw')
+            - 'gp': Gaussian Process interpolation (recommended for sparse data)
+            - 'rbf': Radial Basis Function interpolation
+            - 'idw': Inverse Distance Weighting
         
         Returns
         -------
@@ -248,6 +254,65 @@ class RainfallProcessor:
         if any(np.isnan(v) for v in values):
             print("WARNING: Input rainfall data contains NaN values. Replacing with zeros.")
             values = [0.0 if np.isnan(v) else v for v in values]
+            
+        # Print debug information
+        print(f"DEBUG: Interpolating rainfall with {len(rainfall_data['locations'])} stations")
+        print(f"DEBUG: Station locations: {np.array(list(zip(lons, lats)))[:3]}... (showing first 3)")
+        print(f"DEBUG: Station values: {np.array(values)[:3]}... (showing first 3)")
+        print(f"DEBUG: Grid points: {np.array(list(zip([p[0] for p in grid_points], [p[1] for p in grid_points])))[:3]}... (showing first 3)")
+        
+        # For cases with only 1 or 2 stations, use simpler methods regardless of specified method
+        if len(rainfall_data['locations']) < 3:
+            print(f"Only {len(rainfall_data['locations'])} rainfall data points available, using simpler interpolation")
+            
+            if len(rainfall_data['locations']) == 1:
+                # With only one station, use the same value for all grid points
+                print("Using nearest neighbor interpolation with single station")
+                return np.full(len(grid_points), values[0])
+            
+            elif method == 'gp':
+                # GP can still work with 2 points but with fixed hyperparameters
+                print("Using simplified GP interpolation with two stations")
+            else:
+                # With two stations, use IDW for non-GP methods
+                print("Using IDW interpolation with two stations")
+                method = 'idw'
+        
+        # Gaussian Process interpolation (preferred method for sparse data)
+        if method == 'gp':
+            try:
+                # Use Gaussian Process interpolation
+                mean_predictions, std_predictions = gp_interpolate(
+                    list(zip(lons, lats)),  # Station locations
+                    values,                  # Station values
+                    grid_points,             # Grid points to interpolate to
+                    optimize=True            # Optimize hyperparameters
+                )
+                
+                # Ensure rainfall is within realistic bounds
+                interpolated = np.clip(mean_predictions, 0, self.max_rainfall)
+                
+                # Print some statistics about the interpolated values
+                print(f"DEBUG: GP interpolated rainfall stats - min: {np.min(interpolated)}, max: {np.max(interpolated)}, mean: {np.mean(interpolated):.2f}")
+                print(f"DEBUG: GP uncertainty (std dev) - min: {np.min(std_predictions)}, max: {np.max(std_predictions)}, mean: {np.mean(std_predictions):.2f}")
+                
+                # Optionally visualize the GP interpolation (uncomment if needed)
+                # output_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                # output_path = os.path.join(output_dir, 'output', 'gp_interpolation.png')
+                # visualize_gp_interpolation(
+                #     list(zip(lons, lats)),
+                #     values,
+                #     grid_points,
+                #     mean_predictions,
+                #     std_predictions,
+                #     output_path=output_path
+                # )
+                
+                return interpolated
+                
+            except Exception as e:
+                print(f"Error in GP interpolation: {e}, falling back to linear interpolation")
+                # Fall back to linear interpolation if GP fails
         
         # If we have at least 3 stations, try linear interpolation for simplicity
         if len(rainfall_data['locations']) >= 3:
@@ -401,9 +466,9 @@ class RainfallProcessor:
             return interpolated
         
         else:
-            print(f"Unknown interpolation method: {method}, using IDW instead")
-            # Recursively call with IDW method
-            return self.interpolate_to_grid(rainfall_data, grid_points, method='idw')
+            print(f"Unknown interpolation method: {method}, using GP instead")
+            # Recursively call with GP method
+            return self.interpolate_to_grid(rainfall_data, grid_points, method='gp')
 
     def visualize_rainfall(self, date_str, grid_points=None, interpolated=None, output_path=None):
         """

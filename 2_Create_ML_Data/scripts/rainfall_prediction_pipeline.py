@@ -137,17 +137,61 @@ def process_dem():
     
     print(f"Created {len(local_patches)} local patches and {len(regional_patches)} regional patches")
     
-    # Visualize a sample patch
-    plt.figure(figsize=(12, 5))
+    # Visualize all patches in a grid
+    plt.figure(figsize=(14, 6))
     
+    # Arrange local patches in a 5x5 grid
+    local_patches_array = np.array(local_patches)
+    n_patches, patch_height, patch_width = local_patches_array.shape
+    grid_rows, grid_cols = 5, 5
+    
+    # Create empty grid for local patches
+    local_grid = np.zeros((grid_rows * patch_height, grid_cols * patch_width))
+    
+    # Place local patches in grid
+    for i in range(min(n_patches, grid_rows * grid_cols)):
+        row = i // grid_cols
+        col = i % grid_cols
+        
+        # Calculate position in the grid
+        row_start = row * patch_height
+        row_end = (row + 1) * patch_height
+        col_start = col * patch_width
+        col_end = (col + 1) * patch_width
+        
+        # Place the patch
+        local_grid[row_start:row_end, col_start:col_end] = local_patches_array[i]
+    
+    # Do the same for regional patches
+    regional_patches_array = np.array(regional_patches)
+    
+    # Create empty grid for regional patches
+    regional_grid = np.zeros((grid_rows * patch_height, grid_cols * patch_width))
+    
+    # Place regional patches in grid
+    for i in range(min(n_patches, grid_rows * grid_cols)):
+        row = i // grid_cols
+        col = i % grid_cols
+        
+        # Calculate position in the grid
+        row_start = row * patch_height
+        row_end = (row + 1) * patch_height
+        col_start = col * patch_width
+        col_end = (col + 1) * patch_width
+        
+        # Place the patch
+        regional_grid[row_start:row_end, col_start:col_end] = regional_patches_array[i]
+    
+    # Plot local patches grid
     plt.subplot(121)
-    plt.imshow(local_patches[0], cmap='terrain')
-    plt.title('Sample Local Patch (12km)')
+    plt.imshow(local_grid, cmap='terrain')
+    plt.title('Local DEM Patches (5x5 grid, 12km each)')
     plt.colorbar()
     
+    # Plot regional patches grid
     plt.subplot(122)
-    plt.imshow(regional_patches[0], cmap='terrain')
-    plt.title('Sample Regional Patch (60km)')
+    plt.imshow(regional_grid, cmap='terrain')
+    plt.title('Regional DEM Patches (5x5 grid, 60km each)')
     plt.colorbar()
     
     plt.tight_layout()
@@ -230,44 +274,42 @@ def process_rainfall_data(grid_points):
             skipped_dates.append(date_str)
             continue
             
-        # For early years (before 1990), we need to be careful with interpolation
-        year = int(date_str.split('-')[0])
-        if year < 1990 and len(rainfall_data['stations']) < 3:
-            print(f"WARNING: Only {len(rainfall_data['stations'])} stations for {date_str} (early year), using nearest neighbor.")
-            # Force IDW method for early years with few stations
-            grid_rainfall = rainfall_processor.interpolate_to_grid(
-                rainfall_data, 
-                grid_points,
-                method='idw'
-            )
-        else:
-            # Use default interpolation method
-            grid_rainfall = rainfall_processor.interpolate_to_grid(
-                rainfall_data, 
-                grid_points
-            )
+        # Use Gaussian Process interpolation by default for all years
+        # This handles sparse data much better than previous methods
+        grid_rainfall = rainfall_processor.interpolate_to_grid(
+            rainfall_data, 
+            grid_points,
+            method='gp'
+        )
         
         # Verify we have valid rainfall values
         if np.all(grid_rainfall == 0.0):
-            print(f"WARNING: All zero rainfall values for {date_str}, checking data...")
-            # Check if original data had non-zero values
-            if any(v > 0 for v in rainfall_data['values']):
-                print(f"Original data had non-zero values, but interpolation produced all zeros.")
-                print(f"Stations: {rainfall_data['stations']}")
-                print(f"Values: {rainfall_data['values']}")
-                # Try with IDW method as fallback
+            # If all values are zero, check if the original data had non-zero values
+            if not np.all(np.array(rainfall_data['values']) == 0):
+                # Try again with RBF interpolation as fallback
+                print(f"Original data had non-zero values, but GP interpolation produced all zeros.")
+                print(f"Trying RBF interpolation as fallback...")
                 grid_rainfall = rainfall_processor.interpolate_to_grid(
                     rainfall_data, 
                     grid_points,
-                    method='idw'
+                    method='rbf'
                 )
+                
+                # If RBF still fails, try IDW as a last resort
+                if np.all(grid_rainfall == 0.0) and not np.all(np.array(rainfall_data['values']) == 0):
+                    print(f"RBF interpolation also failed. Trying IDW as last resort...")
+                    grid_rainfall = rainfall_processor.interpolate_to_grid(
+                        rainfall_data, 
+                        grid_points,
+                        method='idw'
+                    )
                 
         interpolated_rainfall[date_str] = grid_rainfall
     
     print(f"Interpolated rainfall for {len(interpolated_rainfall)} dates")
     
     # Visualize sample interpolated rainfall
-    sample_date = available_dates[600]
+    sample_date = available_dates[500]
     sample_rainfall = interpolated_rainfall[sample_date]
     
     plt.figure(figsize=(10, 8))
@@ -336,8 +378,8 @@ def generate_training_data(dem_data, climate_data_path, rainfall_data, available
         
         # Visualize sample data
         try:
-            data_generator.visualize_sample(all_data[600], common_dates[600])
-            print(f"Sample visualization complete for {common_dates[600]}")
+            data_generator.visualize_sample(all_data[500], common_dates[500])
+            print(f"Sample visualization complete for {common_dates[500]}")
         except Exception as e:
             print(f"Error visualizing sample: {e}")
         

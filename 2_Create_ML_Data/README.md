@@ -49,7 +49,7 @@ The pipeline will:
 
 ## Input Requirements
 - DEM data (GeoTIFF format)
-- Climate variables (NetCDF files or processed NetCDF)
+- Raw or processed climate variables (NetCDF files)
 - Monthly rainfall data (from step 1)
 - Station location data (CSV format)
 

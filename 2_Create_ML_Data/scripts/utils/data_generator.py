@@ -373,17 +373,21 @@ class DataGenerator:
         output_path : str, optional
             Path to save the visualization
         """
-        # Create figure with subplots
-        fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        # Create figure with subplots (3x2 grid for 5 visualizations)
+        fig, axes = plt.subplots(3, 2, figsize=(16, 18))
         
-        # 1. Plot local patch
-        im1 = axes[0, 0].imshow(data['local_patches'][0], cmap='terrain')
-        axes[0, 0].set_title('Local DEM Patch (12km)')
+        # 1. Plot all local DEM patches in a 5x5 grid
+        local_patches = np.array(data['local_patches'])
+        local_grid = self._arrange_patches_in_grid(local_patches, 5, 5)
+        im1 = axes[0, 0].imshow(local_grid, cmap='terrain')
+        axes[0, 0].set_title('Local DEM Patches (5x5 grid, 12km each)')
         plt.colorbar(im1, ax=axes[0, 0])
         
-        # 2. Plot regional patch
-        im2 = axes[0, 1].imshow(data['regional_patches'][0], cmap='terrain')
-        axes[0, 1].set_title('Regional DEM Patch (60km)')
+        # 2. Plot all regional DEM patches in a 5x5 grid
+        regional_patches = np.array(data['regional_patches'])
+        regional_grid = self._arrange_patches_in_grid(regional_patches, 5, 5)
+        im2 = axes[0, 1].imshow(regional_grid, cmap='terrain')
+        axes[0, 1].set_title('Regional DEM Patches (5x5 grid, 60km each)')
         plt.colorbar(im2, ax=axes[0, 1])
         
         # 3. Plot month encoding
@@ -402,6 +406,32 @@ class DataGenerator:
         axes[1, 1].set_title('Interpolated Rainfall')
         plt.colorbar(im3, ax=axes[1, 1])
         
+        # 5. Plot a sample climate variable (air_2m is usually available)
+        climate_vars = data['climate_vars']
+        if 'air_2m' in climate_vars:
+            # Use air_2m as it's a commonly available variable
+            var_name = 'air_2m'
+        else:
+            # Otherwise use the first available climate variable
+            var_name = list(climate_vars.keys())[0] if climate_vars else None
+            
+        if var_name:
+            var_data = climate_vars[var_name]
+            # Reshape to grid (5x5)
+            grid_size = int(np.sqrt(len(var_data)))
+            grid_data = var_data.reshape(grid_size, grid_size)
+            
+            im4 = axes[2, 0].imshow(grid_data, cmap='viridis')
+            axes[2, 0].set_title(f'Climate Variable: {var_name}')
+            plt.colorbar(im4, ax=axes[2, 0])
+        else:
+            axes[2, 0].text(0.5, 0.5, 'No climate data available', 
+                           horizontalalignment='center', verticalalignment='center')
+            axes[2, 0].set_title('Climate Variable')
+            
+        # Hide the last unused subplot
+        axes[2, 1].axis('off')
+        
         plt.tight_layout()
         
         if output_path:
@@ -412,6 +442,46 @@ class DataGenerator:
             output_path = self.output_dir / f"sample_visualization_{date_str}.png"
             plt.savefig(output_path)
             print(f"Saved visualization to {output_path}")
+            
+    def _arrange_patches_in_grid(self, patches, grid_rows, grid_cols):
+        """
+        Arrange multiple patches into a single grid visualization.
+        
+        Parameters
+        ----------
+        patches : numpy.ndarray
+            Array of patches, shape (n_patches, patch_height, patch_width)
+        grid_rows : int
+            Number of rows in the grid
+        grid_cols : int
+            Number of columns in the grid
+            
+        Returns
+        -------
+        numpy.ndarray
+            Combined grid of all patches
+        """
+        # Get patch dimensions
+        n_patches, patch_height, patch_width = patches.shape
+        
+        # Create empty grid
+        grid = np.zeros((grid_rows * patch_height, grid_cols * patch_width))
+        
+        # Place patches in grid
+        for i in range(min(n_patches, grid_rows * grid_cols)):
+            row = i // grid_cols
+            col = i % grid_cols
+            
+            # Calculate position in the grid
+            row_start = row * patch_height
+            row_end = (row + 1) * patch_height
+            col_start = col * patch_width
+            col_end = (col + 1) * patch_width
+            
+            # Place the patch
+            grid[row_start:row_end, col_start:col_end] = patches[i]
+            
+        return grid
     
     def visualize_climate_variables(self, data, date_str, output_path=None):
         """
