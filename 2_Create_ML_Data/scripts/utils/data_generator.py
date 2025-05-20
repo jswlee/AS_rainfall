@@ -32,7 +32,8 @@ class DataGenerator:
     """
     
     def __init__(self, grid_points=None, local_patches=None, regional_patches=None,
-                 climate_data_path=None, rainfall_data=None, output_dir='output'):
+                 climate_data_path=None, rainfall_data=None, output_dir='output',
+                 figures_dir=None):
         """
         Initialize the data generator.
         
@@ -50,6 +51,8 @@ class DataGenerator:
             Dictionary with interpolated rainfall data by date
         output_dir : str, optional
             Directory to save output files
+        figures_dir : str, optional
+            Directory to save figure visualizations
         """
         self.grid_points = grid_points
         self.local_patches = local_patches
@@ -58,8 +61,15 @@ class DataGenerator:
         self.rainfall_data = rainfall_data
         self.output_dir = Path(output_dir)
         
-        # Create output directory
+        # Set up figures directory
+        if figures_dir is None:
+            self.figures_dir = self.output_dir / 'figures'
+        else:
+            self.figures_dir = Path(figures_dir)
+        
+        # Create output and figures directories
         self.output_dir.mkdir(exist_ok=True)
+        self.figures_dir.mkdir(exist_ok=True, parents=True)
         
         # Load climate data if path is provided
         if climate_data_path:
@@ -434,14 +444,16 @@ class DataGenerator:
         
         plt.tight_layout()
         
-        if output_path:
-            plt.savefig(output_path)
-            print(f"Saved visualization to {output_path}")
-        else:
-            # Save to default location
-            output_path = self.output_dir / f"sample_visualization_{date_str}.png"
-            plt.savefig(output_path)
-            print(f"Saved visualization to {output_path}")
+        if output_path is None:
+            # Save to figures directory with date in filename
+            output_path = self.figures_dir / f"sample_visualization_{date_str}.png"
+            
+        # Ensure the directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Save the figure
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        print(f"Saved visualization to {output_path}")
             
     def _arrange_patches_in_grid(self, patches, grid_rows, grid_cols):
         """

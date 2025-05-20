@@ -235,9 +235,9 @@ def evaluate_model(model, data, output_dir=None):
     
     # Print detailed metrics
     print("\nDetailed Test Metrics:")
-    print(f"MSE:  {mse:.4f}")
-    print(f"RMSE: {rmse:.4f}")
-    print(f"MAE:  {mae:.4f}")
+    print(f"MSE:  {mse*100*100:.4f} in²")  # Convert to inches squared
+    print(f"RMSE: {rmse*100:.4f} in")      # Convert to inches
+    print(f"MAE:  {mae*100:.4f} in")       # Convert to inches
     print(f"R²:   {r2:.4f}")
     
     # Save evaluation metrics
@@ -246,16 +246,24 @@ def evaluate_model(model, data, output_dir=None):
         metrics_path = os.path.join(output_dir, 'evaluation_metrics.npy')
         np.save(metrics_path, metrics)
         
-        # Also save as CSV for easier reading
-        metrics_df = pd.DataFrame([metrics])
+        # Also save as CSV for easier reading with values converted to inches
+        metrics_inches = metrics.copy()
+        for key in ['mse', 'rmse', 'mae', 'loss', 'mean_squared_error', 'mean_absolute_error']:
+            if key in metrics_inches:
+                if key in ['mse', 'mean_squared_error']:
+                    metrics_inches[key] = metrics_inches[key] * 100 * 100  # Convert to inches squared
+                else:
+                    metrics_inches[key] = metrics_inches[key] * 100  # Convert to inches
+        
+        metrics_df = pd.DataFrame([metrics_inches])
         csv_path = os.path.join(output_dir, 'evaluation_metrics.csv')
         metrics_df.to_csv(csv_path, index=False)
         print(f"Metrics saved to {csv_path}")
         
-        # Save predictions vs actual values
+        # Save predictions vs actual values (convert to inches)
         results_df = pd.DataFrame({
-            'actual_inches': y_true.flatten(),
-            'predicted_inches': y_pred.flatten()
+            'actual_inches': y_true.flatten() * 100,  # Convert to inches
+            'predicted_inches': y_pred.flatten() * 100  # Convert to inches
         })
         results_path = os.path.join(output_dir, 'test_predictions.csv')
         # Write header with units
@@ -297,22 +305,34 @@ def plot_training_history(history, output_dir=None):
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     
+    # Convert history values to inches
+    history_inches = {}
+    for key, value in history.items():
+        if key in ['loss', 'val_loss']:
+            # MSE values need to be multiplied by 100²
+            history_inches[key] = [v * 100 * 100 for v in value]
+        elif key in ['mae', 'val_mae']:
+            # MAE values need to be multiplied by 100
+            history_inches[key] = [v * 100 for v in value]
+        else:
+            history_inches[key] = value
+    
     # Plot loss
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
-    plt.plot(history['loss'], label='Training Loss')
-    plt.plot(history['val_loss'], label='Validation Loss')
+    plt.plot(history_inches['loss'], label='Training Loss')
+    plt.plot(history_inches['val_loss'], label='Validation Loss')
     plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.ylabel('Loss (in²)')
     plt.title('Training and Validation Loss')
     plt.legend()
     
     # Plot MAE
     plt.subplot(1, 2, 2)
-    plt.plot(history['mae'], label='Training MAE')
-    plt.plot(history['val_mae'], label='Validation MAE')
+    plt.plot(history_inches['mae'], label='Training MAE')
+    plt.plot(history_inches['val_mae'], label='Validation MAE')
     plt.xlabel('Epoch')
-    plt.ylabel('MAE')
+    plt.ylabel('MAE (inches)')
     plt.title('Training and Validation MAE')
     plt.legend()
     

@@ -1,7 +1,7 @@
 Training Summary
 ===============
 
-Date: 2025-05-19 18:18:33
+Date: 2025-05-20 10:44:21
 
 ALL RAINFALL VALUES ARE IN INCHES.
 
@@ -28,7 +28,7 @@ Hyperparameters:
 Training:
   Epochs: 150
   Batch size: 314
-  Training time: 1 minutes and 41 seconds
+  Training time: 1 minutes and 36 seconds
 
 Results (all in inches):
   loss: 0.001625

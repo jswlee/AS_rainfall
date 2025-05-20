@@ -57,8 +57,11 @@ CONFIG = {
         'regional': 20  # 20km per cell for regional patch (60km total)
     }
 }
-# Create output directory
+# Create output directories
 os.makedirs(CONFIG['output_dir'], exist_ok=True)
+# Create figures directory
+figures_dir = os.path.join(os.path.dirname(CONFIG['output_dir']), 'figures')
+os.makedirs(figures_dir, exist_ok=True)
 
 # Check if climate data exists (either processed file or raw files)
 processed_file_exists = os.path.exists(CONFIG['climate_data_path'])
@@ -198,7 +201,9 @@ def process_dem():
     plt.colorbar()
     
     plt.tight_layout()
-    plt.savefig(f"{CONFIG['output_dir']}/dem_patches.png")
+    dem_patches_path = os.path.join(figures_dir, 'dem_patches.png')
+    plt.savefig(dem_patches_path)
+    print(f"Saved DEM patches visualization to {dem_patches_path}")
     
     return {
         'grid_points': grid_points,
@@ -338,7 +343,9 @@ def process_rainfall_data(grid_points):
     plt.title(f'Interpolated Rainfall for {sample_date}')
     plt.xlabel('Longitude')
     plt.ylabel('Latitude')
-    plt.savefig(f"{CONFIG['output_dir']}/interpolated_rainfall_{sample_date}.png")
+    rainfall_plot_path = os.path.join(figures_dir, f'interpolated_rainfall_{sample_date}.png')
+    plt.savefig(rainfall_plot_path)
+    print(f"Saved rainfall interpolation visualization to {rainfall_plot_path}")
     
     return interpolated_rainfall, available_dates
 
@@ -350,14 +357,15 @@ def generate_training_data(dem_data, climate_data_path, rainfall_data, available
         return None
     print(f"Using climate data from: {climate_data_path}")
     
-    # Initialize data generator
+    # Initialize data generator with both output and figures directories
     data_generator = DataGenerator(
         grid_points=dem_data['grid_points'],
         local_patches=dem_data['local_patches'],
         regional_patches=dem_data['regional_patches'],
         climate_data_path=climate_data_path,
         rainfall_data=rainfall_data,
-        output_dir=CONFIG['output_dir']
+        output_dir=CONFIG['output_dir'],
+        figures_dir=figures_dir
     )
     
     # Find intersection of available dates between climate and rainfall data

@@ -64,16 +64,16 @@ xtick_indices = [i for i in xtick_indices if i is not None]
 xtick_labels = [all_months[i][:7] for i in xtick_indices]
 plt.xticks(xtick_indices, xtick_labels, rotation=45)
 
-plt.xlabel('Year-Month (5 year intervals)')
+plt.xlabel('Year-Month')
 plt.ylabel('Station')
 plt.title('Monthly Rainfall Data Coverage by Station')
 plt.tight_layout()
 
 # Custom legend for data presence
 import matplotlib.patches as mpatches
-blue_patch = mpatches.Patch(color=plt.cm.Blues(0.8), label='Data Present')
+blue_patch = mpatches.Patch(color=plt.cm.Blues(1.0), label='Data Present')
 plt.legend(handles=[blue_patch], loc='upper right')
 
-plt.savefig(os.path.join(MONTHLY_DIR, 'rainfall_monthly_coverage_heatmap.png'))
+plt.savefig(os.path.join(PROJECT_ROOT, '1_Process_Rainfall_Data', 'figures', 'rainfall_monthly_coverage_heatmap.png'))
 plt.show()
 

@@ -17,10 +17,10 @@ Hyperparameters:
   output_activation: softplus
 
 Training Results:
-  Final Loss: 0.000608
-  Final MAE: 0.015439
-  Final Val Loss: 0.000490
-  Final Val MAE: 0.011860
+  Final Loss: 6.0800 in²
+  Final MAE: 1.5439 in
+  Final Val Loss: 4.9000 in²
+  Final Val MAE: 1.1860 in
 
 Test Metrics:
   R²: 0.9239

@@ -12,8 +12,6 @@ import random
 import numpy as np
 import tensorflow as tf
 from datetime import datetime
-import tensorflow as tf
-from tensorflow.keras import layers, regularizers
 
 # Define script and project directories
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,155 +30,11 @@ tf.random.set_seed(SEED)
 # Import local modules
 from data_utils import load_and_reshape_data, create_tf_dataset
 from training import train_model, evaluate_model, plot_training_history
+from model_utils import build_model, load_best_hyperparameters
 
 
-def build_best_model(data_metadata, hyperparams=None):
-    """
-    Build the LAND model with the best hyperparameters.
-    
-    Parameters
-    ----------
-    data_metadata : dict
-        Dictionary containing metadata about the input data
-    hyperparams : dict, optional
-        Dictionary containing hyperparameters loaded from a file
-        
-    Returns
-    -------
-    tf.keras.Model
-        Compiled LAND model
-    """
-    # Define default hyperparameters
-    default_hyperparams = {
-        'na': 320,
-        'nb': 256,
-        'dropout_rate': 0.4,
-        'l2_reg': 1.7352550593878845e-05,
-        'learning_rate': 0.0007256000814102282,
-        'weight_decay': 1.1574311893640013e-06,
-        'local_dem_units': 128,
-        'regional_dem_units': 96,
-        'month_units': 32,
-        'climate_units': 256,
-        'use_residual': False,
-        'activation': 'relu',
-        'output_activation': 'softplus'  # Ensures non-negative rainfall predictions
-    }
-    
-    # If no hyperparameters provided, use defaults
-    if hyperparams is None:
-        hyperparams = default_hyperparams
-    else:
-        # Update with any provided hyperparameters, falling back to defaults for any missing ones
-        hyperparams = {**default_hyperparams, **hyperparams}
-    
-    # Print the hyperparameters being used
-    print("\nUsing hyperparameters:")
-    for key, value in hyperparams.items():
-        print(f"  {key}: {value}")
-    
-    # Create input layers
-    climate_input = layers.Input(shape=data_metadata['climate_shape'], name='climate')
-    local_dem_input = layers.Input(shape=data_metadata['local_dem_shape'], name='local_dem')
-    regional_dem_input = layers.Input(shape=data_metadata['regional_dem_shape'], name='regional_dem')
-    month_input = layers.Input(shape=(data_metadata['num_month_encodings'],), name='month')
-    
-    # Process local DEM
-    local_dem = layers.Flatten()(local_dem_input)
-    local_dem = layers.Dense(
-        hyperparams['local_dem_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(local_dem)
-    local_dem = layers.BatchNormalization()(local_dem)
-    
-    # Process regional DEM
-    regional_dem = layers.Flatten()(regional_dem_input)
-    regional_dem = layers.Dense(
-        hyperparams['regional_dem_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(regional_dem)
-    regional_dem = layers.BatchNormalization()(regional_dem)
-    
-    # Process month
-    month = layers.Dense(
-        hyperparams['month_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(month_input)
-    month = layers.BatchNormalization()(month)
-    
-    # Process climate/reanalysis data
-    climate_flat = layers.Reshape((data_metadata['climate_shape'][0] * 
-                                  data_metadata['climate_shape'][1] * 
-                                  data_metadata['climate_shape'][2],))(climate_input)
-    
-    climate = layers.Dense(
-        hyperparams['climate_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(climate_flat)
-    climate = layers.BatchNormalization()(climate)
-    
-    # Concatenate all features
-    concat = layers.Concatenate()([climate, local_dem, regional_dem, month])
-    
-    # Dense layers
-    x = layers.Dense(
-        hyperparams['na'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(concat)
-    x = layers.BatchNormalization()(x)
-    x = layers.Dropout(hyperparams['dropout_rate'])(x)
-    
-    # Store residual connection if enabled and dimensions match
-    residual = None
-    if hyperparams['use_residual'] and hyperparams['na'] == hyperparams['nb']:
-        residual = x
-        
-    x = layers.Dense(
-        hyperparams['nb'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(x)
-    x = layers.BatchNormalization()(x)
-    
-    # Add residual connection if enabled and dimensions match
-    if hyperparams['use_residual'] and hyperparams['na'] == hyperparams['nb']:
-        print("Using residual connection")
-        x = layers.Add()([x, residual])
-        
-    x = layers.Dropout(hyperparams['dropout_rate'])(x)
-    
-    # Output layer with non-negative activation to ensure rainfall predictions are never negative
-    # Default to 'relu' if output_activation not in hyperparams
-    output_activation = hyperparams.get('output_activation', 'relu')
-    output = layers.Dense(1, activation=output_activation, name='rainfall')(x)
-    
-    # Create model
-    model = tf.keras.Model(
-        inputs=[climate_input, local_dem_input, regional_dem_input, month_input],
-        outputs=output
-    )
-    
-    # Compile model
-    optimizer = tf.keras.optimizers.AdamW(
-        learning_rate=hyperparams['learning_rate'],
-        weight_decay=hyperparams['weight_decay']
-    )
-    
-    model.compile(
-        optimizer=optimizer,
-        loss='mse',
-        metrics=['mae']
-    )
-    
-    # Print model summary
-    model.summary()
-    
-    return model
+# Use the build_model function from model_utils.py
+build_best_model = build_model
 
 
 def main():

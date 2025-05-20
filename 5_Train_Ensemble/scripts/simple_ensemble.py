@@ -37,193 +37,13 @@ from training import train_model, evaluate_model, plot_training_history
 HYPERPARAM_DIR = os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output')
 
 
-def load_best_hyperparameters():
-    """
-    Load the best hyperparameters from the hyperparameter tuning output directory.
-    
-    Returns
-    -------
-    dict
-        Dictionary containing the best hyperparameters
-    """
-    # Define possible paths for hyperparameter files
-    possible_paths = [
-        # First check for CV tuning results
-        os.path.join(HYPERPARAM_DIR, 'land_model_cv_tuning', 'current_best_hyperparameters.py'),
-        # Then check for extended tuning results
-        os.path.join(HYPERPARAM_DIR, 'land_model_extended_tuner', 'current_best_hyperparameters.py'),
-        # Finally check for best_hyperparameters.py
-        os.path.join(HYPERPARAM_DIR, 'land_model_extended_tuner', 'best_hyperparameters.py')
-    ]
-    
-    # Try to load hyperparameters from one of the paths
-    for path in possible_paths:
-        if os.path.exists(path):
-            print(f"Loading best hyperparameters from {path}")
-            # Load hyperparameters from Python file
-            try:
-                # Get the directory containing the hyperparameters file
-                hp_dir = os.path.dirname(path)
-                # Get the filename without extension
-                hp_file = os.path.splitext(os.path.basename(path))[0]
-                # Add the directory to Python path
-                sys.path.append(hp_dir)
-                # Import the hyperparameters module
-                hp_module = __import__(hp_file)
-                # Get the hyperparameters
-                hyperparams = hp_module.best_hyperparameters
-                # Remove the directory from Python path
-                sys.path.remove(hp_dir)
-                return hyperparams
-            except Exception as e:
-                print(f"Error loading hyperparameters from {path}: {e}")
-    
-    # If no hyperparameter file was found or loaded successfully, use default values
-    print("Warning: Could not load hyperparameters from any file. Using default values.")
-    return {
-        'na': 320,
-        'nb': 1024,
-        'dropout_rate': 0.3,
-        'l2_reg': 1.5958133456440437e-05,
-        'learning_rate': 0.00010739617396409758,
-        'weight_decay': 1.52919311755361e-06,
-        'local_dem_units': 96,
-        'regional_dem_units': 32,
-        'month_units': 64,
-        'climate_units': 512,
-        'use_residual': True,
-        'activation': 'elu',
-        'output_activation': 'softplus'
-    }
+# Import load_best_hyperparameters from model_utils
+sys.path.append(os.path.join(PROJECT_ROOT, '4_Train_Best_Model', 'scripts'))
+from model_utils import load_best_hyperparameters
 
 
-def build_model(data_metadata, hyperparams):
-    """
-    Build the LAND model with the given hyperparameters.
-    
-    Parameters
-    ----------
-    data_metadata : dict
-        Dictionary containing metadata about the input data
-    hyperparams : dict
-        Dictionary containing hyperparameters
-        
-    Returns
-    -------
-    tf.keras.Model
-        Compiled LAND model
-    """
-    # Load the best hyperparameters if none are provided
-    if not hyperparams:
-        hyperparams = load_best_hyperparameters()
-    
-    # Ensure all required hyperparameters are present
-    default_params = load_best_hyperparameters()
-    
-    # Fill in any missing hyperparameters with defaults
-    for key, value in default_params.items():
-        if key not in hyperparams:
-            print(f"Warning: Hyperparameter '{key}' not found in loaded parameters. Using default value: {value}")
-            hyperparams[key] = value
-    
-    # Create input layers
-    climate_input = layers.Input(shape=data_metadata['climate_shape'], name='climate')
-    local_dem_input = layers.Input(shape=data_metadata['local_dem_shape'], name='local_dem')
-    regional_dem_input = layers.Input(shape=data_metadata['regional_dem_shape'], name='regional_dem')
-    month_input = layers.Input(shape=(data_metadata['num_month_encodings'],), name='month')
-    
-    # Process local DEM
-    local_dem = layers.Flatten()(local_dem_input)
-    local_dem = layers.Dense(
-        hyperparams['local_dem_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(local_dem)
-    local_dem = layers.BatchNormalization()(local_dem)
-    
-    # Process regional DEM
-    regional_dem = layers.Flatten()(regional_dem_input)
-    regional_dem = layers.Dense(
-        hyperparams['regional_dem_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(regional_dem)
-    regional_dem = layers.BatchNormalization()(regional_dem)
-    
-    # Process month
-    month = layers.Dense(
-        hyperparams['month_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(month_input)
-    month = layers.BatchNormalization()(month)
-    
-    # Process climate/reanalysis data
-    climate_flat = layers.Reshape((data_metadata['climate_shape'][0] * 
-                                  data_metadata['climate_shape'][1] * 
-                                  data_metadata['climate_shape'][2],))(climate_input)
-    
-    climate = layers.Dense(
-        hyperparams['climate_units'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(climate_flat)
-    climate = layers.BatchNormalization()(climate)
-    
-    # Concatenate all features
-    concat = layers.Concatenate()([climate, local_dem, regional_dem, month])
-    
-    # Dense layers
-    x = layers.Dense(
-        hyperparams['na'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(concat)
-    x = layers.BatchNormalization()(x)
-    x = layers.Dropout(hyperparams['dropout_rate'])(x)
-    
-    # Store residual connection if enabled and dimensions match
-    residual = None
-    if hyperparams['use_residual'] and hyperparams['na'] == hyperparams['nb']:
-        residual = x
-        
-    x = layers.Dense(
-        hyperparams['nb'], 
-        activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
-    )(x)
-    x = layers.BatchNormalization()(x)
-    
-    # Add residual connection if enabled and dimensions match
-    if hyperparams['use_residual'] and hyperparams['na'] == hyperparams['nb']:
-        print("Using residual connection")
-        x = layers.Add()([x, residual])
-        
-    x = layers.Dropout(hyperparams['dropout_rate'])(x)
-    
-    # Output layer with non-negative activation to ensure rainfall predictions are never negative
-    output_activation = hyperparams.get('output_activation', 'relu')
-    output = layers.Dense(1, activation=output_activation, name='rainfall')(x)
-    
-    # Create model
-    model = tf.keras.Model(
-        inputs=[climate_input, local_dem_input, regional_dem_input, month_input],
-        outputs=output
-    )
-    
-    # Compile model
-    optimizer = tf.keras.optimizers.AdamW(
-        learning_rate=hyperparams['learning_rate'],
-        weight_decay=hyperparams['weight_decay']
-    )
-    
-    model.compile(
-        optimizer=optimizer,
-        loss='mse',
-        metrics=['mae']
-    )
-    
-    return model
+# Import build_model from model_utils
+from model_utils import build_model
 
 
 def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per_fold=5, epochs=100, batch_size=32, resume_training=True, start_fold=None, start_model=None):
@@ -496,14 +316,14 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
                     if key not in ['Best hyperparameters from 100 trials']:
                         f.write(f"  {key}: {value}\n")
                 f.write(f"\nTraining Results:\n")
-                f.write(f"  Final Loss: {history['loss'][-1]:.6f}\n")
-                f.write(f"  Final MAE: {history['mae'][-1]:.6f}\n")
-                f.write(f"  Final Val Loss: {history['val_loss'][-1]:.6f}\n")
-                f.write(f"  Final Val MAE: {history['val_mae'][-1]:.6f}\n\n")
+                f.write(f"  Final Loss: {history['loss'][-1]*100*100:.6f} in²\n")  # Convert to inches squared
+                f.write(f"  Final MAE: {history['mae'][-1]*100:.6f} in\n")  # Convert to inches
+                f.write(f"  Final Val Loss: {history['val_loss'][-1]*100*100:.6f} in²\n")  # Convert to inches squared
+                f.write(f"  Final Val MAE: {history['val_mae'][-1]*100:.6f} in\n\n")  # Convert to inches
                 f.write(f"Test Metrics:\n")
                 f.write(f"  R²: {metrics['r2']:.4f}\n")
-                f.write(f"  RMSE: {metrics['rmse']:.4f} in\n")
-                f.write(f"  MAE: {metrics['mae']:.4f} in\n")
+                f.write(f"  RMSE: {metrics['rmse']*100:.4f} in\n")  # Convert to inches
+                f.write(f"  MAE: {metrics['mae']*100:.4f} in\n")
             print(f"Training summary saved to {summary_path}")
         
             # Make test predictions
@@ -553,14 +373,15 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
             f.write(f"Number of Models: {n_models_per_fold}\n\n")
             f.write(f"Test Metrics:\n")
             f.write(f"  R²: {fold_r2:.4f}\n")
-            f.write(f"  RMSE: {fold_rmse:.4f} in\n")
-            f.write(f"  MAE: {fold_mae:.4f} in\n")
+            f.write(f"  RMSE: {fold_rmse*100:.4f} in\n")  # Convert to inches
+            f.write(f"  MAE: {fold_mae*100:.4f} in\n")  # Convert to inches
         
         # Create fold ensemble predictions plot
         plt.figure(figsize=(10, 8))
-        plt.scatter(data['targets']['test'], fold_ensemble_pred, alpha=0.5)
-        plt.plot([data['targets']['test'].min(), data['targets']['test'].max()], 
-                 [data['targets']['test'].min(), data['targets']['test'].max()], 'r--')
+        # Convert to inches by multiplying by 100
+        plt.scatter(data['targets']['test']*100, fold_ensemble_pred*100, alpha=0.5)
+        plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
+                 [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'r--')
         plt.xlabel('Actual Rainfall (inches)')
         plt.ylabel('Predicted Rainfall (inches)')
         plt.title(f'Fold {fold_idx+1} Ensemble: Actual vs Predicted Rainfall')
@@ -628,15 +449,15 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
         
         f.write(f"\nFinal Ensemble Test Results:\n")
         f.write(f"  R²: {test_r2:.4f}\n")
-        f.write(f"  RMSE: {test_rmse:.4f} in\n")
-        f.write(f"  MAE: {test_mae:.4f} in\n")
+        f.write(f"  RMSE: {test_rmse*100:.4f} in\n")  
+        f.write(f"  MAE: {test_mae*100:.4f} in\n")  
         f.write(f"\nTraining completed in {time.strftime('%H:%M:%S', time.gmtime(training_time))}\n")
     
     # Plot test predictions
     plt.figure(figsize=(10, 8))
-    plt.scatter(data['targets']['test'], test_ensemble_pred, alpha=0.5)
-    plt.plot([data['targets']['test'].min(), data['targets']['test'].max()], 
-             [data['targets']['test'].min(), data['targets']['test'].max()], 'r--')
+    plt.scatter(data['targets']['test']*100, test_ensemble_pred*100, alpha=0.5)
+    plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
+             [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'r--')
     plt.xlabel('Actual Rainfall (inches)')
     plt.ylabel('Predicted Rainfall (inches)')
     plt.title('Ensemble Model: Actual vs Predicted Rainfall (Test Set)')
@@ -647,10 +468,10 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
     # Plot individual model predictions
     plt.figure(figsize=(12, 8))
     for i, preds in enumerate(all_test_predictions):
-        plt.scatter(data['targets']['test'], preds, alpha=0.3, label=f'Model {i+1}')
-    plt.scatter(data['targets']['test'], test_ensemble_pred, alpha=0.8, color='red', label='Ensemble')
-    plt.plot([data['targets']['test'].min(), data['targets']['test'].max()], 
-             [data['targets']['test'].min(), data['targets']['test'].max()], 'k--')
+        plt.scatter(data['targets']['test']*100, preds*100, alpha=0.3, label=f'Model {i+1}')
+    plt.scatter(data['targets']['test']*100, test_ensemble_pred*100, alpha=0.8, color='red', label='Ensemble')
+    plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
+             [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'k--')
     plt.xlabel('Actual Rainfall (inches)')
     plt.ylabel('Predicted Rainfall (inches)')
     plt.title('Individual Models vs Ensemble Predictions')
@@ -751,13 +572,13 @@ def main():
     # Print final results
     print("\nCross-Validation Results:")
     print(f"Average CV R²: {results['avg_cv_r2']:.4f}")
-    print(f"Average CV RMSE: {results['avg_cv_rmse']:.4f} in")
-    print(f"Average CV MAE: {results['avg_cv_mae']:.4f} in")
+    print(f"Average CV RMSE: {results['avg_cv_rmse']*100:.4f} in")  
+    print(f"Average CV MAE: {results['avg_cv_mae']*100:.4f} in")  
     
     print("\nFinal Ensemble Results:")
     print(f"Test R²: {results['test_r2']:.4f}")
-    print(f"Test RMSE: {results['test_rmse']:.4f} in")
-    print(f"Test MAE: {results['test_mae']:.4f} in")
+    print(f"Test RMSE: {results['test_rmse']*100:.4f} in")  
+    print(f"Test MAE: {results['test_mae']*100:.4f} in")  
     
     print(f"\nResults saved to {args.output_dir}")
     

@@ -3,5 +3,5 @@ Number of Models: 5
 
 Test Metrics:
   R²: 0.9414
-  RMSE: 0.0153 in
-  MAE: 0.0085 in
+  RMSE: 1.5300 in
+  MAE: 0.8500 in
