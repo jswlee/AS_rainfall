@@ -16,6 +16,7 @@ import keras_tuner as kt
 import pickle
 from datetime import datetime
 import matplotlib.pyplot as plt
+from sklearn.model_selection import KFold
 
 # Define script and project directories
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -165,10 +166,11 @@ def build_tunable_model(hp, data_metadata):
 
 def main():
     """
-    Main function to run extended hyperparameter tuning.
+    Main function to run extended hyperparameter tuning with cross-validation.
+    Supports resuming from previous runs.
     """
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Extended hyperparameter tuning for LAND model')
+    parser = argparse.ArgumentParser(description='Extended hyperparameter tuning for LAND model with cross-validation')
     parser.add_argument('--features_path', type=str, 
                         default=os.path.join(PROJECT_ROOT, '2_Create_ML_Data', 'output', 'csv_data', 'features.csv'),
                         help='Path to features CSV file')
@@ -181,7 +183,7 @@ def main():
     parser.add_argument('--output_dir', type=str, 
                         default=os.path.join(SCRIPT_DIR, '../output/land_model_extended_tuner'),
                         help='Directory to save tuner results')
-    parser.add_argument('--max_trials', type=int, default=25,
+    parser.add_argument('--max_trials', type=int, default=50,
                         help='Maximum number of hyperparameter tuning trials')
     parser.add_argument('--executions_per_trial', type=int, default=1,
                         help='Number of executions per trial')
@@ -189,6 +191,12 @@ def main():
                         help='Number of epochs for each trial')
     parser.add_argument('--batch_size', type=int, default=314,
                         help='Batch size for training')
+    parser.add_argument('--n_folds', type=int, default=5,
+                        help='Number of cross-validation folds')
+    parser.add_argument('--cv_seed', type=int, default=42,
+                        help='Random seed for cross-validation splits')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume from previous tuning session')
     args = parser.parse_args()
     
     # Create output directory
@@ -202,24 +210,173 @@ def main():
         test_indices_path=args.test_indices_path
     )
     
-    # Create TensorFlow datasets
-    print("\nCreating TensorFlow datasets...")
-    datasets = create_tf_dataset(data, batch_size=args.batch_size)
+    # Extract the training data for cross-validation
+    # We'll use the existing train/val split for our CV folds
+    print(f"\nSetting up {args.n_folds}-fold cross-validation...")
     
-    # Define the hypermodel
-    def build_model(hp):
-        return build_tunable_model(hp, data['metadata'])
+    # Combine train and validation data for cross-validation
+    cv_features = {}
+    cv_targets = {}
     
-    # Create the tuner
+    # Combine climate data
+    cv_features['climate'] = np.concatenate([
+        data['climate']['train'], 
+        data['climate']['val']
+    ])
+    
+    # Combine local DEM data
+    cv_features['local_dem'] = np.concatenate([
+        data['local_dem']['train'], 
+        data['local_dem']['val']
+    ])
+    
+    # Combine regional DEM data
+    cv_features['regional_dem'] = np.concatenate([
+        data['regional_dem']['train'], 
+        data['regional_dem']['val']
+    ])
+    
+    # Combine month data
+    cv_features['month'] = np.concatenate([
+        data['month']['train'], 
+        data['month']['val']
+    ])
+    
+    # Combine targets
+    cv_targets = np.concatenate([
+        data['targets']['train'], 
+        data['targets']['val']
+    ])
+    
+    # Create indices for cross-validation
+    n_samples = len(cv_targets)
+    indices = np.arange(n_samples)
+    
+    # Set up KFold cross-validation
+    kf = KFold(n_splits=args.n_folds, shuffle=True, random_state=args.cv_seed)
+    
+    # Define a cross-validation hypermodel
+    class CVHyperModel(kt.HyperModel):
+        def __init__(self, data_metadata, cv_features, cv_targets, kf, batch_size):
+            self.data_metadata = data_metadata
+            self.cv_features = cv_features
+            self.cv_targets = cv_targets
+            self.kf = kf
+            self.batch_size = batch_size
+            self.fold_indices = list(kf.split(np.arange(len(cv_targets))))
+            
+        def build(self, hp):
+            return build_tunable_model(hp, self.data_metadata)
+            
+        def fit(self, hp, model, *args, **kwargs):
+            # Get callbacks
+            callbacks = kwargs.pop('callbacks', [])
+            
+            # Store validation scores across folds
+            val_losses = []
+            
+            # Perform cross-validation
+            for fold, (train_idx, val_idx) in enumerate(self.fold_indices):
+                print(f"\nTraining on fold {fold+1}/{len(self.fold_indices)}")
+                
+                # Create fold-specific datasets
+                train_dataset = tf.data.Dataset.from_tensor_slices((
+                    {
+                        'climate': self.cv_features['climate'][train_idx],
+                        'local_dem': self.cv_features['local_dem'][train_idx],
+                        'regional_dem': self.cv_features['regional_dem'][train_idx],
+                        'month': self.cv_features['month'][train_idx]
+                    },
+                    self.cv_targets[train_idx]
+                )).batch(self.batch_size, drop_remainder=True)
+                
+                val_dataset = tf.data.Dataset.from_tensor_slices((
+                    {
+                        'climate': self.cv_features['climate'][val_idx],
+                        'local_dem': self.cv_features['local_dem'][val_idx],
+                        'regional_dem': self.cv_features['regional_dem'][val_idx],
+                        'month': self.cv_features['month'][val_idx]
+                    },
+                    self.cv_targets[val_idx]
+                )).batch(self.batch_size, drop_remainder=True)
+                
+                # Reset model weights for each fold by creating a new model with the same hyperparameters
+                # This is more reliable than trying to reset weights in-place
+                if fold > 0:  # Only rebuild after the first fold
+                    # Clear the previous model from memory
+                    tf.keras.backend.clear_session()
+                    # Rebuild the model with the same hyperparameters
+                    model = self.build(hp)
+                
+                # Train on this fold
+                history = model.fit(
+                    train_dataset,
+                    validation_data=val_dataset,
+                    callbacks=callbacks,
+                    **kwargs
+                )
+                
+                # Get best validation loss from this fold
+                best_val_loss = min(history.history['val_loss'])
+                val_losses.append(best_val_loss)
+                print(f"Fold {fold+1} best validation loss: {best_val_loss:.6f}")
+            
+            # Return the average validation loss across folds
+            avg_val_loss = np.mean(val_losses)
+            print(f"\nAverage validation loss across {len(self.fold_indices)} folds: {avg_val_loss:.6f}")
+            
+            # Return the last history object with the average validation loss
+            history.history['val_loss'][-1] = avg_val_loss
+            return history
+    
+    # Create the CV hypermodel
+    cv_hypermodel = CVHyperModel(
+        data_metadata=data['metadata'],
+        cv_features=cv_features,
+        cv_targets=cv_targets,
+        kf=kf,
+        batch_size=args.batch_size
+    )
+    
+    # Create the tuner with the CV hypermodel
     tuner = kt.BayesianOptimization(
-        build_model,
+        cv_hypermodel,
         objective='val_loss',
         max_trials=args.max_trials,
         executions_per_trial=args.executions_per_trial,
         directory=args.output_dir,
-        project_name='land_model_extended_tuning',
-        overwrite=True
+        project_name='land_model_cv_tuning',
+        overwrite=not args.resume  # Only overwrite if not resuming
     )
+    
+    # If resuming, load the existing trials
+    if args.resume:
+        print("\nResuming from previous tuning session...")
+        # Get the number of completed trials
+        completed_trials = len(tuner.oracle.trials)
+        if completed_trials > 0:
+            print(f"Found {completed_trials} completed trials")
+            # Get the best trial so far
+            try:
+                best_trial = tuner.oracle.get_best_trials(1)[0]
+                print(f"Best val_loss so far: {best_trial.score:.6f}")
+                print("Best hyperparameters so far:")
+                for param, value in best_trial.hyperparameters.values.items():
+                    print(f"  {param}: {value}")
+            except (IndexError, AttributeError) as e:
+                print(f"Could not retrieve best trial information: {e}")
+        else:
+            print("No completed trials found. Starting from scratch.")
+            # Set overwrite to True if no trials found
+            tuner = kt.BayesianOptimization(
+                cv_hypermodel,
+                objective='val_loss',
+                max_trials=args.max_trials,
+                executions_per_trial=args.executions_per_trial,
+                directory=args.output_dir,
+                project_name='land_model_cv_tuning',
+                overwrite=True
+            )
     
     # Define early stopping callback
     early_stopping = tf.keras.callbacks.EarlyStopping(
@@ -247,16 +404,75 @@ def main():
         verbose=1
     )
     
+    # Create a simpler approach using a custom callback that runs after each epoch
+    class SaveBestHyperparametersCallback(tf.keras.callbacks.Callback):
+        def __init__(self, tuner, output_dir):
+            super(SaveBestHyperparametersCallback, self).__init__()
+            self.tuner = tuner
+            self.output_dir = output_dir
+            self.best_val_loss = float('inf')
+            self.trial_count = 0
+            
+        def on_train_begin(self, logs=None):
+            # Increment trial counter when a new trial begins
+            self.trial_count += 1
+            print(f"\nStarting trial #{self.trial_count}")
+            
+        def on_epoch_end(self, epoch, logs=None):
+            # Check if this is the last epoch (early stopping or max epochs)
+            if epoch == self.params['epochs'] - 1 or logs.get('val_loss', 0) < self.best_val_loss:
+                self.save_current_best()
+                
+        def save_current_best(self):
+            # Get the best hyperparameters so far
+            try:
+                best_hp = self.tuner.get_best_hyperparameters(1)[0]
+                best_trial = self.tuner.oracle.get_best_trials(1)[0]
+                val_loss = best_trial.score
+                
+                # Only save if this is better than what we've seen before
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    
+                    # Save the best hyperparameters to a text file
+                    with open(os.path.join(self.output_dir, 'current_best_hyperparameters.txt'), 'w') as f:
+                        f.write(f"Best hyperparameters after {self.trial_count} trials (val_loss: {val_loss:.6f}):\n\n")
+                        for param, value in best_hp.values.items():
+                            f.write(f"{param}: {value}\n")
+                    
+                    # Save as Python dictionary for easy import
+                    with open(os.path.join(self.output_dir, 'current_best_hyperparameters.py'), 'w') as f:
+                        f.write("# Current best hyperparameters\n\n")
+                        f.write("best_hyperparameters = {\n")
+                        for param, value in best_hp.values.items():
+                            if isinstance(value, str):
+                                f.write(f"    '{param}': '{value}',\n")
+                            else:
+                                f.write(f"    '{param}': {value},\n")
+                        f.write("}\n")
+                    
+                    print(f"\n[SaveBestHyperparameters] Updated best hyperparameters (val_loss: {val_loss:.6f})")
+            except Exception as e:
+                print(f"Error saving best hyperparameters: {e}")
+    
+    # Create the callback
+    save_best_hp_callback = SaveBestHyperparametersCallback(tuner, args.output_dir)
+    
     # Start tuning
-    print("\nStarting extended hyperparameter tuning...")
-    print(f"Running {args.max_trials} trials with {args.epochs} epochs each")
+    print("\nStarting extended hyperparameter tuning with cross-validation...")
+    if args.resume:
+        remaining_trials = args.max_trials - len(tuner.oracle.trials)
+        print(f"Resuming with {remaining_trials} remaining trials of {args.max_trials} total")
+    else:
+        print(f"Running {args.max_trials} trials with {args.n_folds}-fold cross-validation")
+    print(f"Each fold will train for up to {args.epochs} epochs")
+    print("Best hyperparameters will be saved after each trial in 'current_best_hyperparameters.txt'")
     start_time = time.time()
     
+    # For CV, we don't pass datasets directly since the CV hypermodel handles that
     tuner.search(
-        datasets['train'],
-        validation_data=datasets['val'],
         epochs=args.epochs,
-        callbacks=[early_stopping, lr_scheduler]
+        callbacks=[early_stopping, lr_scheduler, save_best_hp_callback]
     )
     
     # Calculate tuning time

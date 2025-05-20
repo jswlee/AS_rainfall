@@ -1,7 +1,7 @@
 Fold 3 Ensemble Summary
-Number of Models: 5
+Number of Models: 1
 
 Test Metrics:
-  R²: 0.9140
-  RMSE: 0.0227 in
-  MAE: 0.0140 in
+  R²: 0.8937
+  RMSE: 0.0222 in
+  MAE: 0.0123 in

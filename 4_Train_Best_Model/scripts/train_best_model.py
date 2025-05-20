@@ -50,25 +50,8 @@ def build_best_model(data_metadata, hyperparams=None):
     tf.keras.Model
         Compiled LAND model
     """
-    # Default hyperparameters if none provided
-    if hyperparams is None:
-        hyperparams = {
-            'na': 320,
-            'nb': 256,
-            'dropout_rate': 0.4,
-            'l2_reg': 1.7352550593878845e-05,
-            'learning_rate': 0.0007256000814102282,
-            'weight_decay': 1.1574311893640013e-06,
-            'local_dem_units': 128,
-            'regional_dem_units': 96,
-            'month_units': 32,
-            'climate_units': 256,
-            'use_residual': False,
-            'activation': 'relu'
-        }
-    
-    # Ensure all required hyperparameters are present
-    default_params = {
+    # Define default hyperparameters
+    default_hyperparams = {
         'na': 320,
         'nb': 256,
         'dropout_rate': 0.4,
@@ -80,14 +63,16 @@ def build_best_model(data_metadata, hyperparams=None):
         'month_units': 32,
         'climate_units': 256,
         'use_residual': False,
-        'activation': 'relu'
+        'activation': 'relu',
+        'output_activation': 'softplus'  # Ensures non-negative rainfall predictions
     }
     
-    # Fill in any missing hyperparameters with defaults
-    for key, value in default_params.items():
-        if key not in hyperparams:
-            print(f"Warning: Hyperparameter '{key}' not found in loaded parameters. Using default value: {value}")
-            hyperparams[key] = value
+    # If no hyperparameters provided, use defaults
+    if hyperparams is None:
+        hyperparams = default_hyperparams
+    else:
+        # Update with any provided hyperparameters, falling back to defaults for any missing ones
+        hyperparams = {**default_hyperparams, **hyperparams}
     
     # Print the hyperparameters being used
     print("\nUsing hyperparameters:")
@@ -214,7 +199,7 @@ def main():
         default=os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output', 'test_indices.pkl'),
         help='Path to save or load test indices')
     parser.add_argument('--hyperparams_path', type=str,
-        default=os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output', 'land_model_extended_tuner', 'best_hyperparameters.pkl'),
+        default=os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output', 'land_model_extended_tuner', 'current_best_hyperparameters.py'),
         help='Path to hyperparameters file')
     parser.add_argument('--output_dir', type=str,
         default=os.path.join(PIPELINE_DIR, 'output', 'land_model_best'),
@@ -245,7 +230,25 @@ def main():
     if args.hyperparams_path:
         print(f"\nLoading hyperparameters from {args.hyperparams_path}...")
         # Check file extension to determine how to load
-        if args.hyperparams_path.endswith('.pkl'):
+        if args.hyperparams_path.endswith('.py'):
+            # Load Python module file (current_best_hyperparameters.py)
+            try:
+                # Get the directory containing the hyperparameters file
+                hyperparams_dir = os.path.dirname(args.hyperparams_path)
+                # Add this directory to Python path temporarily
+                sys.path.insert(0, hyperparams_dir)
+                # Get the module name without extension
+                module_name = os.path.basename(args.hyperparams_path).replace('.py', '')
+                # Import the module dynamically
+                hyperparams_module = __import__(module_name)
+                # Get the hyperparameters dictionary
+                hyperparams = hyperparams_module.best_hyperparameters
+                # Remove the directory from path
+                sys.path.pop(0)
+            except Exception as e:
+                print(f"Error loading Python hyperparameters file: {e}")
+                print(f"Falling back to default hyperparameters.")
+        elif args.hyperparams_path.endswith('.pkl'):
             # Load binary pickle file
             import pickle
             try:
@@ -278,7 +281,12 @@ def main():
                             value = value.strip()
                         hyperparams[key.strip()] = value
         
-        print(f"Loaded hyperparameters: {hyperparams}")
+        if hyperparams:
+            print("Loaded hyperparameters:")
+            for key, value in hyperparams.items():
+                print(f"  {key}: {value}")
+        else:
+            print("No hyperparameters loaded, using defaults.")
     
     # Build the model with best hyperparameters
     print("\nBuilding model with best hyperparameters...")

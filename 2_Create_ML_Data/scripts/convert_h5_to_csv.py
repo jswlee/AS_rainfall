@@ -25,7 +25,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(PIPELINE_DIR, '..'))
 sys.path.append(os.path.join(PROJECT_ROOT, 'src'))
 
 
-def extract_data_from_h5(h5_path):
+def extract_data_from_h5(h5_path, filter_zero_rainfall=True):
     """
     Extract data from H5 file.
     
@@ -33,6 +33,8 @@ def extract_data_from_h5(h5_path):
     ----------
     h5_path : str
         Path to H5 file containing the processed data
+    filter_zero_rainfall : bool, optional
+        If True, filter out entries where rainfall is 0.0 (default: True)
         
     Returns
     -------
@@ -142,6 +144,19 @@ def extract_data_from_h5(h5_path):
     
     # Create targets DataFrame
     targets_df = pd.DataFrame({'rainfall': rainfall, 'date': date_indices})
+    
+    # Filter out entries with zero rainfall if requested
+    if filter_zero_rainfall:
+        # Find non-zero rainfall indices
+        non_zero_indices = rainfall > 0.0
+        
+        # Only keep entries with non-zero rainfall
+        if np.any(non_zero_indices):
+            features_df = features_df.loc[non_zero_indices].reset_index(drop=True)
+            targets_df = targets_df.loc[non_zero_indices].reset_index(drop=True)
+            print(f"Filtered out {np.sum(~non_zero_indices)} entries with zero rainfall")
+        else:
+            print("Warning: All rainfall values are zero!")
     
     # Create metadata DataFrame
     metadata_df = pd.DataFrame([{

@@ -33,6 +33,69 @@ sys.path.append(os.path.join(PROJECT_ROOT, '4_Train_Best_Model', 'scripts'))
 from data_utils import load_and_reshape_data, create_tf_dataset
 from training import train_model, evaluate_model, plot_training_history
 
+# Path to the hyperparameter tuning output directory
+HYPERPARAM_DIR = os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output')
+
+
+def load_best_hyperparameters():
+    """
+    Load the best hyperparameters from the hyperparameter tuning output directory.
+    
+    Returns
+    -------
+    dict
+        Dictionary containing the best hyperparameters
+    """
+    # Define possible paths for hyperparameter files
+    possible_paths = [
+        # First check for CV tuning results
+        os.path.join(HYPERPARAM_DIR, 'land_model_cv_tuning', 'current_best_hyperparameters.py'),
+        # Then check for extended tuning results
+        os.path.join(HYPERPARAM_DIR, 'land_model_extended_tuner', 'current_best_hyperparameters.py'),
+        # Finally check for best_hyperparameters.py
+        os.path.join(HYPERPARAM_DIR, 'land_model_extended_tuner', 'best_hyperparameters.py')
+    ]
+    
+    # Try to load hyperparameters from one of the paths
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"Loading best hyperparameters from {path}")
+            # Load hyperparameters from Python file
+            try:
+                # Get the directory containing the hyperparameters file
+                hp_dir = os.path.dirname(path)
+                # Get the filename without extension
+                hp_file = os.path.splitext(os.path.basename(path))[0]
+                # Add the directory to Python path
+                sys.path.append(hp_dir)
+                # Import the hyperparameters module
+                hp_module = __import__(hp_file)
+                # Get the hyperparameters
+                hyperparams = hp_module.best_hyperparameters
+                # Remove the directory from Python path
+                sys.path.remove(hp_dir)
+                return hyperparams
+            except Exception as e:
+                print(f"Error loading hyperparameters from {path}: {e}")
+    
+    # If no hyperparameter file was found or loaded successfully, use default values
+    print("Warning: Could not load hyperparameters from any file. Using default values.")
+    return {
+        'na': 320,
+        'nb': 1024,
+        'dropout_rate': 0.3,
+        'l2_reg': 1.5958133456440437e-05,
+        'learning_rate': 0.00010739617396409758,
+        'weight_decay': 1.52919311755361e-06,
+        'local_dem_units': 96,
+        'regional_dem_units': 32,
+        'month_units': 64,
+        'climate_units': 512,
+        'use_residual': True,
+        'activation': 'elu',
+        'output_activation': 'softplus'
+    }
+
 
 def build_model(data_metadata, hyperparams):
     """
@@ -50,22 +113,12 @@ def build_model(data_metadata, hyperparams):
     tf.keras.Model
         Compiled LAND model
     """
+    # Load the best hyperparameters if none are provided
+    if not hyperparams:
+        hyperparams = load_best_hyperparameters()
+    
     # Ensure all required hyperparameters are present
-    default_params = {
-        'na': 320,
-        'nb': 256,
-        'dropout_rate': 0.4,
-        'l2_reg': 1.7352550593878845e-05,
-        'learning_rate': 0.0007256000814102282,
-        'weight_decay': 1.1574311893640013e-06,
-        'local_dem_units': 128,
-        'regional_dem_units': 96,
-        'month_units': 32,
-        'climate_units': 256,
-        'use_residual': False,
-        'activation': 'relu',
-        'output_activation': 'relu'  # Add default output activation to ensure non-negative predictions
-    }
+    default_params = load_best_hyperparameters()
     
     # Fill in any missing hyperparameters with defaults
     for key, value in default_params.items():
@@ -614,7 +667,7 @@ def main():
     Main function to run simple ensemble model.
     """
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Train simple ensemble model')
+    parser = argparse.ArgumentParser(description='Simple ensemble model for rainfall prediction')
     parser.add_argument('--features_path', type=str, 
                         default=os.path.join(PROJECT_ROOT, '2_Create_ML_Data', 'output', 'csv_data', 'features.csv'),
                         help='Path to features CSV file')
@@ -624,15 +677,12 @@ def main():
     parser.add_argument('--test_indices_path', type=str, 
                         default=os.path.join(PROJECT_ROOT, '4_Train_Best_Model', 'output', 'land_model_best', 'test_indices.pkl'),
                         help='Path to save or load test indices')
-    parser.add_argument('--hyperparams_path', type=str, 
-                        default=os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output', 'land_model_extended_tuner', 'best_hyperparameters.txt'),
-                        help='Path to hyperparameters file')
     parser.add_argument('--output_dir', type=str, 
                         default=os.path.join(PIPELINE_DIR, 'output', 'simple_ensemble'),
                         help='Directory to save model weights and results')
     parser.add_argument('--n_folds', type=int, default=5,
                         help='Number of cross-validation folds')
-    parser.add_argument('--n_models_per_fold', type=int, default=1,
+    parser.add_argument('--n_models_per_fold', type=int, default=5,
                         help='Number of models to train in each fold')
     parser.add_argument('--epochs', type=int, default=150,
                         help='Number of epochs for training')
@@ -642,6 +692,8 @@ def main():
                         help='Fold number to start training from (1-5)')
     parser.add_argument('--start_model', type=int, default=None,
                         help='Model number to start training from within the start fold (1-5)')
+    parser.add_argument('--hyperparams_path', type=str, default=None,
+                        help='Path to hyperparameters file (will use best hyperparameters from tuning if not specified)')
     args = parser.parse_args()
     
     # Create output directory
@@ -655,44 +707,32 @@ def main():
         test_indices_path=args.test_indices_path
     )
     
-    # Load hyperparameters if path is provided
-    hyperparams = None
+    # Load hyperparameters
     if args.hyperparams_path:
-        print(f"\nLoading hyperparameters from {args.hyperparams_path}...")
-        # Check file extension to determine how to load
-        if args.hyperparams_path.endswith('.pkl'):
-            # Load binary pickle file
-            try:
-                with open(args.hyperparams_path, 'rb') as f:
-                    hyperparams = pickle.load(f)
-            except Exception as e:
-                print(f"Error loading pickle file: {e}")
-                # Try the text file version as fallback
-                text_path = args.hyperparams_path.replace('.pkl', '.txt')
-                if os.path.exists(text_path):
-                    print(f"Falling back to text file: {text_path}")
-                    args.hyperparams_path = text_path
-                else:
-                    print(f"No fallback file found. Using default hyperparameters.")
+        # Load from specified path
+        try:
+            print(f"Loading hyperparameters from {args.hyperparams_path}")
+            # Get the directory containing the hyperparameters file
+            hp_dir = os.path.dirname(args.hyperparams_path)
+            # Get the filename without extension
+            hp_file = os.path.splitext(os.path.basename(args.hyperparams_path))[0]
+            # Add the directory to Python path
+            sys.path.append(hp_dir)
+            # Import the hyperparameters module
+            hp_module = __import__(hp_file)
+            # Get the hyperparameters
+            hyperparams = hp_module.best_hyperparameters
+            # Remove the directory from Python path
+            sys.path.remove(hp_dir)
+        except Exception as e:
+            print(f"Error loading hyperparameters from {args.hyperparams_path}: {e}")
+            print("Using best hyperparameters from tuning instead.")
+            hyperparams = load_best_hyperparameters()
+    else:
+        # Load best hyperparameters from tuning
+        hyperparams = load_best_hyperparameters()
         
-        # If it's a text file or fallback to text file
-        if not hyperparams and args.hyperparams_path.endswith('.txt'):
-            hyperparams = {}
-            with open(args.hyperparams_path, 'r') as f:
-                for line in f:
-                    if ':' in line:
-                        key, value = line.strip().split(':', 1)
-                        try:
-                            # Try to convert to float or int
-                            value = float(value.strip())
-                            if value.is_integer():
-                                value = int(value)
-                        except ValueError:
-                            # Keep as string if not a number
-                            value = value.strip()
-                        hyperparams[key.strip()] = value
-        
-        print(f"Loaded hyperparameters: {hyperparams}")
+    print(f"Loaded hyperparameters: {hyperparams}")
     
     # Train simple ensemble model with cross-validation
     print("\nTraining ensemble model with cross-validation...")

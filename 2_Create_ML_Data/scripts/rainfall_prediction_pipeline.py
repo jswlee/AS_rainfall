@@ -22,6 +22,9 @@ import matplotlib.pyplot as plt
 import h5py
 from datetime import datetime
 
+# Import the H5 to CSV conversion module
+from convert_h5_to_csv import extract_data_from_h5
+
 # Define script and project directories
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.dirname(SCRIPT_DIR)
@@ -268,9 +271,20 @@ def process_rainfall_data(grid_points):
         # Get rainfall data for this date
         rainfall_data = rainfall_processor.get_rainfall_for_date(date_str)
         
-        # Skip dates with no or insufficient data points
-        if len(rainfall_data['stations']) < 1:
-            print(f"WARNING: No rainfall stations available for {date_str}, skipping.")
+        # If all stations are missing or have NaN for this month, skip it entirely
+        values = np.array(rainfall_data.get('values', []), dtype=float)
+        # Only keep if at least one station has a real value (including true zeros)
+        if len(values) == 0 or np.all(np.isnan(values)):
+            print(f"WARNING: All stations missing/NaN for {date_str}, dropping month from dataset.")
+            skipped_dates.append(date_str)
+            continue
+        # Remove any stations that have NaN values (optional, or could be handled in interpolation)
+        valid_idx = ~np.isnan(values)
+        rainfall_data['stations'] = list(np.array(rainfall_data['stations'])[valid_idx])
+        rainfall_data['locations'] = list(np.array(rainfall_data['locations'])[valid_idx])
+        rainfall_data['values'] = list(values[valid_idx])
+        if len(rainfall_data['stations']) == 0:
+            print(f"WARNING: After removing NaN stations, no valid rainfall for {date_str}, dropping month.")
             skipped_dates.append(date_str)
             continue
             
@@ -412,6 +426,38 @@ def main():
             print(f"\nPipeline complete! Training data saved to {training_data_path}")
             print(f"Features: 16 climate variables, month encoding, local and regional DEM patches")
             print(f"Labels: Interpolated rainfall")
+            
+            # Automatically convert H5 to CSV
+            print("\nConverting H5 data to CSV format...")
+            output_dir = os.path.join(CONFIG['output_dir'], 'csv_data')
+            os.makedirs(output_dir, exist_ok=True)
+            
+            try:
+                # Extract data from H5 file and filter out zero rainfall entries
+                features_df, targets_df, metadata_df = extract_data_from_h5(
+                    training_data_path, 
+                    filter_zero_rainfall=True  # Only keep entries with non-zero rainfall
+                )
+                
+                # Save to CSV
+                features_path = os.path.join(output_dir, 'features.csv')
+                targets_path = os.path.join(output_dir, 'targets.csv')
+                metadata_path = os.path.join(output_dir, 'metadata.csv')
+                
+                print(f"Saving features to {features_path}...")
+                features_df.to_csv(features_path, index=False)
+                
+                print(f"Saving targets to {targets_path}...")
+                targets_df.to_csv(targets_path, index=False)
+                
+                print(f"Saving metadata to {metadata_path}...")
+                metadata_df.to_csv(metadata_path, index=False)
+                
+                print(f"\nConversion complete. CSV files saved to {output_dir}")
+                print(f"Total samples: {len(targets_df)}")
+                print(f"Features shape: {features_df.shape}")
+            except Exception as e:
+                print(f"Error converting H5 to CSV: {e}")
         else:
             print("\nPipeline failed to generate training data. Check the error messages above.")
     else:
