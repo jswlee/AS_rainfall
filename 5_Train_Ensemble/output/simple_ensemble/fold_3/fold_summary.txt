@@ -1,0 +1,7 @@
+Fold 3 Ensemble Summary
+Number of Models: 5
+
+Test Metrics:
+  R²: 0.9501
+  RMSE: 1.4404 in
+  MAE: 0.8454 in

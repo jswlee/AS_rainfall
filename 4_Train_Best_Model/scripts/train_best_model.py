@@ -187,7 +187,6 @@ def main():
         f.write(f"Training Summary\n")
         f.write(f"===============\n\n")
         f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write(f"ALL RAINFALL VALUES ARE IN INCHES.\n\n")
         
         f.write(f"Data:\n")
         f.write(f"  Training samples: {len(data['targets']['train'])}\n")

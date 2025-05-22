@@ -1,17 +1,17 @@
 # Best hyperparameters from extended tuning
 
 best_hyperparameters = {
-    'na': 320,
-    'nb': 768,
+    'na': 64,
+    'nb': 896,
     'dropout_rate': 0.1,
     'l2_reg': 1e-06,
-    'learning_rate': 0.006138519107514284,
-    'weight_decay': 4.665590142644678e-06,
+    'learning_rate': 0.004502174441157261,
+    'weight_decay': 2.777214852727653e-06,
     'local_dem_units': 224,
     'regional_dem_units': 32,
-    'month_units': 64,
-    'climate_units': 256,
-    'use_residual': True,
-    'activation': 'selu',
+    'month_units': 96,
+    'climate_units': 512,
+    'use_residual': False,
+    'activation': 'relu',
     'output_activation': 'softplus',
 }

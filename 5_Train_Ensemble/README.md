@@ -6,20 +6,25 @@ This component trains an ensemble of LAND-inspired deep learning models to impro
 ## Functionality
 - Creates an ensemble of models with the same architecture but different random initializations
 - Implements k-fold cross-validation for robust evaluation
-- Ensures non-negative rainfall predictions with appropriate output activation functions
+- Ensures non-negative rainfall predictions with appropriate output activation functions (ReLU or Softplus)
 - Generates comprehensive visualizations of model performance
 - Combines predictions from multiple models for improved accuracy
+- Reports all rainfall values in inches (the original measurement unit)
 
 ## Directory Structure
 ```
 5_Train_Ensemble/
 ├── scripts/
 │   ├── simple_ensemble.py           # Main script for ensemble training
+│   ├── regenerate_visualizations.py  # Script for regenerating visualizations with correct units
 │   └── generate_visualizations.py   # Script for creating visualizations
 ├── output/
-│   ├── models/                      # Saved ensemble model weights
-│   ├── metrics/                     # Performance metrics
-│   └── plots/                       # Visualizations of results
+│   ├── simple_ensemble/              # Ensemble model results
+│   │   ├── fold_1/                  # Results for fold 1
+│   │   │   ├── model_1/             # Results for model 1 in fold 1
+│   │   │   └── ...
+│   │   └── ...
+│   └── plots/                       # Visualization plots
 └── README.md                        # This file
 ```
 
@@ -27,8 +32,9 @@ This component trains an ensemble of LAND-inspired deep learning models to impro
 - **K-Fold Cross-Validation**: Trains models on different data splits for robust evaluation
 - **Multiple Models Per Fold**: Creates multiple models for each data fold
 - **Non-Negative Output**: Uses ReLU or Softplus activation to ensure physically valid rainfall predictions
-- **Comprehensive Visualization**: Generates detailed plots of model performance
+- **Comprehensive Visualization**: Generates detailed plots of model performance with proper units
 - **Ensemble Averaging**: Combines predictions from multiple models to reduce variance
+- **Shared Model Architecture**: Uses model_utils.py module shared with the best model training step
 
 ## Usage
 To train the ensemble model, run:

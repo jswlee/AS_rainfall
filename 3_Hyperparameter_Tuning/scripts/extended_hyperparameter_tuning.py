@@ -183,7 +183,7 @@ def main():
     parser.add_argument('--output_dir', type=str, 
                         default=os.path.join(SCRIPT_DIR, '../output/land_model_extended_tuner'),
                         help='Directory to save tuner results')
-    parser.add_argument('--max_trials', type=int, default=50,
+    parser.add_argument('--max_trials', type=int, default=100,
                         help='Maximum number of hyperparameter tuning trials')
     parser.add_argument('--executions_per_trial', type=int, default=1,
                         help='Number of executions per trial')
@@ -338,7 +338,11 @@ def main():
         batch_size=args.batch_size
     )
     
-    # Create the tuner with the CV hypermodel
+    # Check if there are existing trials before creating the tuner
+    tuner_dir = os.path.join(args.output_dir, 'land_model_cv_tuning')
+    existing_trials = os.path.exists(tuner_dir)
+    
+    # Always set overwrite=False to preserve existing trials
     tuner = kt.BayesianOptimization(
         cv_hypermodel,
         objective='val_loss',
@@ -346,11 +350,11 @@ def main():
         executions_per_trial=args.executions_per_trial,
         directory=args.output_dir,
         project_name='land_model_cv_tuning',
-        overwrite=not args.resume  # Only overwrite if not resuming
+        overwrite=False  # Never overwrite existing trials
     )
     
-    # If resuming, load the existing trials
-    if args.resume:
+    # If resuming or existing trials are found, load them
+    if args.resume or existing_trials:
         print("\nResuming from previous tuning session...")
         # Get the number of completed trials
         completed_trials = len(tuner.oracle.trials)
@@ -358,25 +362,23 @@ def main():
             print(f"Found {completed_trials} completed trials")
             # Get the best trial so far
             try:
-                best_trial = tuner.oracle.get_best_trials(1)[0]
-                print(f"Best val_loss so far: {best_trial.score:.6f}")
-                print("Best hyperparameters so far:")
-                for param, value in best_trial.hyperparameters.values.items():
-                    print(f"  {param}: {value}")
-            except (IndexError, AttributeError) as e:
+                best_trials = tuner.oracle.get_best_trials(1)
+                if best_trials:
+                    best_trial = best_trials[0]
+                    if best_trial.score is not None:
+                        print(f"Best val_loss so far: {best_trial.score:.6f}")
+                        print("Best hyperparameters so far:")
+                        for param, value in best_trial.hyperparameters.values.items():
+                            print(f"  {param}: {value}")
+                    else:
+                        print("Best trial found but score is None. Will continue tuning.")
+                else:
+                    print("No best trials found yet. Will continue tuning.")
+            except Exception as e:
                 print(f"Could not retrieve best trial information: {e}")
+                print("Will continue tuning with existing trials.")
         else:
             print("No completed trials found. Starting from scratch.")
-            # Set overwrite to True if no trials found
-            tuner = kt.BayesianOptimization(
-                cv_hypermodel,
-                objective='val_loss',
-                max_trials=args.max_trials,
-                executions_per_trial=args.executions_per_trial,
-                directory=args.output_dir,
-                project_name='land_model_cv_tuning',
-                overwrite=True
-            )
     
     # Define early stopping callback
     early_stopping = tf.keras.callbacks.EarlyStopping(
@@ -420,16 +422,30 @@ def main():
             
         def on_epoch_end(self, epoch, logs=None):
             # Check if this is the last epoch (early stopping or max epochs)
-            if epoch == self.params['epochs'] - 1 or logs.get('val_loss', 0) < self.best_val_loss:
+            curr_val_loss = logs.get('val_loss', float('inf'))
+            if epoch == self.params.get('epochs', 0) - 1 or curr_val_loss < self.best_val_loss:
                 self.save_current_best()
                 
         def save_current_best(self):
             # Get the best hyperparameters so far
             try:
+                # Check if there are any completed trials
+                if not self.tuner.oracle.trials:
+                    return
+                    
                 best_hp = self.tuner.get_best_hyperparameters(1)[0]
-                best_trial = self.tuner.oracle.get_best_trials(1)[0]
+                best_trials = self.tuner.oracle.get_best_trials(1)
+                
+                if not best_trials:  # Handle empty list case
+                    return
+                    
+                best_trial = best_trials[0]
                 val_loss = best_trial.score
                 
+                # Handle None value case
+                if val_loss is None:
+                    return
+                    
                 # Only save if this is better than what we've seen before
                 if val_loss < self.best_val_loss:
                     self.best_val_loss = val_loss
@@ -454,6 +470,7 @@ def main():
                     print(f"\n[SaveBestHyperparameters] Updated best hyperparameters (val_loss: {val_loss:.6f})")
             except Exception as e:
                 print(f"Error saving best hyperparameters: {e}")
+                # Continue execution even if there's an error
     
     # Create the callback
     save_best_hp_callback = SaveBestHyperparametersCallback(tuner, args.output_dir)

@@ -53,8 +53,8 @@ CONFIG = {
         'regional': 3  # 3x3 grid for regional patch (60km)
     },
     'km_per_cell': {
-        'local': 4,    # 4km per cell for local patch (12km total)
-        'regional': 20  # 20km per cell for regional patch (60km total)
+        'local': 2,    # 2km per cell for local patch (6km total)
+        'regional': 8  # 8km per cell for regional patch (24km total)
     }
 }
 # Create output directories
@@ -190,14 +190,14 @@ def process_dem():
     
     # Plot local patches grid
     plt.subplot(121)
-    plt.imshow(local_grid, cmap='terrain')
-    plt.title('Local DEM Patches (5x5 grid, 12km each)')
+    plt.imshow(local_grid, cmap='terrain', origin='lower')
+    plt.title('Local DEM Patches (5x5 grid, 6km each)')
     plt.colorbar()
     
     # Plot regional patches grid
     plt.subplot(122)
-    plt.imshow(regional_grid, cmap='terrain')
-    plt.title('Regional DEM Patches (5x5 grid, 60km each)')
+    plt.imshow(regional_grid, cmap='terrain', origin='lower')
+    plt.title('Regional DEM Patches (5x5 grid, 24km each)')
     plt.colorbar()
     
     plt.tight_layout()

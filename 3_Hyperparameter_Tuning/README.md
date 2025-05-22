@@ -4,10 +4,11 @@
 This component performs hyperparameter tuning for the LAND-inspired deep learning model used for rainfall prediction. It's the third step in the rainfall prediction pipeline.
 
 ## Functionality
-- Uses Keras Tuner to systematically search for optimal hyperparameters
-- Evaluates model performance across various hyperparameter combinations
+- Uses Keras Tuner with Bayesian Optimization to systematically search for optimal hyperparameters
+- Evaluates model performance across various hyperparameter combinations using cross-validation
 - Saves the best hyperparameter configuration for model training
 - Includes non-negative output activation (ReLU or Softplus) to ensure physically valid rainfall predictions
+- Supports resuming tuning sessions without losing previous trials
 
 ## Directory Structure
 ```
@@ -16,16 +17,18 @@ This component performs hyperparameter tuning for the LAND-inspired deep learnin
 │   └── extended_hyperparameter_tuning.py  # Main script for hyperparameter tuning
 ├── output/
 │   └── land_model_extended_tuner/         # Contains tuning results
-│       ├── best_hyperparameters.py        # Best hyperparameter configuration
-│       └── tuning_results/                # Detailed tuning results
+│       ├── current_best_hyperparameters.txt # Current best hyperparameters (updated during tuning)
+│       ├── current_best_hyperparameters.py  # Python-importable version of best hyperparameters
+│       └── land_model_cv_tuning/           # Detailed tuning results and trial history
 └── README.md                              # This file
 ```
 
 ## Key Features
 - **Extensive Search Space**: Tunes network architecture, learning rates, regularization, and more
-- **Cross-Validation**: Uses k-fold cross-validation for robust evaluation
+- **Cross-Validation**: Uses 5-fold cross-validation for robust evaluation
 - **Output Activation**: Includes ReLU or Softplus activation to ensure non-negative rainfall predictions
 - **Early Stopping**: Implements early stopping to prevent overfitting
+- **Resumable Tuning**: Can resume tuning from previous sessions without losing trial history
 
 ## Usage
 To perform hyperparameter tuning, run:

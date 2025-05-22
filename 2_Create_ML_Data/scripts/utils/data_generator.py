@@ -389,15 +389,15 @@ class DataGenerator:
         # 1. Plot all local DEM patches in a 5x5 grid
         local_patches = np.array(data['local_patches'])
         local_grid = self._arrange_patches_in_grid(local_patches, 5, 5)
-        im1 = axes[0, 0].imshow(local_grid, cmap='terrain')
-        axes[0, 0].set_title('Local DEM Patches (5x5 grid, 12km each)')
+        im1 = axes[0, 0].imshow(local_grid, cmap='terrain', origin='lower')
+        axes[0, 0].set_title('Local DEM Patches (5x5 grid, 6km each)')
         plt.colorbar(im1, ax=axes[0, 0])
         
         # 2. Plot all regional DEM patches in a 5x5 grid
         regional_patches = np.array(data['regional_patches'])
         regional_grid = self._arrange_patches_in_grid(regional_patches, 5, 5)
-        im2 = axes[0, 1].imshow(regional_grid, cmap='terrain')
-        axes[0, 1].set_title('Regional DEM Patches (5x5 grid, 60km each)')
+        im2 = axes[0, 1].imshow(regional_grid, cmap='terrain', origin='lower')
+        axes[0, 1].set_title('Regional DEM Patches (5x5 grid, 24km each)')
         plt.colorbar(im2, ax=axes[0, 1])
         
         # 3. Plot month encoding

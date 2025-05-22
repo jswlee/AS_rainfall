@@ -8,7 +8,8 @@ including generating grid points and extracting patches.
 import os
 import numpy as np
 import rasterio
-from rasterio.transform import rowcol
+from rasterio.transform import rowcol, xy
+from math import radians, cos, sin, asin, sqrt, atan2
 import matplotlib.pyplot as plt
 
 class DEMProcessor:
@@ -41,14 +42,42 @@ class DEMProcessor:
             self.crs = src.crs
             self.bounds = src.bounds
             
-            # Get pixel size in meters
+            # Get pixel size in degrees
             self.pixel_size_x = abs(self.transform[0])
             self.pixel_size_y = abs(self.transform[4])
             
             # Store dimensions
             self.height, self.width = self.dem_data.shape
+            
+            # Calculate approximate meters per degree at the center of the DEM
+            center_lon = (self.bounds.left + self.bounds.right) / 2
+            center_lat = (self.bounds.bottom + self.bounds.top) / 2
+            self.meters_per_degree_lon = self._haversine(center_lon, center_lat, 
+                                                       center_lon + 1, center_lat)
+            self.meters_per_degree_lat = self._haversine(center_lon, center_lat, 
+                                                        center_lon, center_lat + 1)
         
         print(f"Loaded DEM with dimensions: {self.width}x{self.height}")
+        print(f"Approximate meters per degree - Lon: {self.meters_per_degree_lon:.2f}, "
+              f"Lat: {self.meters_per_degree_lat:.2f}")
+    
+    def _haversine(self, lon1, lat1, lon2, lat2):
+        """
+        Calculate the great circle distance between two points 
+        on the earth specified in decimal degrees.
+        """
+        # Convert decimal degrees to radians 
+        lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+        
+        # Haversine formula 
+        dlon = lon2 - lon1 
+        dlat = lat2 - lat1 
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a)) 
+        
+        # Radius of earth in kilometers
+        r = 6371.0
+        return c * r * 1000  # Convert to meters
         print(f"Bounds: {self.bounds}")
         print(f"Pixel size: {self.pixel_size_x}x{self.pixel_size_y} meters")
     
@@ -142,25 +171,32 @@ class DEMProcessor:
         row, col = rowcol(self.transform, lon, lat)
         print(f"Center point converted to row={row}, col={col}")
         
-        # Calculate patch size in pixels based on km_per_cell
-        # Use a direct approach: calculate how many pixels are needed for the desired km
-        # 1 degree is approximately 111 km at the equator
-        km_per_degree = 111.0
-        degrees_per_km = 1.0 / km_per_degree
+        # Convert center point to lat/lon for accurate distance calculations
+        center_lon, center_lat = xy(self.transform, row, col, offset='center')
         
-        # Calculate the total patch width in degrees
-        patch_width_degrees = patch_size * km_per_cell * degrees_per_km
+        # Calculate meters per pixel in x and y directions at this location
+        meters_per_pixel_x = (self._haversine(center_lon, center_lat, 
+                                           center_lon + self.pixel_size_x, center_lat))
+        meters_per_pixel_y = (self._haversine(center_lon, center_lat, 
+                                           center_lon, center_lat + self.pixel_size_y))
         
-        # Calculate how many pixels that corresponds to
-        pixels_per_degree_x = 1.0 / self.pixel_size_x
-        pixels_per_degree_y = 1.0 / self.pixel_size_y
+        # Calculate total patch size in meters (convert km to m)
+        patch_size_meters = km_per_cell * 1000
         
-        patch_width_pixels_x = int(patch_width_degrees * pixels_per_degree_x)
-        patch_width_pixels_y = int(patch_width_degrees * pixels_per_degree_y)
+        # Calculate how many pixels we need for the desired physical size
+        # Add 1 to ensure we have at least the requested size
+        patch_width_pixels_x = int((patch_size * patch_size_meters) / meters_per_pixel_x) + 1
+        patch_width_pixels_y = int((patch_size * patch_size_meters) / meters_per_pixel_y) + 1
         
-        # Ensure the patch has at least patch_size pixels
-        patch_width_pixels_x = max(patch_width_pixels_x, patch_size * 2)
-        patch_width_pixels_y = max(patch_width_pixels_y, patch_size * 2)
+        # Ensure the patch has at least patch_size pixels in each dimension
+        patch_width_pixels_x = max(patch_width_pixels_x, patch_size)
+        patch_width_pixels_y = max(patch_width_pixels_y, patch_size)
+        
+        # Ensure we have an odd number of pixels to maintain symmetry
+        if patch_width_pixels_x % 2 == 0:
+            patch_width_pixels_x += 1
+        if patch_width_pixels_y % 2 == 0:
+            patch_width_pixels_y += 1
         
         print(f"Patch width in pixels: {patch_width_pixels_x} x {patch_width_pixels_y}")
         

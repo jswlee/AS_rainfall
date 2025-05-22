@@ -5,9 +5,15 @@ This component creates machine learning datasets by combining processed rainfall
 
 ## Functionality
 - Processes DEM data to create grid points and extract local/regional patches
+  - Uses accurate distance calculations based on latitude/longitude coordinates
+  - Creates appropriately sized patches for Tutuila's geography
 - Processes climate variables from NetCDF files
 - Interpolates rainfall data to grid points
 - Combines all data sources into a unified dataset for machine learning
+
+## Patch Sizes
+- **Local Patches**: 3x3 grid with 2km per cell (6km total)
+- **Regional Patches**: 3x3 grid with 8km per cell (24km total)
 
 ## Directory Structure
 ```
@@ -15,7 +21,7 @@ This component creates machine learning datasets by combining processed rainfall
 ├── scripts/
 │   ├── rainfall_prediction_pipeline.py       # Main pipeline script
 │   ├── processors/                           # Data processing modules
-│   │   ├── dem_processor/                    # DEM processing
+│   │   ├── dem_processor/                    # DEM processing with accurate distance calculations
 │   │   ├── climate_processor/                # Climate data processing
 │   │   └── rainfall_processor/               # Rainfall data processing
 │   └── utils/                                # Utility functions

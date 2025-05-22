@@ -432,7 +432,6 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
     # Save results summary
     summary_path = os.path.join(output_dir, 'ensemble_summary.txt')
     with open(summary_path, 'w') as f:
-        f.write("ALL RAINFALL VALUES ARE IN INCHES.\n\n")
         f.write(f"K-Fold CV Ensemble Model with {n_folds} Folds\n")
         f.write(f"Each fold contains {n_models_per_fold} models\n")
         f.write(f"Total models: {n_folds * n_models_per_fold}\n\n")

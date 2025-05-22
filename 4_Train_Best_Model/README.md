@@ -6,9 +6,10 @@ This component trains the LAND-inspired deep learning model using the optimal hy
 ## Functionality
 - Loads the best hyperparameters from the tuning phase
 - Builds and trains the deep learning model
-- Implements non-negative output activation to ensure physically valid rainfall predictions
+- Implements non-negative output activation (ReLU or Softplus) to ensure physically valid rainfall predictions
 - Evaluates model performance on test data
 - Saves the trained model and performance metrics
+- Reports all rainfall values in inches (the original measurement unit)
 
 ## Directory Structure
 ```
@@ -16,6 +17,7 @@ This component trains the LAND-inspired deep learning model using the optimal hy
 ├── scripts/
 │   ├── train_best_model.py   # Main script for model training
 │   ├── data_utils.py         # Utilities for data loading and preprocessing
+│   ├── model_utils.py        # Shared model building functionality
 │   └── training.py           # Core training functionality
 ├── output/
 │   ├── models/               # Saved model weights
@@ -26,9 +28,10 @@ This component trains the LAND-inspired deep learning model using the optimal hy
 
 ## Key Features
 - **Non-negative Output**: Uses ReLU or Softplus activation to ensure physically valid rainfall predictions
-- **Comprehensive Evaluation**: Calculates multiple metrics (RMSE, MAE, R²)
+- **Comprehensive Evaluation**: Calculates multiple metrics (RMSE, MAE, R²) in proper rainfall units (inches)
 - **Visualization**: Generates plots of actual vs. predicted rainfall
 - **Reproducibility**: Sets random seeds for consistent results
+- **Shared Model Architecture**: Uses model_utils.py module shared with the ensemble training step
 
 ## Usage
 To train the best model, run:
