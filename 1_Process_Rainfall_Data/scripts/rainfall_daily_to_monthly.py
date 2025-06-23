@@ -78,7 +78,7 @@ def process_rainfall_directory(input_dir, output_dir):
 def main():
     parser = argparse.ArgumentParser(description='Process rainfall data from CSV files')
     parser.add_argument('--input_dir', type=str, 
-                        default=os.path.join(PROJECT_ROOT, 'raw_data/AS_RF_USGS_WRCC'),
+                        default=os.path.join(PROJECT_ROOT, 'raw_data/rainfall'),
                         help='Directory containing rainfall CSV files')
     parser.add_argument('--output_dir', type=str, 
                         default=os.path.join(SCRIPT_DIR, '../output/monthly_rainfall'),

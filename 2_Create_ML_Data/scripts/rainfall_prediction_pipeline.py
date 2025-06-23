@@ -21,6 +21,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import h5py
 from datetime import datetime
+import logging
+
+# Set up logging for progress tracking
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Import the H5 to CSV conversion module
 from convert_h5_to_csv import extract_data_from_h5
@@ -38,25 +46,24 @@ from processors.dem_processor.processor import DEMProcessor
 from processors.climate_processor.processor import ClimateDataProcessor
 from processors.rainfall_processor.processor import RainfallProcessor
 from utils.data_generator import DataGenerator
+from utils.config_utils import load_config, parse_args, merge_config_with_args
 
-# Configuration with absolute paths
-CONFIG = {
-    'dem_path': os.path.join(PROJECT_ROOT, 'raw_data/DEM/DEM_Tut1.tif'),
-    'climate_data_path': os.path.join(PIPELINE_DIR, 'output/processed_climate_data.nc'),
-    'raw_climate_dir': os.path.join(PROJECT_ROOT, 'raw_data/climate_variables'),
-    'rainfall_dir': os.path.join(PROJECT_ROOT, '1_Process_Rainfall_Data/output/monthly_rainfall'),
-    'station_locations_path': os.path.join(PROJECT_ROOT, 'raw_data/AS_raingages/as_raingage_list2.csv'),
-    'output_dir': os.path.join(PIPELINE_DIR, 'output'),
-    'grid_size': 5,  # 5x5 grid = 25 points
-    'patch_sizes': {
-        'local': 3,    # 3x3 grid for local patch (12km)
-        'regional': 3  # 3x3 grid for regional patch (60km)
-    },
-    'km_per_cell': {
-        'local': 2,    # 2km per cell for local patch (6km total)
-        'regional': 8  # 8km per cell for regional patch (24km total)
-    }
-}
+# Load configuration from YAML file and/or command-line arguments
+def get_config():
+    # Parse command-line arguments
+    args = parse_args()
+    
+    # Load config from file (default or specified by --config)
+    config = load_config(args.config if hasattr(args, 'config') else None)
+    
+    # Override config with command-line arguments
+    config = merge_config_with_args(config, args)
+    
+    return config
+
+# Get configuration
+CONFIG = get_config()
+
 # Create output directories
 os.makedirs(CONFIG['output_dir'], exist_ok=True)
 # Create figures directory
@@ -146,13 +153,13 @@ def process_dem():
     # Visualize all patches in a grid
     plt.figure(figsize=(14, 6))
     
-    # Arrange local patches in a 5x5 grid
+    # Arrange local patches in a grid
     local_patches_array = np.array(local_patches)
-    n_patches, patch_height, patch_width = local_patches_array.shape
-    grid_rows, grid_cols = 5, 5
+    n_patches, local_patch_height, local_patch_width = local_patches_array.shape
+    grid_rows, grid_cols = CONFIG['grid_size'], CONFIG['grid_size']  # Use the configured grid size
     
     # Create empty grid for local patches
-    local_grid = np.zeros((grid_rows * patch_height, grid_cols * patch_width))
+    local_grid = np.zeros((grid_rows * local_patch_height, grid_cols * local_patch_width))
     
     # Place local patches in grid
     for i in range(min(n_patches, grid_rows * grid_cols)):
@@ -160,30 +167,31 @@ def process_dem():
         col = i % grid_cols
         
         # Calculate position in the grid
-        row_start = row * patch_height
-        row_end = (row + 1) * patch_height
-        col_start = col * patch_width
-        col_end = (col + 1) * patch_width
+        row_start = row * local_patch_height
+        row_end = (row + 1) * local_patch_height
+        col_start = col * local_patch_width
+        col_end = (col + 1) * local_patch_width
         
         # Place the patch
         local_grid[row_start:row_end, col_start:col_end] = local_patches_array[i]
     
-    # Do the same for regional patches
+    # Do the same for regional patches - but with their own dimensions
     regional_patches_array = np.array(regional_patches)
+    _, regional_patch_height, regional_patch_width = regional_patches_array.shape
     
-    # Create empty grid for regional patches
-    regional_grid = np.zeros((grid_rows * patch_height, grid_cols * patch_width))
+    # Create empty grid for regional patches with the regional patch dimensions
+    regional_grid = np.zeros((grid_rows * regional_patch_height, grid_cols * regional_patch_width))
     
     # Place regional patches in grid
     for i in range(min(n_patches, grid_rows * grid_cols)):
         row = i // grid_cols
         col = i % grid_cols
         
-        # Calculate position in the grid
-        row_start = row * patch_height
-        row_end = (row + 1) * patch_height
-        col_start = col * patch_width
-        col_end = (col + 1) * patch_width
+        # Calculate position in the grid using regional patch dimensions
+        row_start = row * regional_patch_height
+        row_end = (row + 1) * regional_patch_height
+        col_start = col * regional_patch_width
+        col_end = (col + 1) * regional_patch_width
         
         # Place the patch
         regional_grid[row_start:row_end, col_start:col_end] = regional_patches_array[i]
@@ -191,13 +199,15 @@ def process_dem():
     # Plot local patches grid
     plt.subplot(121)
     plt.imshow(local_grid, cmap='terrain', origin='lower')
-    plt.title('Local DEM Patches (5x5 grid, 6km each)')
+    local_patch_km = CONFIG['patch_sizes']['local'] * CONFIG['km_per_cell']['local']
+    plt.title(f'Local DEM Patches ({CONFIG["grid_size"]}x{CONFIG["grid_size"]} grid, {local_patch_km}km each)')
     plt.colorbar()
     
     # Plot regional patches grid
     plt.subplot(122)
     plt.imshow(regional_grid, cmap='terrain', origin='lower')
-    plt.title('Regional DEM Patches (5x5 grid, 24km each)')
+    regional_patch_km = CONFIG['patch_sizes']['regional'] * CONFIG['km_per_cell']['regional']
+    plt.title(f'Regional DEM Patches ({CONFIG["grid_size"]}x{CONFIG["grid_size"]} grid, {regional_patch_km}km each)')
     plt.colorbar()
     
     plt.tight_layout()
@@ -365,7 +375,8 @@ def generate_training_data(dem_data, climate_data_path, rainfall_data, available
         climate_data_path=climate_data_path,
         rainfall_data=rainfall_data,
         output_dir=CONFIG['output_dir'],
-        figures_dir=figures_dir
+        figures_dir=figures_dir,
+        grid_size=CONFIG['grid_size']  # Pass the grid size from configuration
     )
     
     # Find intersection of available dates between climate and rainfall data
@@ -412,16 +423,61 @@ def generate_training_data(dem_data, climate_data_path, rainfall_data, available
 
 def main():
     """Main function to run the entire pipeline."""
-    print("Starting Rainfall Prediction Pipeline...")
-    # Setup environment
+    print("\n" + "="*80)
+    print("RAINFALL PREDICTION PIPELINE")
+    print("="*80)
+    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Output directory: {CONFIG['output_dir']}")
+    print("Configuration:")
+    for key, value in CONFIG.items():
+        if key not in ['patch_sizes', 'km_per_cell']:
+            print(f"  {key}: {value}")
+    print(f"  patch_sizes: local={CONFIG['patch_sizes']['local']}, regional={CONFIG['patch_sizes']['regional']}")
+    print(f"  km_per_cell: local={CONFIG['km_per_cell']['local']}, regional={CONFIG['km_per_cell']['regional']}")
+    print("="*80 + "\n")
+    
+    # Define total steps for progress tracking
+    total_steps = 6
+    current_step = 0
+    
+    def report_progress(step_name):
+        nonlocal current_step
+        current_step += 1
+        # Create progress message
+        progress_msg = f"PROGRESS: {current_step}/{total_steps} - {step_name}"
+        
+        # Print to stdout with flush
+        print(progress_msg, flush=True)
+        sys.stdout.flush()
+        
+        # Also log the message
+        logging.info(progress_msg)
+        
+        # Write to a special progress file that can be monitored
+        progress_file = os.path.join(CONFIG['output_dir'], 'progress.log')
+        os.makedirs(os.path.dirname(progress_file), exist_ok=True)
+        with open(progress_file, 'a') as f:
+            f.write(f"{progress_msg}\n")
+    
+    # Step 1: Setup environment
+    report_progress("Setting up environment")
     if not setup_environment():
         return
-    # Process DEM
+        
+    # Step 2: Process DEM
+    report_progress("Processing DEM data")
     dem_data = process_dem()
-    # Process climate data
+    
+    # Step 3: Process climate data
+    report_progress("Processing climate data")
     climate_data_path = process_climate_data()
-    # Process rainfall data
+    
+    # Step 4: Process rainfall data
+    report_progress("Processing rainfall data")
     rainfall_data, available_dates = process_rainfall_data(dem_data['grid_points'])
+    
+    # Step 5: Generate training data
+    report_progress("Generating training data")
     # Generate training data only if climate data exists
     if CLIMATE_DATA_EXISTS and climate_data_path is not None:
         training_data_path = generate_training_data(
@@ -435,8 +491,8 @@ def main():
             print(f"Features: 16 climate variables, month encoding, local and regional DEM patches")
             print(f"Labels: Interpolated rainfall")
             
-            # Automatically convert H5 to CSV
-            print("\nConverting H5 data to CSV format...")
+            # Step 6: Convert H5 to CSV
+            report_progress("Converting H5 data to CSV format")
             output_dir = os.path.join(CONFIG['output_dir'], 'csv_data')
             os.makedirs(output_dir, exist_ok=True)
             

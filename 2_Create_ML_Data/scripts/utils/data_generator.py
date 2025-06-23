@@ -33,7 +33,7 @@ class DataGenerator:
     
     def __init__(self, grid_points=None, local_patches=None, regional_patches=None,
                  climate_data_path=None, rainfall_data=None, output_dir='output',
-                 figures_dir=None):
+                 figures_dir=None, grid_size=5):
         """
         Initialize the data generator.
         
@@ -60,6 +60,7 @@ class DataGenerator:
         self.climate_data_path = climate_data_path
         self.rainfall_data = rainfall_data
         self.output_dir = Path(output_dir)
+        self.grid_size = grid_size
         
         # Set up figures directory
         if figures_dir is None:
@@ -386,18 +387,20 @@ class DataGenerator:
         # Create figure with subplots (3x2 grid for 5 visualizations)
         fig, axes = plt.subplots(3, 2, figsize=(16, 18))
         
-        # 1. Plot all local DEM patches in a 5x5 grid
+        # 1. Plot all local DEM patches in a grid
         local_patches = np.array(data['local_patches'])
-        local_grid = self._arrange_patches_in_grid(local_patches, 5, 5)
+        local_grid = self._arrange_patches_in_grid(local_patches, self.grid_size, self.grid_size)
         im1 = axes[0, 0].imshow(local_grid, cmap='terrain', origin='lower')
-        axes[0, 0].set_title('Local DEM Patches (5x5 grid, 6km each)')
+        local_patch_size = data['local_patches'][0].shape[0]
+        axes[0, 0].set_title(f'Local DEM Patches ({self.grid_size}x{self.grid_size} grid, {local_patch_size}x{local_patch_size} each)')
         plt.colorbar(im1, ax=axes[0, 0])
         
-        # 2. Plot all regional DEM patches in a 5x5 grid
+        # 2. Plot all regional DEM patches in a grid
         regional_patches = np.array(data['regional_patches'])
-        regional_grid = self._arrange_patches_in_grid(regional_patches, 5, 5)
+        regional_grid = self._arrange_patches_in_grid(regional_patches, self.grid_size, self.grid_size)
         im2 = axes[0, 1].imshow(regional_grid, cmap='terrain', origin='lower')
-        axes[0, 1].set_title('Regional DEM Patches (5x5 grid, 24km each)')
+        regional_patch_size = data['regional_patches'][0].shape[0]
+        axes[0, 1].set_title(f'Regional DEM Patches ({self.grid_size}x{self.grid_size} grid, {regional_patch_size}x{regional_patch_size} each)')
         plt.colorbar(im2, ax=axes[0, 1])
         
         # 3. Plot month encoding
@@ -412,7 +415,7 @@ class DataGenerator:
         axes[1, 0].set_title(f'Month: {month_names[month_idx]}')
         
         # 4. Plot rainfall
-        im3 = axes[1, 1].imshow(data['rainfall'].reshape(5, 5), cmap='Blues')
+        im3 = axes[1, 1].imshow(data['rainfall'].reshape(self.grid_size, self.grid_size), cmap='Blues')
         axes[1, 1].set_title('Interpolated Rainfall')
         plt.colorbar(im3, ax=axes[1, 1])
         

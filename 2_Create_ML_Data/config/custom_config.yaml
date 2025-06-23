@@ -1,0 +1,15 @@
+model:
+  grid_size: 7
+  km_per_cell:
+    local: 1.5
+    regional: 8
+  patch_sizes:
+    local: 5
+    regional: 3
+paths:
+  climate_data: 2_Create_ML_Data/output/processed_climate_data.nc
+  dem: raw_data/DEM/DEM_Tut1.tif
+  output: 2_Create_ML_Data/output/custom_run
+  rainfall: 1_Process_Rainfall_Data/output/monthly_rainfall
+  raw_climate: raw_data/climate_variables
+  stations: raw_data/AS_raingages/as_raingage_list2.csv

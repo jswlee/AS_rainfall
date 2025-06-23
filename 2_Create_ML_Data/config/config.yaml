@@ -1,0 +1,16 @@
+paths:
+  dem: "raw_data/DEM/DEM_Tut1.tif"
+  climate_data: "2_Create_ML_Data/output/processed_climate_data.nc"
+  raw_climate: "raw_data/climate_variables"
+  rainfall: "1_Process_Rainfall_Data/output/monthly_rainfall"
+  stations: "raw_data/AS_raingages/as_raingage_list2.csv"
+  output: "2_Create_ML_Data/output"
+
+model:
+  grid_size: 5  # 5x5 grid = 25 points per time step
+  patch_sizes:
+    local: 3    # 3x3 grid 
+    regional: 3  # 3x3 grid 
+  km_per_cell:
+    local: 2    # 2km per cell (6km total; or 3 x 2km)
+    regional: 8  # 8km per cell (24km total; or 3 x 8km)
