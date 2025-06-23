@@ -62,15 +62,12 @@ class DataGenerator:
         self.output_dir = Path(output_dir)
         self.grid_size = grid_size
         
-        # Set up figures directory
+        # Set up figures directory inside the output directory
         if figures_dir is None:
             self.figures_dir = self.output_dir / 'figures'
         else:
             self.figures_dir = Path(figures_dir)
-        
-        # Create output and figures directories
-        self.output_dir.mkdir(exist_ok=True)
-        self.figures_dir.mkdir(exist_ok=True, parents=True)
+        self.figures_dir.mkdir(parents=True, exist_ok=True)
         
         # Load climate data if path is provided
         if climate_data_path:
@@ -384,8 +381,8 @@ class DataGenerator:
         output_path : str, optional
             Path to save the visualization
         """
-        # Create figure with subplots (3x2 grid for 5 visualizations)
-        fig, axes = plt.subplots(3, 2, figsize=(16, 18))
+        # Create figure with subplots (2x2 grid for 4 visualizations)
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
         
         # 1. Plot all local DEM patches in a grid
         local_patches = np.array(data['local_patches'])
@@ -403,23 +400,13 @@ class DataGenerator:
         axes[0, 1].set_title(f'Regional DEM Patches ({self.grid_size}x{self.grid_size} grid, {regional_patch_size}x{regional_patch_size} each)')
         plt.colorbar(im2, ax=axes[0, 1])
         
-        # 3. Plot month encoding
-        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        month_one_hot = data['month_one_hot']
-        month_idx = np.argmax(month_one_hot)
+        # 3. Plot rainfall using grid visualization
+        rainfall_grid = data['rainfall'].reshape(self.grid_size, self.grid_size)
+        im3 = axes[1, 0].imshow(rainfall_grid, cmap='Blues', interpolation='nearest')
+        axes[1, 0].set_title('Interpolated Rainfall')
+        plt.colorbar(im3, ax=axes[1, 0])
         
-        axes[1, 0].bar(range(len(month_one_hot)), month_one_hot)
-        axes[1, 0].set_xticks(range(len(month_one_hot)))
-        axes[1, 0].set_xticklabels(month_names, rotation=45)
-        axes[1, 0].set_title(f'Month: {month_names[month_idx]}')
-        
-        # 4. Plot rainfall
-        im3 = axes[1, 1].imshow(data['rainfall'].reshape(self.grid_size, self.grid_size), cmap='Blues')
-        axes[1, 1].set_title('Interpolated Rainfall')
-        plt.colorbar(im3, ax=axes[1, 1])
-        
-        # 5. Plot a sample climate variable (air_2m is usually available)
+        # 4. Plot a sample climate variable (air_2m is usually available)
         climate_vars = data['climate_vars']
         if 'air_2m' in climate_vars:
             # Use air_2m as it's a commonly available variable
@@ -434,16 +421,13 @@ class DataGenerator:
             grid_size = int(np.sqrt(len(var_data)))
             grid_data = var_data.reshape(grid_size, grid_size)
             
-            im4 = axes[2, 0].imshow(grid_data, cmap='viridis')
-            axes[2, 0].set_title(f'Climate Variable: {var_name}')
-            plt.colorbar(im4, ax=axes[2, 0])
+            im4 = axes[1, 1].imshow(grid_data, cmap='viridis')
+            axes[1, 1].set_title(f'Climate Variable: {var_name}')
+            plt.colorbar(im4, ax=axes[1, 1])
         else:
-            axes[2, 0].text(0.5, 0.5, 'No climate data available', 
+            axes[1, 1].text(0.5, 0.5, 'No climate data available', 
                            horizontalalignment='center', verticalalignment='center')
-            axes[2, 0].set_title('Climate Variable')
-            
-        # Hide the last unused subplot
-        axes[2, 1].axis('off')
+            axes[1, 1].set_title('Climate Variable')
         
         plt.tight_layout()
         

@@ -18,7 +18,6 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import h5py
 from datetime import datetime
 import logging
@@ -32,6 +31,9 @@ logging.basicConfig(
 
 # Import the H5 to CSV conversion module
 from convert_h5_to_csv import extract_data_from_h5
+
+# Import visualization utilities
+from utils.visualization import visualize_dem_patches, visualize_interpolated_rainfall
 
 # Define script and project directories
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -67,7 +69,7 @@ CONFIG = get_config()
 # Create output directories
 os.makedirs(CONFIG['output_dir'], exist_ok=True)
 # Create figures directory
-figures_dir = os.path.join(os.path.dirname(CONFIG['output_dir']), 'figures')
+figures_dir = os.path.join(CONFIG['output_dir'], 'figures')
 os.makedirs(figures_dir, exist_ok=True)
 
 # Check if climate data exists (either processed file or raw files)
@@ -151,68 +153,17 @@ def process_dem():
     print(f"Created {len(local_patches)} local patches and {len(regional_patches)} regional patches")
     
     # Visualize all patches in a grid
-    plt.figure(figsize=(14, 6))
-    
-    # Arrange local patches in a grid
-    local_patches_array = np.array(local_patches)
-    n_patches, local_patch_height, local_patch_width = local_patches_array.shape
-    grid_rows, grid_cols = CONFIG['grid_size'], CONFIG['grid_size']  # Use the configured grid size
-    
-    # Create empty grid for local patches
-    local_grid = np.zeros((grid_rows * local_patch_height, grid_cols * local_patch_width))
-    
-    # Place local patches in grid
-    for i in range(min(n_patches, grid_rows * grid_cols)):
-        row = i // grid_cols
-        col = i % grid_cols
-        
-        # Calculate position in the grid
-        row_start = row * local_patch_height
-        row_end = (row + 1) * local_patch_height
-        col_start = col * local_patch_width
-        col_end = (col + 1) * local_patch_width
-        
-        # Place the patch
-        local_grid[row_start:row_end, col_start:col_end] = local_patches_array[i]
-    
-    # Do the same for regional patches - but with their own dimensions
-    regional_patches_array = np.array(regional_patches)
-    _, regional_patch_height, regional_patch_width = regional_patches_array.shape
-    
-    # Create empty grid for regional patches with the regional patch dimensions
-    regional_grid = np.zeros((grid_rows * regional_patch_height, grid_cols * regional_patch_width))
-    
-    # Place regional patches in grid
-    for i in range(min(n_patches, grid_rows * grid_cols)):
-        row = i // grid_cols
-        col = i % grid_cols
-        
-        # Calculate position in the grid using regional patch dimensions
-        row_start = row * regional_patch_height
-        row_end = (row + 1) * regional_patch_height
-        col_start = col * regional_patch_width
-        col_end = (col + 1) * regional_patch_width
-        
-        # Place the patch
-        regional_grid[row_start:row_end, col_start:col_end] = regional_patches_array[i]
-    
-    # Plot local patches grid
-    plt.subplot(121)
-    plt.imshow(local_grid, cmap='terrain', origin='lower')
     local_patch_km = CONFIG['patch_sizes']['local'] * CONFIG['km_per_cell']['local']
-    plt.title(f'Local DEM Patches ({CONFIG["grid_size"]}x{CONFIG["grid_size"]} grid, {local_patch_km}km each)')
-    plt.colorbar()
-    
-    # Plot regional patches grid
-    plt.subplot(122)
-    plt.imshow(regional_grid, cmap='terrain', origin='lower')
     regional_patch_km = CONFIG['patch_sizes']['regional'] * CONFIG['km_per_cell']['regional']
-    plt.title(f'Regional DEM Patches ({CONFIG["grid_size"]}x{CONFIG["grid_size"]} grid, {regional_patch_km}km each)')
-    plt.colorbar()
     
-    plt.tight_layout()
-    dem_patches_path = os.path.join(figures_dir, 'dem_patches.png')
-    plt.savefig(dem_patches_path)
+    dem_patches_path = visualize_dem_patches(
+        local_patches, 
+        regional_patches, 
+        CONFIG['grid_size'],
+        local_patch_km,
+        regional_patch_km,
+        CONFIG['output_dir']
+    )
     print(f"Saved DEM patches visualization to {dem_patches_path}")
     
     return {
@@ -339,22 +290,13 @@ def process_rainfall_data(grid_points):
     
     # Visualize sample interpolated rainfall
     sample_date = available_dates[500]
-    sample_rainfall = interpolated_rainfall[sample_date]
     
-    plt.figure(figsize=(10, 8))
-    plt.scatter(
-        [p[0] for p in grid_points],
-        [p[1] for p in grid_points],
-        c=sample_rainfall,
-        cmap='Blues',
-        s=100
+    rainfall_plot_path = visualize_interpolated_rainfall(
+        grid_points,
+        interpolated_rainfall,
+        sample_date,
+        CONFIG['output_dir']
     )
-    plt.colorbar(label='Rainfall (mm)')
-    plt.title(f'Interpolated Rainfall for {sample_date}')
-    plt.xlabel('Longitude')
-    plt.ylabel('Latitude')
-    rainfall_plot_path = os.path.join(figures_dir, f'interpolated_rainfall_{sample_date}.png')
-    plt.savefig(rainfall_plot_path)
     print(f"Saved rainfall interpolation visualization to {rainfall_plot_path}")
     
     return interpolated_rainfall, available_dates
