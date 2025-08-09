@@ -1,0 +1,7 @@
+Fold 8 Ensemble Summary
+Number of Models: 5
+
+Test Metrics:
+  R²: 0.7026
+  RMSE: 116.2801 mm
+  MAE: 80.3094 mm

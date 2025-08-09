@@ -7,69 +7,47 @@ from tensorflow.keras import layers, regularizers
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PIPELINE_DIR = os.path.dirname(SCRIPT_DIR)
 PROJECT_ROOT = os.path.abspath(os.path.join(PIPELINE_DIR, '..'))
-HYPERPARAM_DIR = os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output')
+HPT_BASE = os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning')
+HYPERPARAM_DIR = os.path.join(HPT_BASE, 'output')
 
-def load_best_hyperparameters():
+def load_best_hyperparameters(base_output_dir: str):
     """
-    Load the best hyperparameters from the hyperparameter tuning output directory.
-    
+    Load the best hyperparameters from a single well-defined path within the
+    provided output directory:
+      <base_output_dir>/land_model_extended_tuner/land_model_cv_tuning/current_best_hyperparameters.py
+
+    Parameters
+    ----------
+    base_output_dir : str
+        Directory that contains 'land_model_extended_tuner/'. Defaults to
+        '3_Hyperparameter_Tuning/output_test'.
+
     Returns
     -------
     dict
         Dictionary containing the best hyperparameters
     """
-    # Define possible paths for hyperparameter files
-    possible_paths = [
-        # First check for CV tuning results
-        os.path.join(HYPERPARAM_DIR, 'land_model_cv_tuning', 'current_best_hyperparameters.py'),
-        # Then check for extended tuning results
-        os.path.join(HYPERPARAM_DIR, 'land_model_extended_tuner', 'current_best_hyperparameters.py'),
-        # Finally check for best_hyperparameters.py
-        os.path.join(HYPERPARAM_DIR, 'land_model_extended_tuner', 'best_hyperparameters.py')
-    ]
-    
-    # Try to load hyperparameters from one of the paths
-    for path in possible_paths:
-        if os.path.exists(path):
-            print(f"Loading best hyperparameters from {path}")
-            # Load hyperparameters from Python file
-            try:
-                # Get the directory containing the hyperparameters file
-                hp_dir = os.path.dirname(path)
-                # Get the filename without extension
-                hp_file = os.path.splitext(os.path.basename(path))[0]
-                # Add the directory to Python path
-                sys.path.append(hp_dir)
-                # Import the hyperparameters module
-                hp_module = __import__(hp_file)
-                # Get the hyperparameters
-                hyperparams = hp_module.best_hyperparameters
-                # Remove the directory from Python path
-                sys.path.remove(hp_dir)
-                return hyperparams
-            except Exception as e:
-                print(f"Error loading hyperparameters from {path}: {e}")
-    
-    # If no hyperparameter file was found or loaded successfully, use default values
-    print("Warning: Could not load hyperparameters from any file. Using default values.")
-    return {
-        'na': 320,
-        'nb': 768,
-        'dropout_rate': 0.1,
-        'l2_reg': 1e-06,
-        'learning_rate': 0.006138519107514284,
-        'weight_decay': 4.665590142644678e-06,
-        'local_dem_units': 224,
-        'regional_dem_units': 32,
-        'month_units': 64,
-        'climate_units': 256,
-        'use_residual': True,
-        'activation': 'selu',
-        'output_activation': 'softplus'  # Ensures non-negative rainfall predictions
-    }
+    path = os.path.join(
+        base_output_dir,
+        'land_model_extended_tuner',
+        'land_model_cv_tuning',
+        'current_best_hyperparameters.py',
+    )
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Hyperparameters file not found: {path}")
+    print(f"Loading best hyperparameters from {path}")
+    # Minimal, explicit load from a predefined path
+    namespace = {}
+    with open(path, 'r') as f:
+        code = f.read()
+    exec(code, namespace)
+    if 'best_hyperparameters' not in namespace:
+        raise ValueError(f"'best_hyperparameters' not defined in {path}")
+    return namespace['best_hyperparameters']
 
 
-def build_model(data_metadata, hyperparams=None):
+def build_model(data_metadata, hp_dir: str = os.path.join(HPT_BASE, 'output_test'), hyperparams=None):
     """
     Build the LAND model with the given hyperparameters.
     
@@ -77,6 +55,8 @@ def build_model(data_metadata, hyperparams=None):
     ----------
     data_metadata : dict
         Dictionary containing metadata about the input data
+    hp_dir : str, optional
+        Directory containing the hyperparameters file. Defaults to '3_Hyperparameter_Tuning/output_test'.
     hyperparams : dict, optional
         Dictionary containing hyperparameters. If None, the best hyperparameters will be loaded.
         
@@ -85,13 +65,9 @@ def build_model(data_metadata, hyperparams=None):
     tf.keras.Model
         Compiled LAND model
     """
-    # Load the best hyperparameters if none are provided
+    hyperparams = load_best_hyperparameters(hp_dir)
     if hyperparams is None:
-        hyperparams = load_best_hyperparameters()
-    else:
-        # Ensure all required hyperparameters are present by merging with defaults
-        default_params = load_best_hyperparameters()
-        hyperparams = {**default_params, **hyperparams}
+        raise ValueError("Hyperparameters not found")
     
     # Print the hyperparameters being used
     print("\nUsing hyperparameters:")

@@ -156,7 +156,7 @@ def train_model(model, data, epochs=100, batch_size=32, output_dir=None,
     return history.history
 
 
-def evaluate_model(model, data, output_dir=None):
+def evaluate_model(model, data, output_dir=None, rainfall_std: float | None = None, label_unit: str | None = None):
     """
     Evaluate the model on the test set with detailed metrics.
     
@@ -218,11 +218,21 @@ def evaluate_model(model, data, output_dir=None):
         # Assume it's some other format we can't handle
         raise ValueError("Unsupported data format for evaluation")
     
-    # Calculate additional metrics
+    # Calculate additional metrics in model/label units (training units)
     mse = mean_squared_error(y_true, y_pred)
     rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
+
+    # De-standardize to millimeters using rainfall_std from preprocessing
+    if rainfall_std is None:
+        print("Warning: rainfall_std not provided to evaluate_model; assuming 1.0. Metrics in mm may be under-scaled.")
+        rainfall_std = 1.0
+    y_true_mm = y_true * rainfall_std
+    y_pred_mm = y_pred * rainfall_std
+    mse_mm2 = mean_squared_error(y_true_mm, y_pred_mm)
+    rmse_mm = np.sqrt(mse_mm2)
+    mae_mm = mean_absolute_error(y_true_mm, y_pred_mm)
     
     # Combine metrics
     metrics = {
@@ -230,14 +240,17 @@ def evaluate_model(model, data, output_dir=None):
         'mse': mse,
         'rmse': rmse,
         'mae': mae,
-        'r2': r2
+        'r2': r2,
+        'mse_mm2': mse_mm2,   # mm^2
+        'rmse_mm': rmse_mm,   # mm
+        'mae_mm': mae_mm,     # mm
     }
     
     # Print detailed metrics
-    print("\nDetailed Test Metrics:")
-    print(f"MSE:  {mse*100*100:.4f} in²")  # Convert to inches squared
-    print(f"RMSE: {rmse*100:.4f} in")      # Convert to inches
-    print(f"MAE:  {mae*100:.4f} in")       # Convert to inches
+    print("\nDetailed Test Metrics (in millimeters):")
+    print(f"MSE:  {mse_mm2:.4f} mm²")
+    print(f"RMSE: {rmse_mm:.4f} mm")
+    print(f"MAE:  {mae_mm:.4f} mm")
     print(f"R²:   {r2:.4f}")
     
     # Save evaluation metrics
@@ -246,39 +259,31 @@ def evaluate_model(model, data, output_dir=None):
         metrics_path = os.path.join(output_dir, 'evaluation_metrics.npy')
         np.save(metrics_path, metrics)
         
-        # Also save as CSV for easier reading with values converted to inches
-        metrics_inches = metrics.copy()
-        for key in ['mse', 'rmse', 'mae', 'loss', 'mean_squared_error', 'mean_absolute_error']:
-            if key in metrics_inches:
-                if key in ['mse', 'mean_squared_error']:
-                    metrics_inches[key] = metrics_inches[key] * 100 * 100  # Convert to inches squared
-                else:
-                    metrics_inches[key] = metrics_inches[key] * 100  # Convert to inches
-        
-        metrics_df = pd.DataFrame([metrics_inches])
+        # Also save as CSV (mm)
+        metrics_df = pd.DataFrame([metrics])
         csv_path = os.path.join(output_dir, 'evaluation_metrics.csv')
         metrics_df.to_csv(csv_path, index=False)
         print(f"Metrics saved to {csv_path}")
         
-        # Save predictions vs actual values (convert to inches)
+        # Save predictions vs actual values (millimeters)
         results_df = pd.DataFrame({
-            'actual_inches': y_true.flatten() * 100,  # Convert to inches
-            'predicted_inches': y_pred.flatten() * 100  # Convert to inches
+            'actual_mm': y_true_mm.flatten(),
+            'predicted_mm': y_pred_mm.flatten()
         })
         results_path = os.path.join(output_dir, 'test_predictions.csv')
         # Write header with units
         with open(results_path, 'w') as f:
-            f.write('# Units: inches\n')
+            f.write('# Units: millimeters\n')
             results_df.to_csv(f, index=False)
         print(f"Test predictions saved to {results_path}")
         
-        # Scatter plot: Actual vs Predicted
+        # Scatter plot: Actual vs Predicted (mm)
         plt.figure(figsize=(6,6))
-        plt.scatter(y_true*100, y_pred*100, alpha=0.5, label='Predictions')
-        lims = [min(y_true.min()*100, y_pred.min()*100), max(y_true.max()*100, y_pred.max()*100)]
+        plt.scatter(y_true_mm, y_pred_mm, alpha=0.5, label='Predictions')
+        lims = [min(y_true_mm.min(), y_pred_mm.min()), max(y_true_mm.max(), y_pred_mm.max())]
         plt.plot(lims, lims, 'r--', label='1:1 Line')
-        plt.xlabel('Actual Rainfall (inches)')
-        plt.ylabel('Predicted Rainfall (inches)')
+        plt.xlabel('Actual Rainfall (mm)')
+        plt.ylabel('Predicted Rainfall (mm)')
         plt.title('Actual vs Predicted Rainfall')
         plt.legend()
         plt.tight_layout()
@@ -290,7 +295,7 @@ def evaluate_model(model, data, output_dir=None):
     return metrics
 
 
-def plot_training_history(history, output_dir=None):
+def plot_training_history(history, output_dir=None, rainfall_std: float = 1.0):
     """
     Plot training history.
     
@@ -305,34 +310,34 @@ def plot_training_history(history, output_dir=None):
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     
-    # Convert history values to inches
-    history_inches = {}
+    # Convert history values to millimeters
+    history_mm = {}
     for key, value in history.items():
         if key in ['loss', 'val_loss']:
-            # MSE values need to be multiplied by 100²
-            history_inches[key] = [v * 100 * 100 for v in value]
+            # MSE values need to be multiplied by std^2 to get mm²
+            history_mm[key] = [float(v) * (rainfall_std ** 2) for v in value]
         elif key in ['mae', 'val_mae']:
-            # MAE values need to be multiplied by 100
-            history_inches[key] = [v * 100 for v in value]
+            # MAE values need to be multiplied by std to get mm
+            history_mm[key] = [float(v) * rainfall_std for v in value]
         else:
-            history_inches[key] = value
+            history_mm[key] = value
     
     # Plot loss
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
-    plt.plot(history_inches['loss'], label='Training Loss')
-    plt.plot(history_inches['val_loss'], label='Validation Loss')
+    plt.plot(history_mm.get('loss', []), label='Training Loss')
+    plt.plot(history_mm.get('val_loss', []), label='Validation Loss')
     plt.xlabel('Epoch')
-    plt.ylabel('Loss (in²)')
+    plt.ylabel('Loss (mm²)')
     plt.title('Training and Validation Loss')
     plt.legend()
     
     # Plot MAE
     plt.subplot(1, 2, 2)
-    plt.plot(history_inches['mae'], label='Training MAE')
-    plt.plot(history_inches['val_mae'], label='Validation MAE')
+    plt.plot(history_mm.get('mae', []), label='Training MAE')
+    plt.plot(history_mm.get('val_mae', []), label='Validation MAE')
     plt.xlabel('Epoch')
-    plt.ylabel('MAE (inches)')
+    plt.ylabel('MAE (mm)')
     plt.title('Training and Validation MAE')
     plt.legend()
     

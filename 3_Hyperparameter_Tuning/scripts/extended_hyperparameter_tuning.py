@@ -47,6 +47,8 @@ def build_tunable_model(hp, data_metadata):
     l2_reg = hp.Float('l2_reg', min_value=1e-6, max_value=1e-2, sampling='log')
     learning_rate = hp.Float('learning_rate', min_value=1e-4, max_value=1e-2, sampling='log')
     weight_decay = hp.Float('weight_decay', min_value=1e-7, max_value=1e-3, sampling='log')
+    # Make batch size tunable; used by CV training loop in tuning_core
+    batch_size = hp.Int('batch_size', min_value=64, max_value=256, step=32)
     
     # Architecture-specific hyperparameters
     local_dem_units = hp.Int('local_dem_units', min_value=32, max_value=256, step=32)
@@ -158,29 +160,43 @@ def build_tunable_model(hp, data_metadata):
     return model
 
 
-def default_config():
-    """Fixed configuration for tuning with the assembled NPZ file."""
+def config(
+    project_root: str = PROJECT_ROOT,
+    npz_path: str = os.path.join(PROJECT_ROOT, 'ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
+    test_indices_path: str = os.path.join(SCRIPT_DIR, '../output_test/test_indices.pkl'),
+    output_dir: str = os.path.join(SCRIPT_DIR, '../output_test/land_model_extended_tuner'),
+    max_trials: int = 150,
+    executions_per_trial: int = 1,
+    epochs: int = 150,
+    batch_size: int = 64,
+    n_folds: int = 10,
+    cv_seed: int = 42,
+    resume: bool = True,
+):
+    """Create a tuning config with overridable defaults.
+
+    Pass only the params you want to change, e.g.:
+        cfg = config(max_trials=200, epochs=75)
+    """
     return {
-        'project_root': PROJECT_ROOT,
-        'npz_path': os.path.join(PROJECT_ROOT, 'ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
-        'test_indices_path': os.path.join(SCRIPT_DIR, '../output_test/test_indices.pkl'),
-        'output_dir': os.path.join(SCRIPT_DIR, '../output_test/land_model_extended_tuner'),
-        'max_trials': 100,
-        'executions_per_trial': 1,
-        'epochs': 50,
-        'batch_size': 314,
-        'test_size': 0.1,
-        'val_size': 0.1,
-        'n_folds': 5,
-        'cv_seed': 42,
-        'resume': True,
+        'project_root': project_root,
+        'npz_path': npz_path,
+        'test_indices_path': test_indices_path,
+        'output_dir': output_dir,
+        'max_trials': max_trials,
+        'executions_per_trial': executions_per_trial,
+        'epochs': epochs,
+        'batch_size': batch_size,
+        'n_folds': n_folds,
+        'cv_seed': cv_seed,
+        'resume': resume,
     }
 
 
 def main():
-    """Run tuning with fixed config and the model defined here."""
-    config = default_config()
-    run_tuning(config=config, build_model_fn=build_tunable_model)
+    """Run tuning with parameterized config and the model defined here."""
+    cfg = config()
+    run_tuning(config=cfg, build_model_fn=build_tunable_model)
     return 0
 
 

@@ -36,6 +36,15 @@ class CVHyperModel(kt.HyperModel):
         val_losses = []
         for fold, (train_idx, val_idx) in enumerate(self.fold_indices):
             print(f"\nTraining on fold {fold+1}/{len(self.fold_indices)}")
+            # Use hp-defined batch_size if provided; fall back to config's batch_size
+            try:
+                hp_batch = hp.get('batch_size')
+            except Exception:
+                hp_batch = None
+            base_batch = hp_batch if hp_batch is not None else self.batch_size
+            # Ensure effective batch size is within valid range for this fold
+            eff_batch = int(min(max(1, base_batch), len(train_idx)))
+            # Build datasets with drop_remainder=False to avoid zero-step epochs
             train_dataset = tf.data.Dataset.from_tensor_slices((
                 {
                     'climate': self.cv_features['climate'][train_idx],
@@ -44,7 +53,7 @@ class CVHyperModel(kt.HyperModel):
                     'month': self.cv_features['month'][train_idx]
                 },
                 self.cv_targets[train_idx]
-            )).batch(self.batch_size, drop_remainder=True)
+            )).shuffle(2048).batch(eff_batch, drop_remainder=False).prefetch(tf.data.AUTOTUNE)
 
             val_dataset = tf.data.Dataset.from_tensor_slices((
                 {
@@ -54,7 +63,13 @@ class CVHyperModel(kt.HyperModel):
                     'month': self.cv_features['month'][val_idx]
                 },
                 self.cv_targets[val_idx]
-            )).batch(self.batch_size, drop_remainder=True)
+            )).batch(eff_batch, drop_remainder=False).prefetch(tf.data.AUTOTUNE)
+
+            # Log steps/epoch for visibility
+            steps_per_epoch = int(np.ceil(len(train_idx) / eff_batch))
+            val_steps = int(np.ceil(len(val_idx) / eff_batch))
+            src = 'hp' if hp_batch is not None else 'config'
+            print(f"Fold {fold+1}: base_batch={base_batch} ({src}), eff_batch={eff_batch}, steps/epoch={steps_per_epoch}, val_steps={val_steps}")
 
             if fold > 0:
                 tf.keras.backend.clear_session()
@@ -84,6 +99,9 @@ class SaveBestHyperparametersCallback(tf.keras.callbacks.Callback):
         self.output_dir = output_dir
         self.best_val_loss = float('inf')
         self.trial_count = 0
+        # Path under the tuner project directory where hyperparameters are saved
+        self.hp_save_dir = os.path.join(self.output_dir, 'land_model_cv_tuning')
+        self.hp_file_path = os.path.join(self.hp_save_dir, 'current_best_hyperparameters.py')
 
     def on_train_begin(self, logs=None):
         self.trial_count += 1
@@ -108,11 +126,8 @@ class SaveBestHyperparametersCallback(tf.keras.callbacks.Callback):
                 return
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
-                with open(os.path.join(self.output_dir, 'current_best_hyperparameters.txt'), 'w') as f:
-                    f.write(f"Best hyperparameters after {self.trial_count} trials (val_loss: {val_loss:.6f}):\n\n")
-                    for param, value in best_hp.values.items():
-                        f.write(f"{param}: {value}\n")
-                with open(os.path.join(self.output_dir, 'current_best_hyperparameters.py'), 'w') as f:
+                os.makedirs(self.hp_save_dir, exist_ok=True)
+                with open(self.hp_file_path, 'w') as f:
                     f.write("# Current best hyperparameters\n\n")
                     f.write("best_hyperparameters = {\n")
                     for param, value in best_hp.values.items():
@@ -154,6 +169,12 @@ def run_tuning(config, build_model_fn):
         random_state=config['cv_seed'],
     )
 
+    # Sanity assertions on loaded data
+    meta = data.get('metadata', {})
+    assert tuple(meta.get('climate_shape', ())) == (16, 3, 3), f"Unexpected climate_shape: {meta.get('climate_shape')}"
+    n_total = sum(data['targets'][split].shape[0] for split in ('train','val','test'))
+    assert n_total == 2032, f"Unexpected total N={n_total}, expected 2032"
+
     # Build CV features/targets pool (train+val)
     cv_features = {
         'climate': np.concatenate([data['climate']['train'], data['climate']['val']]),
@@ -162,6 +183,13 @@ def run_tuning(config, build_model_fn):
         'month': np.concatenate([data['month']['train'], data['month']['val']]),
     }
     cv_targets = np.concatenate([data['targets']['train'], data['targets']['val']])
+
+    # Debug logging of shapes
+    print("CV pool sizes:")
+    print(f"  N_cv = {cv_targets.shape[0]}")
+    for k, v in cv_features.items():
+        print(f"  {k}: {v.shape}")
+    print(f"  targets: {cv_targets.shape}")
 
     kf = KFold(n_splits=config['n_folds'], shuffle=True, random_state=config['cv_seed'])
 
@@ -212,7 +240,7 @@ def run_tuning(config, build_model_fn):
             print("No completed trials found. Starting from scratch.")
 
     early_stopping = tf.keras.callbacks.EarlyStopping(
-        monitor='val_loss', patience=15, restore_best_weights=True, verbose=1
+        monitor='val_loss', patience=30, restore_best_weights=True, verbose=1
     )
     lr_scheduler = tf.keras.callbacks.LearningRateScheduler(
         lambda epoch: cosine_decay_with_warmup(epoch, total_epochs=config['epochs']), verbose=1
@@ -226,7 +254,7 @@ def run_tuning(config, build_model_fn):
     else:
         print(f"Running {config['max_trials']} trials with {config['n_folds']}-fold cross-validation")
     print(f"Each fold will train for up to {config['epochs']} epochs")
-    print("Best hyperparameters will be saved after each trial in 'current_best_hyperparameters.txt'")
+    print("Best hyperparameters will be saved after each trial to 'land_model_cv_tuning/current_best_hyperparameters.py'")
     start_time = time.time()
 
     tuner.search(
@@ -241,14 +269,12 @@ def run_tuning(config, build_model_fn):
     for param, value in best_hp.values.items():
         print(f"{param}: {value}")
 
-    with open(os.path.join(config['output_dir'], 'best_hyperparameters.txt'), 'w') as f:
-        f.write(f"Best hyperparameters from {config['max_trials']} trials:\n\n")
-        for param, value in best_hp.values.items():
-            f.write(f"{param}: {value}\n")
-    with open(os.path.join(config['output_dir'], 'best_hyperparameters.pkl'), 'wb') as f:
-        pickle.dump(best_hp.values, f)
-    with open(os.path.join(config['output_dir'], 'best_hyperparameters.py'), 'w') as f:
-        f.write("# Best hyperparameters from extended tuning\n\n")
+    # Write the single .py file under the tuner project directory
+    tuner_dir = os.path.join(config['output_dir'], 'land_model_cv_tuning')
+    os.makedirs(tuner_dir, exist_ok=True)
+    hp_file_path = os.path.join(tuner_dir, 'current_best_hyperparameters.py')
+    with open(hp_file_path, 'w') as f:
+        f.write("# Current best hyperparameters\n\n")
         f.write("best_hyperparameters = {\n")
         for param, value in best_hp.values.items():
             if isinstance(value, str):
@@ -256,6 +282,7 @@ def run_tuning(config, build_model_fn):
             else:
                 f.write(f"    '{param}': {value},\n")
         f.write("}\n")
+    print(f"Hyperparameters saved to: {hp_file_path}")
 
     # Optional: importance plot if available and enough trials
     try:

@@ -1,0 +1,29 @@
+Training Summary for Model 5 of Fold 10
+Random Seed: 46
+
+Hyperparameters:
+  na: 64
+  nb: 128
+  dropout_rate: 0.1
+  l2_reg: 1e-06
+  learning_rate: 0.01
+  weight_decay: 1e-07
+  batch_size: 64
+  local_dem_units: 32
+  regional_dem_units: 32
+  month_units: 128
+  climate_units: 512
+  use_residual: True
+  activation: relu
+  output_activation: softplus
+
+Training Results:
+  Final Loss: 3001.202901 mm²
+  Final MAE: 40.296185 mm
+  Final Val Loss: 10537.097726 mm²
+  Final Val MAE: 69.491042 mm
+
+Test Metrics:
+  R²: 0.7172
+  RMSE: 113.3837 mm
+  MAE: 74.0618 mm

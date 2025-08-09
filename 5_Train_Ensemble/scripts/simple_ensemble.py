@@ -26,12 +26,14 @@ PIPELINE_DIR = os.path.dirname(SCRIPT_DIR)
 PROJECT_ROOT = os.path.abspath(os.path.join(PIPELINE_DIR, '..'))
 
 # Add required directories to Python path
-sys.path.append(os.path.join(PROJECT_ROOT, '2_Create_ML_Data', 'scripts'))
-# Add 4_Train_Best_Model/scripts to Python path to use the existing data_utils.py
+# For training/evaluation utilities
 sys.path.append(os.path.join(PROJECT_ROOT, '4_Train_Best_Model', 'scripts'))
-# Import data utilities and training functions from 4_Train_Best_Model/scripts
-from data_utils import load_and_reshape_data, create_tf_dataset
+# For NPZ loader
+sys.path.append(os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'scripts'))
+# Import data utilities and training functions
+from data_utils import create_tf_dataset
 from training import train_model, evaluate_model, plot_training_history
+from npz_data_utils import load_assembled_npz_data
 
 # Path to the hyperparameter tuning output directory
 HYPERPARAM_DIR = os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output')
@@ -254,6 +256,10 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
         
         # Create TensorFlow datasets for this fold
         fold_datasets = create_tf_dataset(fold_data, batch_size=batch_size)
+
+        # Determine unit handling: prefer millimeters if NPZ std is present
+        rainfall_std = float(fold_data.get('metadata', {}).get('rainfall_mm_std', 0.0))
+        use_mm = rainfall_std and rainfall_std > 0.0
         
         for model_idx in range(n_models_per_fold):
             # Skip models before start_model if in start_fold
@@ -282,8 +288,8 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
             np.random.seed(random_seed)
             tf.random.set_seed(random_seed)
             
-            # Build model with best hyperparameters
-            model = build_model(data['metadata'], hyperparams)
+            # Build model; it will load hyperparameters from cfg['hp_dir']
+            model = build_model(data['metadata'], cfg['hp_dir'])
         
             # Train model
             history = train_model(
@@ -300,11 +306,14 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
             print(f"Model saved to {model_path}")
             
             # Plot training history
-            plot_training_history(history, output_dir=model_dir)
+            if use_mm:
+                plot_training_history(history, output_dir=model_dir, rainfall_std=rainfall_std)
+            else:
+                plot_training_history(history, output_dir=model_dir)
         
             # Evaluate model and generate the same files as train_best_model.py
             print(f"\nEvaluating model {model_idx+1} of fold {fold_idx+1}...")
-            metrics = evaluate_model(model, data=fold_datasets, output_dir=model_dir)
+            metrics = evaluate_model(model, data=fold_datasets, output_dir=model_dir, rainfall_std=rainfall_std if use_mm else None)
         
             # Create training summary
             summary_path = os.path.join(model_dir, 'training_summary.txt')
@@ -316,14 +325,24 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
                     if key not in ['Best hyperparameters from 100 trials']:
                         f.write(f"  {key}: {value}\n")
                 f.write(f"\nTraining Results:\n")
-                f.write(f"  Final Loss: {history['loss'][-1]*100*100:.6f} in²\n")  # Convert to inches squared
-                f.write(f"  Final MAE: {history['mae'][-1]*100:.6f} in\n")  # Convert to inches
-                f.write(f"  Final Val Loss: {history['val_loss'][-1]*100*100:.6f} in²\n")  # Convert to inches squared
-                f.write(f"  Final Val MAE: {history['val_mae'][-1]*100:.6f} in\n\n")  # Convert to inches
-                f.write(f"Test Metrics:\n")
-                f.write(f"  R²: {metrics['r2']:.4f}\n")
-                f.write(f"  RMSE: {metrics['rmse']*100:.4f} in\n")  # Convert to inches
-                f.write(f"  MAE: {metrics['mae']*100:.4f} in\n")
+                if use_mm:
+                    f.write(f"  Final Loss: {history['loss'][-1]*(rainfall_std**2):.6f} mm²\n")
+                    f.write(f"  Final MAE: {history['mae'][-1]*rainfall_std:.6f} mm\n")
+                    f.write(f"  Final Val Loss: {history['val_loss'][-1]*(rainfall_std**2):.6f} mm²\n")
+                    f.write(f"  Final Val MAE: {history['val_mae'][-1]*rainfall_std:.6f} mm\n\n")
+                    f.write(f"Test Metrics:\n")
+                    f.write(f"  R²: {metrics['r2']:.4f}\n")
+                    f.write(f"  RMSE: {metrics.get('rmse_mm', float('nan')):.4f} mm\n")
+                    f.write(f"  MAE: {metrics.get('mae_mm', float('nan')):.4f} mm\n")
+                else:
+                    f.write(f"  Final Loss: {history['loss'][-1]*100*100:.6f} in²\n")
+                    f.write(f"  Final MAE: {history['mae'][-1]*100:.6f} in\n")
+                    f.write(f"  Final Val Loss: {history['val_loss'][-1]*100*100:.6f} in²\n")
+                    f.write(f"  Final Val MAE: {history['val_mae'][-1]*100:.6f} in\n\n")
+                    f.write(f"Test Metrics:\n")
+                    f.write(f"  R²: {metrics['r2']:.4f}\n")
+                    f.write(f"  RMSE: {metrics['rmse']*100:.4f} in\n")
+                    f.write(f"  MAE: {metrics['mae']*100:.4f} in\n")
             print(f"Training summary saved to {summary_path}")
         
             # Make test predictions
@@ -372,24 +391,35 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
             f.write(f"Fold {fold_idx+1} Ensemble Summary\n")
             f.write(f"Number of Models: {n_models_per_fold}\n\n")
             f.write(f"Test Metrics:\n")
-            f.write(f"  R²: {fold_r2:.4f}\n")
-            f.write(f"  RMSE: {fold_rmse*100:.4f} in\n")  # Convert to inches
-            f.write(f"  MAE: {fold_mae*100:.4f} in\n")  # Convert to inches
+            if use_mm:
+                f.write(f"  R²: {fold_r2:.4f}\n")
+                f.write(f"  RMSE: {(fold_rmse*rainfall_std):.4f} mm\n")
+                f.write(f"  MAE: {(fold_mae*rainfall_std):.4f} mm\n")
+            else:
+                f.write(f"  R²: {fold_r2:.4f}\n")
+                f.write(f"  RMSE: {fold_rmse*100:.4f} in\n")
+                f.write(f"  MAE: {fold_mae*100:.4f} in\n")
         
         # Create fold ensemble predictions plot
         plt.figure(figsize=(10, 8))
-        # Convert to inches by multiplying by 100
-        plt.scatter(data['targets']['test']*100, fold_ensemble_pred*100, alpha=0.5)
-        plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
-                 [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'r--')
-        plt.xlabel('Actual Rainfall (inches)')
-        plt.ylabel('Predicted Rainfall (inches)')
+        if use_mm:
+            plt.scatter(data['targets']['test']*rainfall_std, fold_ensemble_pred*rainfall_std, alpha=0.5)
+            plt.plot([data['targets']['test'].min()*rainfall_std, data['targets']['test'].max()*rainfall_std], 
+                     [data['targets']['test'].min()*rainfall_std, data['targets']['test'].max()*rainfall_std], 'r--')
+            plt.xlabel('Actual Rainfall (mm)')
+            plt.ylabel('Predicted Rainfall (mm)')
+        else:
+            plt.scatter(data['targets']['test']*100, fold_ensemble_pred*100, alpha=0.5)
+            plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
+                     [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'r--')
+            plt.xlabel('Actual Rainfall (inches)')
+            plt.ylabel('Predicted Rainfall (inches)')
         plt.title(f'Fold {fold_idx+1} Ensemble: Actual vs Predicted Rainfall')
         plt.grid(True)
         plt.savefig(os.path.join(fold_dir, 'fold_ensemble_predictions.png'), dpi=300)
         plt.close()
     
-    # Calculate average CV metrics
+    # Calculate average CV metrics (training units)
     avg_r2 = np.mean([fold['r2'] for fold in fold_results])
     avg_rmse = np.mean([fold['rmse'] for fold in fold_results])
     avg_mae = np.mean([fold['mae'] for fold in fold_results])
@@ -407,11 +437,18 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
     # Calculate training time
     training_time = time.time() - start_time
     
-    # Save test predictions to CSV
-    test_pred_df = pd.DataFrame({
-        'actual': data['targets']['test'].flatten(),
-        'predicted': test_ensemble_pred.flatten()
-    })
+    # Save test predictions to CSV (units depend on availability of std)
+    if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
+        rs = float(data['metadata']['rainfall_mm_std'])
+        test_pred_df = pd.DataFrame({
+            'actual_mm': (data['targets']['test']*rs).flatten(),
+            'predicted_mm': (test_ensemble_pred*rs).flatten()
+        })
+    else:
+        test_pred_df = pd.DataFrame({
+            'actual_inches': (data['targets']['test']*100).flatten(),
+            'predicted_inches': (test_ensemble_pred*100).flatten()
+        })
     test_pred_df.to_csv(os.path.join(output_dir, 'test_predictions.csv'), index=False)
     
     # Prepare results
@@ -442,38 +479,69 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
                 f.write(f"  {key}: {value}\n")
         
         f.write("\nCross-Validation Results:\n")
-        for i, fold in enumerate(fold_results):
-            f.write(f"  Fold {i+1}: R² = {fold['r2']:.4f}, RMSE = {fold['rmse']:.4f} in, MAE = {fold['mae']:.4f} in\n")
-        f.write(f"\nAverage CV: R² = {avg_r2:.4f}, RMSE = {avg_rmse:.4f} in, MAE = {avg_mae:.4f} in\n")
+        if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
+            rs = float(data['metadata']['rainfall_mm_std'])
+            for i, fold in enumerate(fold_results):
+                f.write(f"  Fold {i+1}: R² = {fold['r2']:.4f}, RMSE = {(fold['rmse']*rs):.4f} mm, MAE = {(fold['mae']*rs):.4f} mm\n")
+            f.write(f"\nAverage CV: R² = {avg_r2:.4f}, RMSE = {(avg_rmse*rs):.4f} mm, MAE = {(avg_mae*rs):.4f} mm\n")
+        else:
+            for i, fold in enumerate(fold_results):
+                f.write(f"  Fold {i+1}: R² = {fold['r2']:.4f}, RMSE = {fold['rmse']:.4f} in, MAE = {fold['mae']:.4f} in\n")
+            f.write(f"\nAverage CV: R² = {avg_r2:.4f}, RMSE = {avg_rmse:.4f} in, MAE = {avg_mae:.4f} in\n")
         
         f.write(f"\nFinal Ensemble Test Results:\n")
         f.write(f"  R²: {test_r2:.4f}\n")
-        f.write(f"  RMSE: {test_rmse*100:.4f} in\n")  
-        f.write(f"  MAE: {test_mae*100:.4f} in\n")  
+        if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
+            rs = float(data['metadata']['rainfall_mm_std'])
+            f.write(f"  RMSE: {(test_rmse*rs):.4f} mm\n")
+            f.write(f"  MAE: {(test_mae*rs):.4f} mm\n")
+        else:
+            f.write(f"  RMSE: {test_rmse*100:.4f} in\n")
+            f.write(f"  MAE: {test_mae*100:.4f} in\n")
         f.write(f"\nTraining completed in {time.strftime('%H:%M:%S', time.gmtime(training_time))}\n")
     
     # Plot test predictions
     plt.figure(figsize=(10, 8))
-    plt.scatter(data['targets']['test']*100, test_ensemble_pred*100, alpha=0.5)
-    plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
-             [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'r--')
-    plt.xlabel('Actual Rainfall (inches)')
-    plt.ylabel('Predicted Rainfall (inches)')
-    plt.title('Ensemble Model: Actual vs Predicted Rainfall (Test Set)')
+    if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
+        rs = float(data['metadata']['rainfall_mm_std'])
+        plt.scatter(data['targets']['test']*rs, test_ensemble_pred*rs, alpha=0.5)
+        plt.plot([data['targets']['test'].min()*rs, data['targets']['test'].max()*rs], 
+                 [data['targets']['test'].min()*rs, data['targets']['test'].max()*rs], 'r--')
+        plt.xlabel('Actual Rainfall (mm)')
+        plt.ylabel('Predicted Rainfall (mm)')
+        plt.title('Ensemble Model: Actual vs Predicted Rainfall (Test Set)')
+    else:
+        plt.scatter(data['targets']['test']*100, test_ensemble_pred*100, alpha=0.5)
+        plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
+                 [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'r--')
+        plt.xlabel('Actual Rainfall (inches)')
+        plt.ylabel('Predicted Rainfall (inches)')
+        plt.title('Ensemble Model: Actual vs Predicted Rainfall (Test Set)')
     plt.grid(True)
     plt.savefig(os.path.join(output_dir, 'ensemble_test_predictions.png'), dpi=300)
     plt.close()
     
     # Plot individual model predictions
     plt.figure(figsize=(12, 8))
-    for i, preds in enumerate(all_test_predictions):
-        plt.scatter(data['targets']['test']*100, preds*100, alpha=0.3, label=f'Model {i+1}')
-    plt.scatter(data['targets']['test']*100, test_ensemble_pred*100, alpha=0.8, color='red', label='Ensemble')
-    plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
-             [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'k--')
-    plt.xlabel('Actual Rainfall (inches)')
-    plt.ylabel('Predicted Rainfall (inches)')
-    plt.title('Individual Models vs Ensemble Predictions')
+    if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
+        rs = float(data['metadata']['rainfall_mm_std'])
+        for i, preds in enumerate(all_test_predictions):
+            plt.scatter(data['targets']['test']*rs, preds*rs, alpha=0.3, label=f'Model {i+1}')
+        plt.scatter(data['targets']['test']*rs, test_ensemble_pred*rs, alpha=0.8, color='red', label='Ensemble')
+        plt.plot([data['targets']['test'].min()*rs, data['targets']['test'].max()*rs], 
+                 [data['targets']['test'].min()*rs, data['targets']['test'].max()*rs], 'k--')
+        plt.xlabel('Actual Rainfall (mm)')
+        plt.ylabel('Predicted Rainfall (mm)')
+        plt.title('Individual Models vs Ensemble Predictions')
+    else:
+        for i, preds in enumerate(all_test_predictions):
+            plt.scatter(data['targets']['test']*100, preds*100, alpha=0.3, label=f'Model {i+1}')
+        plt.scatter(data['targets']['test']*100, test_ensemble_pred*100, alpha=0.8, color='red', label='Ensemble')
+        plt.plot([data['targets']['test'].min()*100, data['targets']['test'].max()*100], 
+                 [data['targets']['test'].min()*100, data['targets']['test'].max()*100], 'k--')
+        plt.xlabel('Actual Rainfall (inches)')
+        plt.ylabel('Predicted Rainfall (inches)')
+        plt.title('Individual Models vs Ensemble Predictions')
     plt.legend()
     plt.grid(True)
     plt.savefig(os.path.join(output_dir, 'individual_vs_ensemble.png'), dpi=300)
@@ -482,107 +550,76 @@ def train_simple_ensemble(data, hyperparams, output_dir, n_folds=5, n_models_per
     return results
 
 
-def main():
+def run_ensemble_cv(config: dict | None = None):
+    """Run K-fold CV simple ensemble on NPZ data; callable (no CLI).
+
+    Config keys (optional overrides): output_dir, n_folds, n_models_per_fold,
+    epochs, batch_size, test_indices_path.
     """
-    Main function to run simple ensemble model.
-    """
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Simple ensemble model for rainfall prediction')
-    parser.add_argument('--features_path', type=str, 
-                        default=os.path.join(PROJECT_ROOT, '2_Create_ML_Data', 'output', 'csv_data', 'features.csv'),
-                        help='Path to features CSV file')
-    parser.add_argument('--targets_path', type=str, 
-                        default=os.path.join(PROJECT_ROOT, '2_Create_ML_Data', 'output', 'csv_data', 'targets.csv'),
-                        help='Path to targets CSV file')
-    parser.add_argument('--test_indices_path', type=str, 
-                        default=os.path.join(PROJECT_ROOT, '4_Train_Best_Model', 'output', 'land_model_best', 'test_indices.pkl'),
-                        help='Path to save or load test indices')
-    parser.add_argument('--output_dir', type=str, 
-                        default=os.path.join(PIPELINE_DIR, 'output', 'simple_ensemble'),
-                        help='Directory to save model weights and results')
-    parser.add_argument('--n_folds', type=int, default=5,
-                        help='Number of cross-validation folds')
-    parser.add_argument('--n_models_per_fold', type=int, default=5,
-                        help='Number of models to train in each fold')
-    parser.add_argument('--epochs', type=int, default=150,
-                        help='Number of epochs for training')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Batch size for training')
-    parser.add_argument('--start_fold', type=int, default=None,
-                        help='Fold number to start training from (1-5)')
-    parser.add_argument('--start_model', type=int, default=None,
-                        help='Model number to start training from within the start fold (1-5)')
-    parser.add_argument('--hyperparams_path', type=str, default=None,
-                        help='Path to hyperparameters file (will use best hyperparameters from tuning if not specified)')
-    args = parser.parse_args()
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Load and reshape data
-    print("Loading and reshaping data...")
-    data = load_and_reshape_data(
-        features_path=args.features_path,
-        targets_path=args.targets_path,
-        test_indices_path=args.test_indices_path
+    defaults = {
+        'output_dir': os.path.join(PIPELINE_DIR, 'output', 'simple_ensemble_cv'),
+        'n_folds': 10,
+        'n_models_per_fold': 5,
+        'epochs': 150,
+        'batch_size': 64,
+        'test_indices_path': os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output_test', 'test_indices.pkl'),
+        'hp_dir': os.path.join(PROJECT_ROOT, '3_Hyperparameter_Tuning', 'output_test'),
+    }
+    cfg = {**defaults, **(config or {})}
+
+    os.makedirs(cfg['output_dir'], exist_ok=True)
+
+    # Load NPZ-only data (same as 4_Train_Best_Model)
+    npz_path = os.path.join(PROJECT_ROOT, 'ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
+    if not os.path.exists(npz_path):
+        raise FileNotFoundError(f"NPZ not found at {npz_path}")
+    data = load_assembled_npz_data(
+        npz_path=npz_path,
+        test_indices_path=cfg['test_indices_path'],
+        test_size=0.1,
+        val_size=0.1,
+        random_state=42,
     )
-    
-    # Load hyperparameters
-    if args.hyperparams_path:
-        # Load from specified path
-        try:
-            print(f"Loading hyperparameters from {args.hyperparams_path}")
-            # Get the directory containing the hyperparameters file
-            hp_dir = os.path.dirname(args.hyperparams_path)
-            # Get the filename without extension
-            hp_file = os.path.splitext(os.path.basename(args.hyperparams_path))[0]
-            # Add the directory to Python path
-            sys.path.append(hp_dir)
-            # Import the hyperparameters module
-            hp_module = __import__(hp_file)
-            # Get the hyperparameters
-            hyperparams = hp_module.best_hyperparameters
-            # Remove the directory from Python path
-            sys.path.remove(hp_dir)
-        except Exception as e:
-            print(f"Error loading hyperparameters from {args.hyperparams_path}: {e}")
-            print("Using best hyperparameters from tuning instead.")
-            hyperparams = load_best_hyperparameters()
-    else:
-        # Load best hyperparameters from tuning
-        hyperparams = load_best_hyperparameters()
-        
+
+    # Load best hyperparameters for logging (source: hp_dir)
+    hyperparams = load_best_hyperparameters(cfg['hp_dir'])
     print(f"Loaded hyperparameters: {hyperparams}")
-    
-    # Train simple ensemble model with cross-validation
+
+    # Train ensemble with CV
     print("\nTraining ensemble model with cross-validation...")
     results = train_simple_ensemble(
         data=data,
         hyperparams=hyperparams,
-        output_dir=args.output_dir,
-        n_folds=args.n_folds,
-        n_models_per_fold=args.n_models_per_fold,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        start_fold=args.start_fold,
-        start_model=args.start_model
+        output_dir=cfg['output_dir'],
+        n_folds=cfg['n_folds'],
+        n_models_per_fold=cfg['n_models_per_fold'],
+        epochs=cfg['epochs'],
+        batch_size=cfg['batch_size']
     )
-    
-    # Print final results
+
+    # Print final results (units adapt inside file outputs; here we show mm if available)
+    rs = float(data['metadata'].get('rainfall_mm_std', 0.0))
     print("\nCross-Validation Results:")
     print(f"Average CV R²: {results['avg_cv_r2']:.4f}")
-    print(f"Average CV RMSE: {results['avg_cv_rmse']*100:.4f} in")  
-    print(f"Average CV MAE: {results['avg_cv_mae']*100:.4f} in")  
-    
+    if rs > 0:
+        print(f"Average CV RMSE: {(results['avg_cv_rmse']*rs):.4f} mm")
+        print(f"Average CV MAE: {(results['avg_cv_mae']*rs):.4f} mm")
+    else:
+        print(f"Average CV RMSE: {results['avg_cv_rmse']*100:.4f} in")
+        print(f"Average CV MAE: {results['avg_cv_mae']*100:.4f} in")
+
     print("\nFinal Ensemble Results:")
     print(f"Test R²: {results['test_r2']:.4f}")
-    print(f"Test RMSE: {results['test_rmse']*100:.4f} in")  
-    print(f"Test MAE: {results['test_mae']*100:.4f} in")  
-    
-    print(f"\nResults saved to {args.output_dir}")
-    
-    return 0
+    if rs > 0:
+        print(f"Test RMSE: {(results['test_rmse']*rs):.4f} mm")
+        print(f"Test MAE: {(results['test_mae']*rs):.4f} mm")
+    else:
+        print(f"Test RMSE: {results['test_rmse']*100:.4f} in")
+        print(f"Test MAE: {results['test_mae']*100:.4f} in")
+
+    print(f"\nResults saved to {cfg['output_dir']}")
+    return results
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    run_ensemble_cv()
