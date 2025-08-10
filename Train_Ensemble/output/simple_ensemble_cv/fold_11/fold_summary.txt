@@ -1,0 +1,7 @@
+Fold 11 Ensemble Summary
+Number of Models: 5
+
+Test Metrics:
+  R²: 0.7836
+  RMSE: 99.1915 mm
+  MAE: 65.2225 mm

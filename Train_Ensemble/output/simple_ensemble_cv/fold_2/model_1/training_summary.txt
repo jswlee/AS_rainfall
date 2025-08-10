@@ -1,0 +1,29 @@
+Training Summary for Model 1 of Fold 2
+Random Seed: 42
+
+Hyperparameters:
+  na: 64
+  nb: 128
+  dropout_rate: 0.5
+  l2_reg: 1e-06
+  learning_rate: 0.0001
+  weight_decay: 1e-07
+  batch_size: 64
+  local_dem_units: 256
+  regional_dem_units: 256
+  month_units: 16
+  climate_units: 512
+  use_residual: True
+  activation: relu
+  output_activation: softplus
+
+Training Results:
+  Final Loss: 4776.599602 mm²
+  Final MAE: 50.354468 mm
+  Final Val Loss: 8372.127234 mm²
+  Final Val MAE: 63.467740 mm
+
+Test Metrics:
+  R²: 0.7916
+  RMSE: 97.3251 mm
+  MAE: 66.2162 mm

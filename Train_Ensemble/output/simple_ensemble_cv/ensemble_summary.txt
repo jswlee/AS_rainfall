@@ -1,0 +1,45 @@
+K-Fold CV Ensemble Model with 15 Folds
+Each fold contains 5 models
+Total models: 75
+
+Hyperparameters:
+  na: 64
+  nb: 128
+  dropout_rate: 0.5
+  l2_reg: 1e-06
+  learning_rate: 0.0001
+  weight_decay: 1e-07
+  batch_size: 64
+  local_dem_units: 256
+  regional_dem_units: 256
+  month_units: 16
+  climate_units: 512
+  use_residual: True
+  activation: relu
+  output_activation: softplus
+
+Cross-Validation Results:
+  Fold 1: R² = 0.7871, RMSE = 98.3750 mm, MAE = 64.2135 mm
+  Fold 2: R² = 0.8016, RMSE = 94.9727 mm, MAE = 63.5058 mm
+  Fold 3: R² = 0.7905, RMSE = 97.5821 mm, MAE = 64.4675 mm
+  Fold 4: R² = 0.7866, RMSE = 98.4856 mm, MAE = 65.9395 mm
+  Fold 5: R² = 0.7964, RMSE = 96.2091 mm, MAE = 62.7799 mm
+  Fold 6: R² = 0.7859, RMSE = 98.6628 mm, MAE = 66.2314 mm
+  Fold 7: R² = 0.7767, RMSE = 100.7467 mm, MAE = 65.7477 mm
+  Fold 8: R² = 0.7893, RMSE = 97.8771 mm, MAE = 66.2813 mm
+  Fold 9: R² = 0.7997, RMSE = 95.4183 mm, MAE = 62.4814 mm
+  Fold 10: R² = 0.7859, RMSE = 98.6485 mm, MAE = 64.4539 mm
+  Fold 11: R² = 0.7836, RMSE = 99.1915 mm, MAE = 65.2225 mm
+  Fold 12: R² = 0.7822, RMSE = 99.5055 mm, MAE = 66.3682 mm
+  Fold 13: R² = 0.7784, RMSE = 100.3737 mm, MAE = 67.0621 mm
+  Fold 14: R² = 0.7927, RMSE = 97.0731 mm, MAE = 63.4748 mm
+  Fold 15: R² = 0.7689, RMSE = 102.4931 mm, MAE = 65.5119 mm
+
+Average CV: R² = 0.7870, RMSE = 98.3743 mm, MAE = 64.9161 mm
+
+Final Ensemble Test Results:
+  R²: 0.7950
+  RMSE: 96.5456 mm
+  MAE: 63.3673 mm
+
+Training completed in 00:30:04
