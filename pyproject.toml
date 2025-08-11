@@ -7,7 +7,8 @@ name = "as-rainfall"
 version = "0.1.0"
 description = "AS_rainfall: Modular pipeline for assembling data, tuning, training, and ensembling rainfall models"
 readme = "README.md"
-requires-python = ">=3.11,<3.12"authors = [
+requires-python = ">=3.11,<3.12"
+authors = [
   {name = "JR Lee"}
 ]
 license = {text = "MIT"}
