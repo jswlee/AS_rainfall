@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "as-rainfall"
+version = "0.1.0"
+description = "AS_rainfall: Modular pipeline for assembling data, tuning, training, and ensembling rainfall models"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"authors = [
+  {name = "AS_rainfall Contributors"}
+]
+license = {text = "MIT"}
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+# Keep runtime deps in setup.cfg [options] install_requires
+# Extras can be declared here for PEP 621 compliant tools, but
+# we centralize in setup.cfg for a single source of truth.
+
+[project.urls]
+Homepage = "https://github.com/jswlee/AS_rainfall"
+Issues = "https://github.com/jswlee/AS_rainfall/issues"

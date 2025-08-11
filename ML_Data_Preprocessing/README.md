@@ -1,148 +1,79 @@
-# ML Data Preprocessing Pipeline
+# ML_Data_Preprocessing
 
-This module implements a structured data preprocessing pipeline for rainfall downscaling using the LAND-style deep learning approach. The pipeline prepares training data by extracting station metadata, building DEM patches, preparing reanalysis features, one-hot encoding months, and assembling training data.
+This module builds the model-ready dataset used across tuning, single best-model training, and ensembling. It assembles a single combined NPZ (`full_training_data.npz`) containing:
 
-## Module Structure
+- `reanalysis_patches`: [N, V, H, W] standardized climate variables (e.g., 16 variables on a 3×3 grid)
+- `dem_local_*` and `dem_regional_*`: standardized DEM patches at two spatial scales
+- `month_onehot`: [N, 12] one-hot month encoding
+- `rainfall_mm_divstd`: [N] rainfall targets in millimeters divided by a global std
+- `rainfall_mm_std`: float, the global std (standard deviation) used for de-standardization
+- Metadata such as shapes and sizes
 
-- `__init__.py`: Package initialization file
-- `config.py`: Configuration parameters for the pipeline
-- `utils.py`: Utility functions used across the pipeline
-- `extract_station_metadata.py`: Functions to extract and clean station metadata
-- `build_dem_patches.py`: Functions to build local and regional DEM patches at station locations
-- `build_reanalysis_features.py`: Functions to build reanalysis feature patches at station locations
-- `onehot_month.py`: Functions to one-hot encode months
-- `assemble_training_data.py`: Functions to assemble training data from all components
+All paths are project-root-relative and this package assumes the notebook/script CWD is the repo root `AS_rainfall/`.
 
-## Data Sources
+## Contents
 
-The pipeline processes the following data sources:
+- `assemble_training_data.py`
+  - Class `TrainingDataAssembler`
+    - Loads station rainfall CSVs (supports two schemas):
+      - New schema: columns `['year_month', 'monthly_total_precip_in']`
+      - Legacy schema: columns `['Year', 'Month', 'Rainfall']` (inches)
+    - Builds a lookup of `(station, year, month) → rainfall (inches)` and aligns rainfall with precomputed reanalysis indices
+    - Produces normalized rainfall in millimeters (`rainfall_mm_divstd`) and stores the global std (`rainfall_mm_std`) for proper unit restoration later
+    - Assembles and saves a single NPZ with all modalities aligned
+  - Function `assemble_from_precomputed(dem_npz_path=None, reanalysis_npz_path=None, out_dir=None, out_filename='full_training_data.npz')`
+    - Consumes precomputed DEM and reanalysis NPZs
+    - Aligns station/year/month keys across datasets
+    - Computes global stats (min/max/std) for DEM scaling and rainfall std
+    - Writes outputs under `ML_Data_Preprocessing/output/assembled_npz/`
 
-1. **Station Rainfall Data**: CSV files located at `/Process_Rainfall_Data/output/monthly_rainfall/`, with filenames in the format `{station_name}monthly.csv`.
+- `build_dem_patches.py`
+  - Generates standardized DEM patches at local and regional scales
+  - Writes `dem_patches_all_standardized.npz` under `ML_Data_Preprocessing/output/dem_npz/`
 
-2. **Digital Elevation Model (DEM)**: GeoTIFF file located at `/raw_data/DEM/DEM_Tut1.tif`.
+- `build_reanalysis_features.py`
+  - Extracts climate variables into small spatial patches per sample and standardizes them
+  - Writes `reanalysis_features_all_standardized.npz` under `ML_Data_Preprocessing/output/reanalysis_npz/`
 
-3. **Reanalysis Variables**: NetCDF files located at `/raw_data/climate_variables/`.
+- `config.py`
+  - Centralized paths for this module (e.g., rainfall input directory, output directories)
 
-4. **Station Metadata**: CSV file located at `/raw_data/station_locations.csv`, containing station names, latitudes, and longitudes.
+- `utils.py`
+  - Helpers for filtering outliers, IO, and general preprocessing utilities used by the assembler
 
-## Pipeline Steps
+- `print_single_datapoint.py`
+  - Introspection utility to print/visualize a single composite sample (useful for sanity checks)
 
-### 1. Extract Station Metadata
+- `extract_station_metadata.py`
+  - Extracts core station attributes used by builders/assembler
 
-Loads and cleans station metadata from the station locations CSV file, creating a dictionary with station names as keys and metadata (latitude, longitude) as values.
+## Expected Directory Layout
 
+- Input rainfall CSVs (per-station) located under the configured rainfall directory in `config.py`
+- Generated outputs (examples):
+  - `ML_Data_Preprocessing/output/dem_npz/dem_patches_all_standardized.npz`
+  - `ML_Data_Preprocessing/output/reanalysis_npz/reanalysis_features_all_standardized.npz`
+  - `ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz`
+
+## Usage Examples
+
+Build reanalysis features then DEM patches, then assemble the combined NPZ:
 ```python
-from ML_Data_Preprocessing.extract_station_metadata import load_station_metadata, clean_station_metadata, get_station_metadata_dict
+# 1) Build reanalysis features
+!python ML_Data_Preprocessing/build_reanalysis_features.py
 
-# Load and clean station metadata
-raw_metadata = load_station_metadata()
-clean_metadata = clean_station_metadata(raw_metadata)
-station_metadata = get_station_metadata_dict(clean_metadata)
+# 2) Build DEM patches
+!python ML_Data_Preprocessing/build_dem_patches.py
+
+# 3) Assemble the combined NPZ
+!python ML_Data_Preprocessing/assemble_training_data.py
 ```
 
-### 2. Build DEM Patches
+Programmatic assembly from a notebook:
+Check `2_ML_Data_Preprocessing.ipynb` for an example.
 
-Extracts local (3x3 at 2km per cell) and regional (3x3 at 8km per cell) DEM patches at each station location, and standardizes them by subtracting the mean and dividing by the standard deviation.
+## Notes and Conventions
 
-```python
-from ML_Data_Preprocessing.build_dem_patches import DEMPatchBuilder
-
-# Initialize DEM patch builder and build patches
-dem_builder = DEMPatchBuilder()
-dem_patches = dem_builder.build_patches_for_stations(station_metadata)
-standardized_dem_patches = dem_builder.standardize_patches(dem_patches)
-```
-
-### 3. Build Reanalysis Features
-
-Extracts 3x3 patches of 16 reanalysis variables centered on the nearest grid point to each station location, and standardizes them by subtracting the mean and dividing by the standard deviation.
-
-```python
-from ML_Data_Preprocessing.build_reanalysis_features import ReanalysisFeatureBuilder
-
-# Initialize reanalysis feature builder and build features
-reanalysis_builder = ReanalysisFeatureBuilder()
-reanalysis_features = reanalysis_builder.build_features_for_all_stations(
-    station_metadata, start_year=1979, end_year=2023
-)
-standardized_reanalysis = reanalysis_builder.standardize_features(reanalysis_features)
-```
-
-### 4. One-Hot Encode Month
-
-Creates a 12-element one-hot encoded array for each month, where the corresponding month index is set to 1 and all other elements are 0.
-
-```python
-from ML_Data_Preprocessing.onehot_month import onehot_encode_month
-
-# One-hot encode a month (1-12)
-month_onehot = onehot_encode_month(month)
-```
-
-### 5. Assemble Training Data
-
-Combines rainfall labels, one-hot encoded months, DEM patches, and reanalysis features into a single dataset. Normalizes rainfall labels by subtracting the mean and dividing by the standard deviation after filtering out outliers.
-
-```python
-from ML_Data_Preprocessing.assemble_training_data import TrainingDataAssembler
-
-# Initialize training data assembler
-assembler = TrainingDataAssembler()
-
-# Load station rainfall data
-rainfall_data = assembler.load_all_station_rainfall(station_metadata)
-
-# Normalize rainfall data
-normalized_rainfall = assembler.normalize_rainfall(rainfall_data)
-
-# Assemble training examples
-training_data = assembler.assemble_training_examples(
-    normalized_rainfall, standardized_dem_patches, standardized_reanalysis
-)
-
-# Save the dataset
-assembler.save_dataset(training_data)
-```
-
-## Usage
-
-To run the complete pipeline:
-
-```python
-from ML_Data_Preprocessing import assemble_training_data
-
-# Run the main function to execute the complete pipeline
-training_data = assemble_training_data.main()
-```
-
-Or to run individual components:
-
-```python
-from ML_Data_Preprocessing import extract_station_metadata
-from ML_Data_Preprocessing import build_dem_patches
-from ML_Data_Preprocessing import build_reanalysis_features
-from ML_Data_Preprocessing import onehot_month
-
-# Run individual components
-station_metadata = extract_station_metadata.main()
-dem_patches = build_dem_patches.main()
-reanalysis_features = build_reanalysis_features.main()
-onehot_month.main()  # Demonstration of month encoding
-```
-
-## Output
-
-The pipeline produces the following outputs:
-
-1. **ML Training Dataset**: A CSV file containing the assembled training examples, saved at `ML_Data_Preprocessing/output/ml_training_dataset.csv`.
-
-2. **Dataset Metadata**: A text file containing metadata about the dataset, saved at `ML_Data_Preprocessing/output/dataset_metadata.txt`.
-
-3. **Visualizations**: Various visualizations of the dataset, saved in the `ML_Data_Preprocessing/output/figures/` directory.
-
-## Notes
-
-- The pipeline directly interpolates to station locations rather than using a 5x5 grid as in the previous implementation.
-- Rainfall values are stored in inches, consistent with the original data units.
-- All features are standardized to have zero mean and unit variance for better model training.
-- The pipeline handles missing or invalid data robustly, with appropriate warnings and fallbacks.
+- Rainfall in downstream training and evaluation is reported in physical units (mm or inches) by de-standardizing with `rainfall_mm_std`.
+- The combined NPZ is the canonical dataset feeding `Hyperparameter_Tuning`, `Train_Best_Model`, and `Train_Ensemble`.
+- Ensure station rainfall CSVs are complete; missing values are skipped during assembly (with warnings).

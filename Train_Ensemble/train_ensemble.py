@@ -37,7 +37,7 @@ from Train_Ensemble.utils import (
     write_ensemble_summary,
 )
 
-def train_simple_ensemble(data, hyperparams, output_dir, hp_dir, n_folds=5, n_models_per_fold=5, epochs=100, resume_training=True, start_fold=None, start_model=None):
+def train_ensemble(data, hyperparams, output_dir, hp_dir, n_folds=5, n_models_per_fold=5, epochs=100, resume_training=True, start_fold=None, start_model=None):
     """
     Train a simple ensemble of models with different random seeds.
     
@@ -394,6 +394,7 @@ def run_ensemble_cv(
     epochs: int = 150,
     test_indices_path: str | None = None,
     hp_dir: str | None = None,
+    npz_path: str | None = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
 ):
     """Run K-fold CV simple ensemble on NPZ data; callable (no CLI).
 
@@ -404,14 +405,21 @@ def run_ensemble_cv(
     if output_dir is None:
         output_dir = os.path.join('Train_Ensemble', 'output', 'simple_ensemble_cv')
     if test_indices_path is None:
-        test_indices_path = os.path.join('Hyperparameter_Tuning', 'output_2', 'test_indices.pkl')
+        test_indices_path = os.path.join('Hyperparameter_Tuning', 'output', 'test_indices.pkl')
     if hp_dir is None:
-        hp_dir = os.path.join('Hyperparameter_Tuning', 'output_2')
+        hp_dir = os.path.join('Hyperparameter_Tuning', 'output')
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load NPZ-only data (relative to project root CWD)
-    npz_path = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
+    # Simple completion check: if a final summary exists, assume training done
+    summary_path = os.path.join(output_dir, 'ensemble_summary.txt')
+    if os.path.exists(summary_path):
+        print(f"Detected existing completed run at {output_dir}. Skipping training and metrics printing.")
+        return {
+            'status': 'already_completed',
+            'output_dir': output_dir,
+        }
+
     if not os.path.exists(npz_path):
         raise FileNotFoundError(f"NPZ not found at {npz_path}")
     data = load_assembled_npz_data(
@@ -428,7 +436,7 @@ def run_ensemble_cv(
 
     # Train ensemble with CV
     print("\nTraining ensemble model with cross-validation...")
-    results = train_simple_ensemble(
+    results = train_ensemble(
         data=data,
         hyperparams=hyperparams,
         output_dir=output_dir,
@@ -465,5 +473,5 @@ def run_ensemble_cv(
 if __name__ == '__main__':
     run_ensemble_cv(
         output_dir=os.path.join('Train_Ensemble', 'output', 'simple_ensemble_cv'),
-        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output_2', 'test_indices.pkl'),
-        hp_dir=os.path.join('Hyperparameter_Tuning', 'output_2'))
+        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output', 'test_indices.pkl'),
+        hp_dir=os.path.join('Hyperparameter_Tuning', 'output'))

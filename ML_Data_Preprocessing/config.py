@@ -5,22 +5,15 @@ This module contains all configuration parameters for the ML data preprocessing 
 """
 
 import os
-import numpy as np
-from pathlib import Path
-
-# Base project directory
-BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Input data paths
-STATION_METADATA_PATH = BASE_DIR / "raw_data" / "station_locations.csv"
-DEM_PATH = BASE_DIR / "raw_data" / "DEM" / "DEM_Tut1.tif"
-REANALYSIS_DIR = BASE_DIR / "raw_data" / "climate_variables"
-RAINFALL_DATA_DIR = BASE_DIR / "Process_Rainfall_Data" / "output" / "monthly_rainfall"
+STATION_METADATA_PATH = "raw_data/station_locations.csv"
+DEM_PATH = "raw_data/DEM/DEM_Tut1.tif"
+REANALYSIS_DIR = "raw_data/climate_variables"
+RAINFALL_DATA_DIR = "Process_Rainfall_Data/output/monthly_rainfall"
 
 # Output paths
-OUTPUT_DIR = BASE_DIR / "ML_Data_Preprocessing" / "output"
-
-# Create output directory if it doesn't exist
+OUTPUT_DIR = "ML_Data_Preprocessing/output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # DEM patch configuration
@@ -183,11 +176,11 @@ def get_config():
     """
     return {
         'paths': {
-            'station_metadata': str(STATION_METADATA_PATH),
-            'dem': str(DEM_PATH),
-            'reanalysis_dir': str(REANALYSIS_DIR),
-            'rainfall_data_dir': str(RAINFALL_DATA_DIR),
-            'output_dir': str(OUTPUT_DIR),
+            'station_metadata': STATION_METADATA_PATH,
+            'dem': DEM_PATH,
+            'reanalysis_dir': REANALYSIS_DIR,
+            'rainfall_data_dir': RAINFALL_DATA_DIR,
+            'output_dir': OUTPUT_DIR,
         },
         'dem_patch_config': DEM_PATCH_CONFIG,
         'reanalysis_variables': REANALYSIS_VARIABLES,

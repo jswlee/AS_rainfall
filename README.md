@@ -1,118 +1,79 @@
-# American Samoa Rainfall Prediction Project
+# AS_rainfall
 
-## Project Overview
-This project implements a complete machine learning pipeline for predicting rainfall in American Samoa using climate variables and topographic data. The pipeline combines climate data, digital elevation models (DEM), and historical rainfall measurements to train deep learning models that can predict monthly rainfall with high accuracy.
+End-to-end pipeline for assembling data, hyperparameter tuning, training, and ensembling rainfall prediction models.
 
-## Key Features
-- **Non-Negative Rainfall Predictions**: Ensures physically valid predictions using ReLU or Softplus output activations
-- **Multi-Modal Data Integration**: Combines climate variables, elevation data, and temporal features
-- **Ensemble Modeling**: Improves prediction accuracy and robustness through model ensembling
-- **Comprehensive Evaluation**: Provides detailed performance metrics and visualizations
-- **Modular Pipeline**: Organized into discrete, reusable components
+This README shows how to set up and run the project step by step.
 
-## Pipeline Components
-The project is organized into five main components, each building on the previous:
+## 0) Quick start
 
-1. **[Process Rainfall Data](./1_Process_Rainfall_Data/README.md)**: Processes raw rainfall measurements into monthly aggregates
-2. **[Create ML Data](./2_Create_ML_Data/README.md)**: Combines rainfall data with climate variables and DEM data
-3. **[Hyperparameter Tuning](./3_Hyperparameter_Tuning/README.md)**: Finds optimal model hyperparameters
-4. **[Train Best Model](./4_Train_Best_Model/README.md)**: Trains a single model with the best hyperparameters
-5. **[Train Ensemble](./5_Train_Ensemble/README.md)**: Creates an ensemble of models for improved predictions
+```bash
+# 1) Clone repo and enter folder
+git clone https://github.com/jswlee/AS_rainfall.git
+cd AS_rainfall
 
-## Data Sources
-- **Climate Data**: NetCDF files containing atmospheric variables (temperature, pressure, humidity, etc.)
-- **Digital Elevation Model (DEM)**: GeoTIFF files with elevation data for American Samoa
-- **Rainfall Measurements**: Historical rainfall data from weather stations in American Samoa
+# 2) Create env
+python3 -m venv .venv && source .venv/bin/activate && python -m pip install --upgrade pip
 
-## Model Architecture
-The project uses a LAND-inspired deep learning architecture with:
-- Multiple input branches for different data types
-- Dense layers with batch normalization and dropout
-- Non-negative output activation (ReLU or Softplus)
-- Configurable hyperparameters for optimal performance
-
-## Getting Started
-
-### Prerequisites
-- Python 3.8+
-- TensorFlow 2.x
-- Required packages: numpy, pandas, xarray, matplotlib, h5py, scikit-learn, keras-tuner
-
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/jswlee/AS_rainfall.git
-   cd AS_rainfall
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Running the Pipeline
-To run the complete pipeline:
-
-1. Process rainfall data:
-   ```bash
-   cd 1_Process_Rainfall_Data/scripts
-   python rainfall_daily_to_monthly.py
-   ```
-
-2. Create ML data:
-   ```bash
-   cd ../../2_Create_ML_Data/scripts
-   python rainfall_prediction_pipeline.py
-   ```
-
-3. Perform hyperparameter tuning:
-   ```bash
-   cd ../../3_Hyperparameter_Tuning/scripts
-   python extended_hyperparameter_tuning.py
-   ```
-
-4. Train the best model:
-   ```bash
-   cd ../../4_Train_Best_Model/scripts
-   python train_best_model.py
-   ```
-
-5. Train the ensemble model:
-   ```bash
-   cd ../../5_Train_Ensemble/scripts
-   python simple_ensemble.py
-   ```
-
-## Results
-The ensemble model achieves state-of-the-art performance for rainfall prediction in American Samoa, with:
-- Low root mean square error (RMSE)
-- High coefficient of determination (R²)
-- Physically valid (non-negative) rainfall predictions
-- Robust performance across different spatial and temporal conditions
-
-## Project Structure
-```
-AS_rainfall/
-├── 1_Process_Rainfall_Data/       # Process raw rainfall data
-├── 2_Create_ML_Data/              # Create ML datasets
-├── 3_Hyperparameter_Tuning/       # Find optimal hyperparameters
-├── 4_Train_Best_Model/            # Train single best model
-├── 5_Train_Ensemble/              # Train ensemble model
-├── raw_data/                      # Raw input data
-│   ├── climate_variables/         # NetCDF climate data
-│   ├── DEM/                       # Digital elevation models
-│   └── AS_raingages/              # Rainfall station data
-├── validation/                    # Validation scripts
-├── requirements.txt               # Project dependencies
-└── README.md                      # This file
+# 3) Install
+pip install -e .
 ```
 
-## Validation
-The `validation` directory contains scripts for validating the pipeline components, including:
-- Comparing files to ensure data consistency
+## 1) Clone and create an environment
 
-## License
+- Clone the repo and enter the folder:
+  ```bash
+  git clone https://github.com/jswlee/AS_rainfall.git
+  cd AS_rainfall
+  ```
+- Create and activate a virtual environment (recommended):
+  - venv
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
+    ```
+  - or conda (good for geo libs like GDAL/cartopy)
+    ```bash
+    conda create -n as_rainfall python=3.9
+    conda activate as_rainfall
+    ```
 
+## 2) Install the package
 
-## Acknowledgments
+- Editable install from the repo root:
+  ```bash
+  pip install -e .
+  ```
 
+## 3) Prepare data
+- Notebook-first approach: open `1_Rainfall_Data_Processing.ipynb` and `2_ML_Data_Preprocessing.ipynb`.
+- Ensure the combined NPZ exists at:
+  - `ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz`
+- Ensure persisted test indices exist at:
+  - `Hyperparameter_Tuning/output/test_indices.pkl`
+
+## 4) Hyperparameter tuning (optional)
+- Notebook-first approach: open `3_Hypertuning.ipynb`.
+- Best hyperparameters are saved under `Hyperparameter_Tuning/output/...` and automatically loaded by training/ensemble code via `Train_Best_Model/model_utils.load_best_hyperparameters()`.
+
+## 5) Train best model with K-fold CV
+- Notebook-first approach: open `4_Training.ipynb`.
+
+## 6) Train ensemble with cross-validation
+- Notebook-first approach: see `4_Training.ipynb`.
+
+Outputs (examples):
+- Per-fold metrics/plots under `.../fold_k/`
+- Top-level: `ensemble_summary.txt`, `test_predictions.csv`, `ensemble_test_predictions.png`, `individual_vs_ensemble.png`
+
+## 7) Interpreting results
+- Metrics (RMSE, MAE, R²) are reported in mm when `rainfall_mm_std` is present
+- Training and evaluation artifacts per model/fold are saved alongside summaries.
+
+## 8) Repository structure (high level)
+- `ML_Data_Preprocessing/` — Build features and combined NPZ
+- `Process_Rainfall_Data/` — Raw rainfall processing helpers
+- `Hyperparameter_Tuning/` — Tuning scripts and outputs
+- `Train_Best_Model/` — Best model training utilities and scripts
+- `Train_Ensemble/` — Ensemble CV training utilities and scripts
+- `requirements.txt`, `pyproject.toml`, `setup.cfg` — packaging and dependencies

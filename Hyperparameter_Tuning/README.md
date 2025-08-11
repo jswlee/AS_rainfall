@@ -1,60 +1,85 @@
-# Hyperparameter Tuning for Rainfall Prediction
+# Hyperparameter_Tuning
 
-## Overview
-This component performs hyperparameter tuning for the LAND-inspired deep learning model used for rainfall prediction. It's the third step in the rainfall prediction pipeline.
+This module contains the end-to-end workflow for tuning the LAND model hyperparameters via K-fold cross-validation on the assembled NPZ dataset. It is designed to be imported and driven from Jupyter notebooks or Python scripts, assuming the current working directory is the project root `AS_rainfall/`.
 
-## Functionality
-- Uses Keras Tuner with Bayesian Optimization to systematically search for optimal hyperparameters
-- Evaluates model performance across various hyperparameter combinations using cross-validation
-- Saves the best hyperparameter configuration for model training
-- Includes non-negative output activation (ReLU or Softplus) to ensure physically valid rainfall predictions
-- Supports resuming tuning sessions without losing previous trials
+Key entry points are:
+- `extended_hyperparameter_tuning.build_tunable_model(hp, data_metadata)`
+- `extended_hyperparameter_tuning.config(...)`
+- `tuning_core.run_tuning(config, build_model_fn)`
+- `npz_data_utils.load_assembled_npz_data(npz_path, ...)`
 
-## Directory Structure
+The module writes all tuner artifacts, logs, summaries, and the current best hyperparameters to the directory set by `config()['output_dir']` (default: `Hyperparameter_Tuning/output`).
+
+## Contents
+
+- `extended_hyperparameter_tuning.py`
+  - `build_tunable_model(hp, data_metadata)`: Builds a LAND-style Keras model whose architecture is parameterized by a Keras Tuner `HyperParameters` object. Includes non-negative `output_activation` (e.g., `softplus` or `relu`). Uses AdamW with configurable `learning_rate` and `weight_decay`.
+  - `config(...)`: Returns a dict of overridable defaults used by tuning. Paths are project-root-relative by default:
+    - `npz_path='ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz'`
+    - `test_indices_path='Hyperparameter_Tuning/output/test_indices.pkl'`
+    - `output_dir='Hyperparameter_Tuning/output'`
+    - Other knobs: `max_trials`, `executions_per_trial`, `epochs`, `batch_size`, `n_folds`, `cv_seed`, `resume`.
+
+- `tuning_core.py`
+  - `run_tuning(config, build_model_fn)`: Orchestrates K-fold CV tuning using Keras Tuner (Bayesian). Handles:
+    - Creating/splitting datasets with a persisted test set (via `test_indices_path`).
+    - Building a CV-aware `HyperModel` wrapper so each trial is evaluated through CV.
+    - Saving plots, CSVs, and progress. Respects `resume` to continue stopped runs.
+  - Saves current best hyperparameters to: `output_dir/land_model_cv_tuning/current_best_hyperparameters.py`.
+  - Provides `plot_hyperparameter_importance(tuner, output_dir)` with a graceful fallback when advanced tuner plots are unavailable.
+
+- `npz_data_utils.py`
+  - `load_assembled_npz_data(npz_path, test_indices_path=None, test_size=0.1, val_size=0.1, random_state=None)`:
+    - Loads the combined NPZ produced by `ML_Data_Preprocessing`.
+    - Returns a dict of arrays for `climate`, `local_dem`, `regional_dem`, `month`, `targets` with `train/val/test` splits, plus `metadata` including `rainfall_mm_std`.
+    - Persists/loads `test_indices.pkl` to ensure a stable test split across runs.
+
+## Assumptions
+
+- CWD is project root; all paths in `config()` are relative to the repository root.
+- Data format aligns with the combined NPZ produced by `ML_Data_Preprocessing`.
+- Keras Tuner 1.4.x and TensorFlow 2.x are available.
+
+## Typical Notebook Usage
+
+Minimal run (uses defaults):
+```python
+from Hyperparameter_Tuning.extended_hyperparameter_tuning import config, build_tunable_model
+from Hyperparameter_Tuning.tuning_core import run_tuning
+
+cfg = config()
+run_tuning(config=cfg, build_model_fn=build_tunable_model)
 ```
-3_Hyperparameter_Tuning/
-├── scripts/
-│   └── extended_hyperparameter_tuning.py  # Main script for hyperparameter tuning
-├── output/
-│   └── land_model_extended_tuner/         # Contains tuning results
-│       ├── current_best_hyperparameters.txt # Current best hyperparameters (updated during tuning)
-│       ├── current_best_hyperparameters.py  # Python-importable version of best hyperparameters
-│       └── land_model_cv_tuning/           # Detailed tuning results and trial history
-└── README.md                              # This file
+
+Explicit config:
+```python
+from Hyperparameter_Tuning.extended_hyperparameter_tuning import config, build_tunable_model
+from Hyperparameter_Tuning.tuning_core import run_tuning
+
+cfg = config(
+    npz_path='ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz',
+    test_indices_path='Hyperparameter_Tuning/output/test_indices.pkl',
+    output_dir='Hyperparameter_Tuning/output',
+    max_trials=200,
+    executions_per_trial=1,
+    epochs=150,
+    batch_size=64,
+    n_folds=10,
+    cv_seed=42,
+    resume=True,
+)
+run_tuning(cfg, build_model_fn=build_tunable_model)
 ```
 
-## Key Features
-- **Extensive Search Space**: Tunes network architecture, learning rates, regularization, and more
-- **Cross-Validation**: Uses 5-fold cross-validation for robust evaluation
-- **Output Activation**: Includes ReLU or Softplus activation to ensure non-negative rainfall predictions
-- **Early Stopping**: Implements early stopping to prevent overfitting
-- **Resumable Tuning**: Can resume tuning from previous sessions without losing trial history
+To run hyperparameter tuning in a jupyter notebook, use the following example:
+`3_Hypertuning.ipynb`
 
-## Usage
-To perform hyperparameter tuning, run:
-```bash
-cd 3_Hyperparameter_Tuning/scripts
-python extended_hyperparameter_tuning.py --data_path ../../2_Create_ML_Data/output/rainfall_prediction_data.h5 --output_dir ../output
-```
+## Outputs
 
-## Tunable Hyperparameters
-- Network architecture (number of layers, units per layer)
-- Learning rate and learning rate schedule
-- Regularization (L1, L2, dropout)
-- Batch normalization configuration
-- Output activation function (ReLU or Softplus)
-- Batch size
+- `output/land_model_cv_tuning/` containing tuner trials, logs, and `current_best_hyperparameters.py`.
+- Plots and CSVs summarizing CV performance.
 
-## Output
-- Best hyperparameter configuration saved as a Python file
-- Detailed tuning results including performance metrics for each trial
-- Visualizations of hyperparameter importance
+## Tips
 
-## Dependencies
-- tensorflow
-- keras-tuner
-- numpy, pandas
-- matplotlib (for visualization)
-
-## Next Steps
-After finding the optimal hyperparameters, proceed to step 4 (Train Best Model) to train the model with the best configuration.
+- Ensure the NPZ exists at `ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz`.
+- With `resume=True`, you can interrupt and restart tuning safely.

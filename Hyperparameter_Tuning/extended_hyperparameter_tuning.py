@@ -19,8 +19,6 @@ import tensorflow as tf
 from tensorflow.keras import layers, regularizers
 from Hyperparameter_Tuning.tuning_core import run_tuning
 
-# Assume working directory is project root (AS_rainfall). No dynamic path building.
-
 def build_tunable_model(hp, data_metadata):
     """
     Build a tunable LAND model with hyperparameters to optimize.
@@ -43,15 +41,31 @@ def build_tunable_model(hp, data_metadata):
     dropout_rate = hp.Float('dropout_rate', min_value=0.1, max_value=0.5, step=0.1)
     l2_reg = hp.Float('l2_reg', min_value=1e-6, max_value=1e-2, sampling='log')
     learning_rate = hp.Float('learning_rate', min_value=1e-4, max_value=1e-2, sampling='log')
-    weight_decay = hp.Float('weight_decay', min_value=1e-7, max_value=1e-3, sampling='log')
+    weight_decay = hp.Float('weight_decay', min_value=1e-9, max_value=1e-3, sampling='log')
     # Make batch size tunable; used by CV training loop in tuning_core
-    batch_size = hp.Int('batch_size', min_value=64, max_value=256, step=32)
+    batch_size = hp.Int('batch_size', min_value=16, max_value=256, step=16)
     
     # Architecture-specific hyperparameters
     local_dem_units = hp.Int('local_dem_units', min_value=32, max_value=256, step=32)
     regional_dem_units = hp.Int('regional_dem_units', min_value=32, max_value=256, step=32)
     month_units = hp.Int('month_units', min_value=16, max_value=128, step=16)
     climate_units = hp.Int('climate_units', min_value=64, max_value=512, step=64)
+
+    # # Other set of hyperparameters to tune based on previous results and HP importance plot
+    # na = hp.Choice('na', values=[48, 64, 80, 96, 128])
+    # nb = hp.Choice('nb', values=[128, 160, 192, 224, 256])
+    # dropout_rate = hp.Choice('dropout_rate', values=[0.4, 0.45, 0.5])
+    # l2_reg = hp.Choice('l2_reg', values=[3e-7, 1e-6, 3e-6, 1e-5])
+    # learning_rate = hp.Choice('learning_rate', values=[1e-4, 1e-3, 1e-2, 1e-1])
+    # weight_decay = hp.Choice('weight_decay', values=[3e-8, 1e-7, 3e-7, 1e-6])
+    # # Make batch size tunable; used by CV training loop in tuning_core
+    # batch_size = hp.Choice('batch_size', values=[16, 32, 48, 64, 80, 96])
+    
+    # # Architecture-specific hyperparameters
+    # local_dem_units = hp.Choice('local_dem_units', values=[192, 224, 256, 288])
+    # regional_dem_units = hp.Choice('regional_dem_units', values=[32, 48, 64])
+    # month_units = hp.Choice('month_units', values=[16, 24, 32])
+    # climate_units = hp.Choice('climate_units', values=[384, 448, 512, 576])
     
     # Advanced hyperparameters
     use_residual = hp.Boolean('use_residual')
@@ -59,6 +73,8 @@ def build_tunable_model(hp, data_metadata):
     
     # Output layer activation (to ensure non-negative predictions for rainfall)
     output_activation = hp.Choice('output_activation', values=['relu', 'softplus'])
+
+    
     
     # Create input layers
     climate_input = layers.Input(shape=data_metadata['climate_shape'], name='climate')
@@ -158,10 +174,9 @@ def build_tunable_model(hp, data_metadata):
 
 
 def config(
-    project_root: str = '.',
     npz_path: str = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
-    test_indices_path: str = os.path.join('Hyperparameter_Tuning', 'output_2', 'test_indices.pkl'),
-    output_dir: str = os.path.join('Hyperparameter_Tuning', 'output_2'),
+    test_indices_path: str = os.path.join('Hyperparameter_Tuning', 'output', 'test_indices.pkl'),
+    output_dir: str = os.path.join('Hyperparameter_Tuning', 'output'),
     max_trials: int = 150,
     executions_per_trial: int = 1,
     epochs: int = 150,
@@ -176,7 +191,6 @@ def config(
         cfg = config(max_trials=200, epochs=75)
     """
     return {
-        'project_root': project_root,
         'npz_path': npz_path,
         'test_indices_path': test_indices_path,
         'output_dir': output_dir,
@@ -189,13 +203,11 @@ def config(
         'resume': resume,
     }
 
-
 def main():
     """Run tuning with parameterized config and the model defined here."""
     cfg = config()
     run_tuning(config=cfg, build_model_fn=build_tunable_model)
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main())

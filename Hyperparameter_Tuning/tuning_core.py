@@ -240,7 +240,7 @@ def cosine_decay_with_warmup(epoch: int, total_epochs: int, warmup_epochs: int =
     progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
     return min_lr + 0.5 * (initial_lr - min_lr) * (1 + math.cos(math.pi * progress))
 
-def run_tuning(config: dict, build_model_fn):
+def run_tuning(config: dict, build_model_fn, patience: int = 10):
     """Run cross-validated hyperparameter tuning.
 
     Expects config keys:
@@ -330,7 +330,7 @@ def run_tuning(config: dict, build_model_fn):
             print("No completed trials found. Starting from scratch.")
 
     early_stopping = tf.keras.callbacks.EarlyStopping(
-        monitor='val_loss', patience=30, restore_best_weights=True, verbose=1
+        monitor='val_loss', patience=patience, restore_best_weights=True, verbose=1
     )
     lr_scheduler = tf.keras.callbacks.LearningRateScheduler(
         lambda epoch: cosine_decay_with_warmup(epoch, total_epochs=config['epochs']), verbose=1

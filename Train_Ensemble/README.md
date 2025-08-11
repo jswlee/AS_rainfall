@@ -1,72 +1,109 @@
-# Ensemble Model for Rainfall Prediction
+# Train_Ensemble
 
-## Overview
-This component trains an ensemble of LAND-inspired deep learning models to improve prediction accuracy and robustness. It's the final step in the rainfall prediction pipeline.
+Simple cross-validated ensemble training for the LAND rainfall model. Trains multiple models per CV fold with different random seeds, evaluates, and aggregates predictions and metrics. Outputs are in physical units when the NPZ includes `rainfall_mm_std` metadata.
 
-## Functionality
-- Creates an ensemble of models with the same architecture but different random initializations
-- Implements k-fold cross-validation for robust evaluation
-- Ensures non-negative rainfall predictions with appropriate output activation functions (ReLU or Softplus)
-- Generates comprehensive visualizations of model performance
-- Combines predictions from multiple models for improved accuracy
-- Reports all rainfall values in inches (the original measurement unit)
+All paths are assumed project-root-relative (CWD at `AS_rainfall/`).
 
-## Directory Structure
-```
-5_Train_Ensemble/
-├── scripts/
-│   ├── simple_ensemble.py           # Main script for ensemble training
-│   └── utils.py                     # Plotting and file I/O helpers for ensemble
-├── output/
-│   ├── simple_ensemble/              # Ensemble model results
-│   │   ├── fold_1/                  # Results for fold 1
-│   │   │   ├── model_1/             # Results for model 1 in fold 1
-│   │   │   └── ...
-│   │   └── ...
-│   └── plots/                       # Visualization plots
-└── README.md                        # This file
-```
+## Contents
 
-## Key Features
-- **K-Fold Cross-Validation**: Trains models on different data splits for robust evaluation
-- **Multiple Models Per Fold**: Creates multiple models for each data fold
-- **Non-Negative Output**: Uses ReLU or Softplus activation to ensure physically valid rainfall predictions
-- **Comprehensive Visualization**: Generates detailed plots of model performance with proper units
-- **Ensemble Averaging**: Combines predictions from multiple models to reduce variance
-- **Shared Model Architecture**: Uses model_utils.py module shared with the best model training step
+- `Train_Ensemble/train_ensemble.py`
+  - `run_ensemble_cv(...)` — High-level API to run K-fold CV ensemble training on the combined NPZ dataset.
+  - `train_ensemble(...)` — Core routine that performs CV splitting, per-fold model training, evaluation, logging, and ensembling.
+- `Train_Ensemble/utils.py`
+  - Plotting helpers:
+    - `plot_ensemble_test_predictions(...)`
+    - `plot_individual_vs_ensemble(...)`
+    - `plot_fold_ensemble_predictions(...)`
+  - File I/O helpers:
+    - `save_progress(...)`
+    - `write_training_summary(...)`
+    - `write_fold_summary(...)`
+    - `write_test_predictions_csv(...)`
+    - `write_ensemble_summary(...)`
+
+## Upstream Dependencies
+
+- Data loading: `Hyperparameter_Tuning/npz_data_utils.load_assembled_npz_data(...)`
+- Model + hyperparameters: `Train_Best_Model/model_utils.{load_best_hyperparameters, build_model}`
+- Training utilities: `Train_Best_Model/training.{train_model, evaluate_model, plot_training_history}`
+- TF dataset builder: `Train_Best_Model/data_utils.create_tf_dataset(...)`
+
+## Data & Units
+
+- Default dataset: `ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz`
+- If `metadata['rainfall_mm_std'] > 0`, charts and text outputs are de-standardized to millimeters.
+- Otherwise, inches are used (legacy conversion ×100 for values from training units).
+
+## API Overview
+
+### run_ensemble_cv(...)
+Defined in `Train_Ensemble/train_ensemble.py`.
+
+Parameters (defaults shown):
+- `output_dir='Train_Ensemble/output/simple_ensemble_cv'`
+- `n_folds=15`, `n_models_per_fold=5`, `epochs=150`
+- `test_indices_path='Hyperparameter_Tuning/output/test_indices.pkl'`
+- `hp_dir='Hyperparameter_Tuning/output'`
+- `npz_path='ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz'`
+
+Behavior:
+- Skips training if `ensemble_summary.txt` already exists in `output_dir`.
+- Loads the combined NPZ and persisted test indices, loads best hyperparameters, then calls `train_ensemble(...)`.
+- Prints final CV/test metrics (mm if available).
+
+### train_ensemble(data, hyperparams, output_dir, hp_dir, ...)
+Key points:
+- Requires `hyperparams['batch_size']` (enforced, no default fallback).
+- Combines original train+val into a CV pool; the held-out test set is fixed by `test_indices.pkl`.
+- Uses `KFold(n_splits=n_folds, shuffle=True, random_state=42)`.
+- Per fold: builds TF datasets, trains `n_models_per_fold` models with distinct seeds `[42 + i]`, saves `model.h5`, history plot, evaluation files, and writes per-model `training_summary.txt`.
+- Fold ensemble prediction is the mean of per-model test predictions; writes `fold_summary.txt` and a fold ensemble plot.
+- Aggregates CV metrics and computes a final test ensemble by averaging predictions from all models across all folds.
+- Writes `test_predictions.csv` and `ensemble_summary.txt`; generates ensemble plots.
+- Supports resume via `training_progress.pkl` when `resume_training=True`.
+
+## Outputs
+
+Created under `output_dir` (default `Train_Ensemble/output/simple_ensemble_cv/`):
+
+- Per fold: `fold_{k}/`
+  - Per model: `model_{i}/`
+    - `model.h5`
+    - `training_history.png`
+    - `evaluation_metrics.csv` and `evaluation_metrics.txt`
+    - `training_summary.txt`
+  - `fold_summary.txt`
+  - `fold_ensemble_predictions.png`
+
+- Top-level:
+  - `ensemble_summary.txt` (hyperparameters, per-fold metrics, averages, final test metrics, training time)
+  - `test_predictions.csv` (mm or inches depending on metadata)
+  - `ensemble_test_predictions.png`
+  - `individual_vs_ensemble.png`
+  - `training_progress.pkl` (resume metadata)
 
 ## Usage
-To train the ensemble model, run:
-```bash
-cd 5_Train_Ensemble/scripts
-python simple_ensemble.py --data_path ../../2_Create_ML_Data/output/rainfall_prediction_data.h5 --hyperparams_path ../../3_Hyperparameter_Tuning/output/land_model_extended_tuner/best_hyperparameters.py --output_dir ../output
+
+Notebook/script usage:
+```python
+from Train_Ensemble.train_ensemble import run_ensemble_cv
+
+results = run_ensemble_cv(
+    output_dir='Train_Ensemble/output/simple_ensemble_cv',
+    n_folds=10,
+    n_models_per_fold=5,
+    epochs=150,
+    test_indices_path='Hyperparameter_Tuning/output/test_indices.pkl',
+    hp_dir='Hyperparameter_Tuning/output',
+    npz_path='ML_Data_Preprocessing/output/assembled_npz/full_training_data.npz',
+)
 ```
 
-To generate visualizations after training:
-```bash
-python generate_visualizations.py --ensemble_dir ../output
-```
+For Jupyter notebook example, see `4_Training.ipynb`.
 
-## Ensemble Configuration
-- Number of folds: 5 (configurable)
-- Models per fold: 5 (configurable)
-- Training epochs: 100 (configurable)
-- Batch size: 32 (configurable)
+## Notes & Tips
 
-## Output
-- Trained model weights for each fold and model
-- Performance metrics for individual models and the ensemble
-- Detailed visualizations including:
-  - Actual vs. predicted rainfall
-  - Error distributions
-  - Temporal performance analysis
-  - Spatial performance analysis
-
-## Dependencies
-- tensorflow
-- numpy, pandas
-- matplotlib, seaborn (for visualization)
-- scikit-learn (for metrics and cross-validation)
-
-## Final Results
-The ensemble model provides the most robust and accurate rainfall predictions by combining the strengths of multiple models. This approach reduces the impact of individual model biases and improves generalization to unseen data.
+- Ensure the combined NPZ exists and, if available, includes `rainfall_mm_std` metadata for mm outputs.
+- Keep `hp_dir` aligned with your latest tuning run so `load_best_hyperparameters(...)` resolves properly.
+- Use `resume_training=True` to continue long runs safely; the trainer skips completed models/folds.
+- Maintain consistent CV parameters (`n_folds`, `test_indices_path`) when comparing across runs.

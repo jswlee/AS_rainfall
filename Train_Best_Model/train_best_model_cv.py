@@ -23,16 +23,15 @@ SEED = 42
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
 
-
 def config(
     project_root: str = '.',
     npz_path: str = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
-    test_indices_path: str = os.path.join('Hyperparameter_Tuning', 'output_2', 'test_indices.pkl'),
+    test_indices_path: str = os.path.join('Hyperparameter_Tuning', 'output', 'test_indices.pkl'),
     output_dir: str = os.path.join('Train_Best_Model', 'output', 'land_model_best_cv'),
     n_folds: int = 10,
     epochs: int = 150,
     batch_size: int = 64,
-    hp_dir: str = os.path.join('Hyperparameter_Tuning', 'output_2'),
+    hp_dir: str = os.path.join('Hyperparameter_Tuning', 'output'),
     cv_seed: int = 42,
 ):
     """Create a CV training config with overridable defaults."""
