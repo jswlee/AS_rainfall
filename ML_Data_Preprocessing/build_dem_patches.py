@@ -185,7 +185,52 @@ class DEMPatchBuilder:
             # even when the extracted patch is slightly rectangular due to padding/cropping at DEM edges.
             # scipy.ndimage.zoom applies these factors independently to height (axis 0) and width (axis 1).
             zoom_factor = (patch_size / patch.shape[0], patch_size / patch.shape[1])
-            patch = zoom(patch, zoom_factor, order=1)  # order=1 is bilinear interpolation
+            # Save the pre-resize patch for alternative averaging comparison
+            pre_resize = patch
+            # Bilinear interpolation result
+            patch_interpolated = zoom(pre_resize, zoom_factor, order=1)  # order=1 is bilinear interpolation
+            print(f"Interpolated DEM (shape {patch_interpolated.shape}):\n{patch_interpolated}")
+
+            # Alternative (commented out): block-wise average downsampling via reshape
+            # This computes the mean elevation within non-overlapping blocks so that each
+            # output cell is the average of its corresponding input block, which can be
+            # preferable if you want area-averaged values rather than interpolated ones.
+            # Note: This requires that patch.shape is exactly (patch_size * bh, patch_size * bw)
+            # for some integers bh and bw. If not, you'd need to pad/crop first.
+            
+            # Compute block-mean from the pre-resize patch using edge padding to ensure divisibility
+            # We need the pre-resize array shape to be exactly divisible by patch_size in both dims
+            # so it can be reshaped into (patch_size, bh, patch_size, bw) blocks. The expressions
+            # (-h) % patch_size and (-w) % patch_size give the minimal non-negative padding needed
+            # to reach the next multiples of patch_size without changing the center location.
+            h, w = pre_resize.shape
+            pad_h = (-h) % patch_size  # minimal rows to add so (h + pad_h) % patch_size == 0
+            pad_w = (-w) % patch_size  # minimal cols to add so (w + pad_w) % patch_size == 0
+            if pad_h or pad_w:
+                # Split padding as symmetrically as possible around the center so the station
+                # remains centered in the patch. Any odd remainder is placed on the bottom/right.
+                top = pad_h // 2
+                bottom = pad_h - top
+                left = pad_w // 2
+                right = pad_w - left
+                # Edge padding replicates border values, avoiding artificial gradients or zeros that
+                # would bias the block averages near edges.
+                patch_padded = np.pad(pre_resize, ((top, bottom), (left, right)), mode='edge')
+                print(f"Applied edge padding for block-mean: top={top}, bottom={bottom}, left={left}, right={right}")
+            else:
+                patch_padded = pre_resize
+            # Now divisible; compute block sizes
+            bh = patch_padded.shape[0] // patch_size  # rows per output cell (block height)
+            bw = patch_padded.shape[1] // patch_size  # cols per output cell (block width)
+            # Reshape to (out_rows, bh, out_cols, bw), where each output cell corresponds to a
+            # contiguous bh x bw block in the padded array; then average over the block axes (1, 3).
+            patch_block = patch_padded.reshape(patch_size, bh, patch_size, bw)
+            patch_avg = patch_block.mean(axis=(1, 3))
+            patch_avg = self._clean_dem_data(patch_avg)
+            print(f"Block-mean averaged DEM (shape {patch_avg.shape}):\n{patch_avg}")
+
+            # Continue with the interpolated patch as the function output path
+            patch = patch_interpolated
         
         # Final check for NaN or extreme values
         patch = self._clean_dem_data(patch)
