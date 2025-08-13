@@ -107,7 +107,7 @@ def run_wide_format_processing(input_file, output_dir):
     process_wide_format_csv(input_file, output_dir)
 
 if __name__ == "__main__":
-    INPUT_FILE = '/Users/jlee/Desktop/github/AS_rainfall/raw_data/daily_wide_4302025.csv'
-    OUTPUT_DIR = '/Users/jlee/Desktop/github/AS_rainfall/raw_data/rainfall_added'
+    INPUT_FILE = 'raw_data/daily_wide_4302025.csv'
+    OUTPUT_DIR = 'raw_data/rainfall_added'
     
     run_wide_format_processing(INPUT_FILE, OUTPUT_DIR)
