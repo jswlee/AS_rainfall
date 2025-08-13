@@ -178,6 +178,12 @@ class DEMPatchBuilder:
         # Resize to the exact requested patch_size using bilinear interpolation
         # This ensures all patches have consistent dimensions regardless of source resolution
         if patch.shape[0] != patch_size or patch.shape[1] != patch_size:
+            # zoom_factor is a tuple of scale multipliers per axis: (rows_scale, cols_scale)
+            # - rows_scale = desired_rows / current_rows
+            # - cols_scale = desired_cols / current_cols
+            # Using per-axis factors preserves the aspect ratio of the output grid (square patch_size x patch_size)
+            # even when the extracted patch is slightly rectangular due to padding/cropping at DEM edges.
+            # scipy.ndimage.zoom applies these factors independently to height (axis 0) and width (axis 1).
             zoom_factor = (patch_size / patch.shape[0], patch_size / patch.shape[1])
             patch = zoom(patch, zoom_factor, order=1)  # order=1 is bilinear interpolation
         
