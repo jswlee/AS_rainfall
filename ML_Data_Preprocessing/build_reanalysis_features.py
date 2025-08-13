@@ -270,27 +270,32 @@ class ReanalysisFeatureBuilder:
                 success = False
         return success
     
-    def extract_patch(self, var_name, year, month, lat, lon):
+    def extract_features_at_location(self, var_name, year, month, lat, lon):
         """
-        Extract a patch of reanalysis data for a specific variable, time, and location.
+        Extract a patch of reanalysis data for a specific climate variable centered around a rainfall station location.
+        
+        Similar to how DEM patches are extracted around station coordinates, this method creates patches of
+        climate variables centered on the nearest grid point to each rainfall station. These reanalysis patches
+        provide atmospheric context that complements the topographic context from DEM patches.
         
         Parameters
         ----------
         var_name : str
-            Name of the variable (key in variable_configs)
+            Name of the climate variable (key in variable_configs)
         year : int
-            Year
+            Year of the data to extract
         month : int
-            Month (1-12)
+            Month of the data to extract (1-12)
         lat : float
-            Latitude of the station
+            Latitude of the rainfall station location
         lon : float
-            Longitude of the station
+            Longitude of the rainfall station location
             
         Returns
         -------
         numpy.ndarray
-            Patch of reanalysis data with shape (patch_size, patch_size)
+            Patch of reanalysis data with shape (patch_size, patch_size) centered on the nearest
+            grid point to the rainfall station location
         """
         if var_name not in self.climate_data:
             print(f"Variable '{var_name}' not processed.")
@@ -575,23 +580,61 @@ class ReanalysisFeatureBuilder:
 
     def build_features_for_all_stations_with_map(self, station_metadata, station_months_map):
         """
-        Build features for all stations using a precomputed mapping of available (year, month) pairs per station.
+        Build reanalysis feature patches for all rainfall stations using a precomputed mapping of available (year, month) pairs.
+        
+        This method extracts climate variable patches centered on each rainfall station's coordinates for each
+        available month with rainfall data. These reanalysis patches complement the DEM patches by providing
+        atmospheric context around each station, while the DEM patches provide topographic context.
+        
+        The resulting features are organized in a nested dictionary structure:
+        {station_name: {(year, month): {variable_name: patch_array, ...}, ...}, ...}
+        
+        Parameters
+        ----------
+        station_metadata : dict
+            Dictionary mapping station names to metadata including latitude and longitude coordinates
+            Format: {station_name: {'latitude': float, 'longitude': float, ...}, ...}
+        station_months_map : dict
+            Dictionary mapping station names to lists of (year, month) tuples with available rainfall data
+            Format: {station_name: [(year, month), ...], ...}
+            
+        Returns
+        -------
+        dict
+            Nested dictionary of reanalysis features for each station, year, month, and variable
         """
+        # Initialize dictionary to store features for all stations
         all_features = {}
+        
+        # Process each rainfall station using its coordinates
         for station_name, metadata in station_metadata.items():
+            # Skip stations with no available rainfall data months
             if station_name not in station_months_map:
                 continue
+                
             print(f"Building features for station {station_name}...")
-            pairs = station_months_map[station_name]
-            lat = metadata['latitude']
-            lon = metadata['longitude']
+            pairs = station_months_map[station_name]  # List of (year, month) tuples with rainfall data
+            
+            # Get the station's geographic coordinates
+            lat = metadata['latitude']   # Latitude of the rainfall station
+            lon = metadata['longitude']  # Longitude of the rainfall station
+            
+            # Initialize dictionary to store features for this station
             station_feats = {}
+            
+            # Process each year-month combination with rainfall data
             for (year, month) in pairs:
                 key = (year, month)
                 station_feats[key] = {}
+                
+                # Extract patches for each climate variable centered on the station's coordinates
+                # These patches complement the DEM patches by providing atmospheric context
                 for var_name in self.variable_configs.keys():
-                    patch = self.extract_patch(var_name, year, month, lat, lon)
+                    # Extract a patch centered on the station's coordinates
+                    patch = self.extract_features_at_location(var_name, year, month, lat, lon)
                     station_feats[key][var_name] = patch
+                    
+            # Store all features for this station
             all_features[station_name] = station_feats
         return all_features
 

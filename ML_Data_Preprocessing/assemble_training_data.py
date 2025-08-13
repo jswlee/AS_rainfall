@@ -132,28 +132,47 @@ class TrainingDataAssembler:
                                   out_dir: str = None,
                                   out_filename: str = 'full_training_data.npz'):
         """
-        Assemble a single, ready-to-train NPZ using precomputed DEM and reanalysis NPZs.
-
-        Outputs include:
-          - stations, years, months: [N]
-          - month_onehot:             [N, 12]
-          - rainfall_mm:              [N] (inches -> mm, min–max to [0,1])
-          - rainfall_mm_min, rainfall_mm_max: floats (pre-scaling mm)
-          - rainfall_mm_divstd:       [N] (inches -> mm, divided by global std)
-          - rainfall_mm_std:          float (global std in mm)
-          - dem_local_minmax:         [N, H_l, W_l] scaled to [0,1]
-          - dem_regional_minmax:      [N, H_r, W_r] scaled to [0,1]
-          - dem_local_divstd:         [N, H_l, W_l] raw / global std
-          - dem_regional_divstd:      [N, H_r, W_r] raw / global std
-          - dem_local_min, dem_local_max: floats
-          - dem_regional_min, dem_regional_max: floats
-          - dem_local_std, dem_regional_std: floats
-          - reanalysis_patches:       [N, V, H, W] (already standardized by builder)
-          - variables:                [V]
+        Assemble a single, ready-to-train NPZ file by combining DEM patches (extracted around rainfall station coordinates),
+        reanalysis features, and rainfall data for machine learning.
+        
+        This method aligns three key data sources:
+        1. DEM patches: Topographic elevation data extracted around each rainfall station location at two scales
+           (local for fine detail and regional for broader context)
+        2. Reanalysis features: Atmospheric variables from climate reanalysis data
+        3. Rainfall data: Monthly rainfall measurements from station records
+        
+        The resulting NPZ file contains the following arrays:
+        
+        Metadata arrays:
+          - stations, years, months: [N] - Station names, years, and months for each data point
+          - month_onehot:           [N, 12] - One-hot encoded month indicators
+          
+        Rainfall data (labels for ML model):
+          - rainfall_mm:            [N] - Monthly rainfall values (inches -> mm, min-max normalized to [0,1])
+          - rainfall_mm_divstd:     [N] - Monthly rainfall values (inches -> mm, divided by global std)
+          - rainfall_mm_min, rainfall_mm_max: floats - Global min/max values for rainfall (in mm)
+          - rainfall_mm_std:        float - Global standard deviation for rainfall (in mm)
+          
+        DEM patches (extracted around rainfall station coordinates):
+          - dem_local_minmax:       [N, H_l, W_l] - Local DEM patches scaled to [0,1] range
+          - dem_regional_minmax:    [N, H_r, W_r] - Regional DEM patches scaled to [0,1] range
+          - dem_local_divstd:       [N, H_l, W_l] - Local DEM patches divided by global std
+          - dem_regional_divstd:    [N, H_r, W_r] - Regional DEM patches divided by global std
+          
+        DEM global statistics (for denormalization if needed):
+          - dem_local_min, dem_local_max: floats - Global min/max values for local DEM patches
+          - dem_regional_min, dem_regional_max: floats - Global min/max values for regional DEM patches
+          - dem_local_std, dem_regional_std: floats - Global standard deviations for DEM patches
+          
+        Reanalysis data:
+          - reanalysis_patches:     [N, V, H, W] - Standardized reanalysis patches
+          - variables:              [V] - Names of reanalysis variables
 
         Notes:
-          - The reanalysis NPZ defines the primary index. DEM and rainfall are aligned to it.
+          - The reanalysis NPZ defines the primary index. DEM patches and rainfall are aligned to it.
+          - DEM patches are extracted around rainfall station coordinates using their longitude and latitude.
           - DEM min-max scaling is computed globally across all available DEM patches (separately for local and regional).
+          - Each station-year-month combination has corresponding DEM patches, reanalysis features, and rainfall values.
         """
         if dem_npz_path is None:
             dem_npz_path = os.path.join(str(config.OUTPUT_DIR), 'dem_npz', 'dem_patches_all_standardized.npz')
@@ -217,72 +236,118 @@ class TrainingDataAssembler:
         rainfall_mm = (rainfall_mm_raw - rmin) / rden
         rainfall_mm_divstd = rainfall_mm_raw / rstd_safe
 
-        # Align and collect standardized DEM patches to arrays aligned with reanalysis index
-        dem_local_npz = dem_npz['dem_local_minmax']
-        dem_regional_npz = dem_npz['dem_regional_minmax']
+        # Load and align standardized DEM patches (extracted around rainfall station locations)
+        # These patches represent the topographic context around each rainfall station
+        # and are important features for the machine learning model
+        
+        # Get the min-max normalized DEM patches (scaled to [0,1] range)
+        dem_local_npz = dem_npz['dem_local_minmax']      # Local patches (finer detail, smaller area)
+        dem_regional_npz = dem_npz['dem_regional_minmax']  # Regional patches (broader context, larger area)
+        
+        # Get the standard deviation normalized DEM patches if available
         dem_local_divstd_npz = dem_npz['dem_local_divstd'] if 'dem_local_divstd' in dem_npz.files else None
         dem_regional_divstd_npz = dem_npz['dem_regional_divstd'] if 'dem_regional_divstd' in dem_npz.files else None
-        local_list = []
-        regional_list = []
-        local_divstd_list = []
-        regional_divstd_list = []
-        for key in re_keys:
-            if key in dem_keys:
+        
+        # Initialize lists to store aligned DEM patches
+        # We need to align DEM patches with the reanalysis data index
+        local_list = []           # For local min-max normalized patches
+        regional_list = []        # For regional min-max normalized patches
+        local_divstd_list = []    # For local std-normalized patches
+        regional_divstd_list = []  # For regional std-normalized patches
+        # For each station-year-month combination in the reanalysis data,
+        # find the corresponding DEM patches (which were extracted around rainfall station locations)
+        for key in re_keys:  # Each key is a (station_name, year, month) tuple
+            if key in dem_keys:  # If we have DEM data for this station-year-month
+                # Find the index of this station-year-month in the DEM data
                 di = {(str(s), int(y), int(m)): i for i, (s, y, m) in enumerate(zip(dem_stations.tolist(), dem_years.tolist(), dem_months.tolist()))}[key]
-                local_list.append(dem_local_npz[di])
-                regional_list.append(dem_regional_npz[di])
+                
+                # Get the DEM patches for this station-year-month
+                local_list.append(dem_local_npz[di])      # Local patch (finer detail)
+                regional_list.append(dem_regional_npz[di])  # Regional patch (broader context)
+                
+                # Also get std-normalized patches if available
                 if dem_local_divstd_npz is not None and dem_regional_divstd_npz is not None:
                     local_divstd_list.append(dem_local_divstd_npz[di])
                     regional_divstd_list.append(dem_regional_divstd_npz[di])
             else:
-                # Fill NaNs for missing DEM using shapes from standardized arrays
-                lshape = dem_local_npz[0].shape
-                rshape = dem_regional_npz[0].shape
+                # For stations without DEM data, fill with NaNs to maintain alignment
+                # This ensures all arrays have the same length as the reanalysis data
+                lshape = dem_local_npz[0].shape   # Shape of local DEM patches
+                rshape = dem_regional_npz[0].shape  # Shape of regional DEM patches
+                
+                # Create NaN arrays with the same shape as the DEM patches
                 local_list.append(np.full(lshape, np.nan, dtype=np.float32))
                 regional_list.append(np.full(rshape, np.nan, dtype=np.float32))
+                
+                # Also create NaN arrays for std-normalized patches if needed
                 if dem_local_divstd_npz is not None and dem_regional_divstd_npz is not None:
                     local_divstd_list.append(np.full(dem_local_divstd_npz[0].shape, np.nan, dtype=np.float32))
                     regional_divstd_list.append(np.full(dem_regional_divstd_npz[0].shape, np.nan, dtype=np.float32))
-        dem_local_minmax = np.asarray(local_list, dtype=np.float32)
-        dem_regional_minmax = np.asarray(regional_list, dtype=np.float32)
+        # Convert lists of DEM patches to numpy arrays for the final dataset
+        # These arrays contain the topographic context around each rainfall station
+        # and will be used as input features for the machine learning model
+        dem_local_minmax = np.asarray(local_list, dtype=np.float32)  # Local patches (min-max normalized)
+        dem_regional_minmax = np.asarray(regional_list, dtype=np.float32)  # Regional patches (min-max normalized)
+        
+        # Convert std-normalized patches if available
         dem_local_divstd = np.asarray(local_divstd_list, dtype=np.float32) if local_divstd_list else None
         dem_regional_divstd = np.asarray(regional_divstd_list, dtype=np.float32) if regional_divstd_list else None
 
-        # Pull min/max metadata directly
-        l_min = float(dem_npz['dem_local_min'])
-        l_max = float(dem_npz['dem_local_max'])
-        r_min = float(dem_npz['dem_regional_min'])
-        r_max = float(dem_npz['dem_regional_max'])
-        l_std = float(dem_npz['dem_local_std']) if 'dem_local_std' in dem_npz.files else np.float32(1.0)
-        r_std = float(dem_npz['dem_regional_std']) if 'dem_regional_std' in dem_npz.files else np.float32(1.0)
+        # Extract the global statistics used for DEM standardization
+        # These are needed if we want to convert back to original elevation values
+        # or ensure consistent scaling across different datasets
+        l_min = float(dem_npz['dem_local_min'])    # Global minimum for local patches
+        l_max = float(dem_npz['dem_local_max'])    # Global maximum for local patches
+        r_min = float(dem_npz['dem_regional_min'])  # Global minimum for regional patches
+        r_max = float(dem_npz['dem_regional_max'])  # Global maximum for regional patches
+        l_std = float(dem_npz['dem_local_std']) if 'dem_local_std' in dem_npz.files else np.float32(1.0)  # Global std for local
+        r_std = float(dem_npz['dem_regional_std']) if 'dem_regional_std' in dem_npz.files else np.float32(1.0)  # Global std for regional
 
         # Reanalysis patches (already standardized in builder save)
         re_features = re_npz['patches'] if 'patches' in re_npz.files else None
         re_variables = re_npz['variables'] if 'variables' in re_npz.files else None
 
-        # Save compact NPZ
+        # Save all data to a single compressed NPZ file
+        # This file will contain:
+        # 1. Metadata (stations, years, months)
+        # 2. Month one-hot encodings
+        # 3. Rainfall data (both min-max and std-normalized)
+        # 4. DEM patches extracted around rainfall station coordinates (both local and regional)
+        # 5. Reanalysis features
+        # 6. Global statistics for denormalization
         out_path = os.path.join(out_dir, out_filename)
         np.savez_compressed(
             out_path,
+            # Metadata arrays for indexing
             stations=re_stations,
             years=re_years,
             months=re_months,
+            
+            # Month one-hot encodings (12 dimensions)
             month_onehot=month_onehot,
-            rainfall_mm=rainfall_mm,
-            rainfall_mm_divstd=rainfall_mm_divstd,
-            rainfall_mm_std=np.array(rstd, dtype=np.float32),
-            rainfall_mm_min=np.array(rmin, dtype=np.float32),
-            rainfall_mm_max=np.array(rmax, dtype=np.float32),
-            dem_local_minmax=dem_local_minmax,
-            dem_regional_minmax=dem_regional_minmax,
-            dem_local_divstd=dem_local_divstd if dem_local_divstd is not None else np.array([]),
-            dem_regional_divstd=dem_regional_divstd if dem_regional_divstd is not None else np.array([]),
-            dem_local_min=np.array(l_min, dtype=np.float32),
-            dem_local_max=np.array(l_max, dtype=np.float32),
-            dem_regional_min=np.array(r_min, dtype=np.float32),
-            dem_regional_max=np.array(r_max, dtype=np.float32),
-            dem_local_std=np.array(l_std, dtype=np.float32),
-            dem_regional_std=np.array(r_std, dtype=np.float32),
+            
+            # Rainfall data (labels for ML model)
+            rainfall_mm=rainfall_mm,                              # Min-max normalized rainfall
+            rainfall_mm_divstd=rainfall_mm_divstd,                # Std-normalized rainfall
+            rainfall_mm_std=np.array(rstd, dtype=np.float32),     # Global std for denormalization
+            rainfall_mm_min=np.array(rmin, dtype=np.float32),     # Global min for denormalization
+            rainfall_mm_max=np.array(rmax, dtype=np.float32),     # Global max for denormalization
+            
+            # DEM patches extracted around rainfall station coordinates (features for ML model)
+            dem_local_minmax=dem_local_minmax,                    # Local patches (min-max normalized)
+            dem_regional_minmax=dem_regional_minmax,              # Regional patches (min-max normalized)
+            dem_local_divstd=dem_local_divstd if dem_local_divstd is not None else np.array([]),      # Local patches (std-normalized)
+            dem_regional_divstd=dem_regional_divstd if dem_regional_divstd is not None else np.array([]),  # Regional patches (std-normalized)
+            
+            # Global statistics for DEM patches (for denormalization)
+            dem_local_min=np.array(l_min, dtype=np.float32),      # Global min for local patches
+            dem_local_max=np.array(l_max, dtype=np.float32),      # Global max for local patches
+            dem_regional_min=np.array(r_min, dtype=np.float32),   # Global min for regional patches
+            dem_regional_max=np.array(r_max, dtype=np.float32),   # Global max for regional patches
+            dem_local_std=np.array(l_std, dtype=np.float32),      # Global std for local patches
+            dem_regional_std=np.array(r_std, dtype=np.float32),   # Global std for regional patches
+            
+            # Reanalysis features (additional features for ML model)
             reanalysis_patches=re_features if re_features is not None else np.array([]),
             variables=re_variables if re_variables is not None else np.array([]),
         )
@@ -357,15 +422,34 @@ class TrainingDataAssembler:
     
     def assemble_training_examples(self, normalized_rainfall, dem_patches, reanalysis_features):
         """
-        Assemble training examples by combining rainfall, DEM patches, and reanalysis features.
+        Assemble training examples by combining rainfall data, DEM patches extracted around rainfall station coordinates,
+        and reanalysis features into a single DataFrame for machine learning.
+        
+        This method creates a tabular dataset where each row represents a specific station-year-month combination
+        and includes:
+        1. Metadata (station name, year, month)
+        2. Rainfall values (both original and normalized)
+        3. One-hot encoded month indicators
+        4. Flattened DEM patches (both local and regional) extracted around the rainfall station's coordinates
+        5. Flattened reanalysis features
+        
+        The resulting DataFrame can be used directly for traditional machine learning models that expect
+        tabular data, while the NPZ format is more suitable for deep learning models that can work with
+        the original 2D patch structure.
         
         Args:
-            normalized_rainfall (dict): Dictionary with normalized rainfall data
-            dem_patches (dict): Dictionary with DEM patches
+            normalized_rainfall (dict): Dictionary with normalized rainfall data keyed by station name
+                Each value is a DataFrame with columns: Year, Month, Rainfall, Rainfall_Normalized
+            dem_patches (dict): Dictionary with DEM patches extracted around rainfall station coordinates
+                Format: {station_name: {'local': local_patch_array, 'regional': regional_patch_array}}
+                Where local_patch_array captures fine-grained elevation details around the station
+                and regional_patch_array captures broader topographic context
             reanalysis_features (dict): Dictionary with reanalysis features
+                Format: {station_name: {(year, month): {var_name: feature_array, ...}, ...}}
             
         Returns:
-            pandas.DataFrame: DataFrame containing assembled training examples
+            pandas.DataFrame: DataFrame containing assembled training examples with all features flattened
+                into columns, suitable for traditional machine learning models
         """
         # Lists to store data for the final DataFrame
         data_rows = []
@@ -382,9 +466,10 @@ class TrainingDataAssembler:
             # Get rainfall data
             rainfall_df = normalized_rainfall[station_name]
             
-            # Get DEM patches
-            local_dem = dem_patches[station_name]['local']
-            regional_dem = dem_patches[station_name]['regional']
+            # Get DEM patches that were extracted around this rainfall station's coordinates
+            # These patches represent the topographic context around the station location
+            local_dem = dem_patches[station_name]['local']      # Fine-grained elevation details (smaller area, higher resolution)
+            regional_dem = dem_patches[station_name]['regional']  # Broader topographic context (larger area, lower resolution)
             
             # Process each year and month
             for _, row in rainfall_df.iterrows():
@@ -416,11 +501,15 @@ class TrainingDataAssembler:
                 for i in range(12):
                     row_dict[f'month_onehot_{i+1}'] = month_onehot[i]
                 
-                # Add flattened DEM patches
+                # Add flattened DEM patches extracted around the rainfall station's coordinates
+                # We convert the 2D patches into a series of 1D features for tabular machine learning
+                # Local patches capture fine-grained elevation details immediately surrounding the station
                 for i in range(local_dem.shape[0]):
                     for j in range(local_dem.shape[1]):
                         row_dict[f'dem_local_{i}_{j}'] = local_dem[i, j]
                 
+                # Regional patches capture broader topographic context around the station
+                # This helps the model understand larger-scale terrain features that may influence rainfall
                 for i in range(regional_dem.shape[0]):
                     for j in range(regional_dem.shape[1]):
                         row_dict[f'dem_regional_{i}_{j}'] = regional_dem[i, j]
