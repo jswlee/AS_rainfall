@@ -1,6 +1,7 @@
-venv/
+.venv/
 data/climate_variables/
 .DS_Store
 *.pyc
 *.nc
 *.pkl
+*.egg-info

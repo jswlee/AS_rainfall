@@ -11,11 +11,32 @@ This README shows how to set up and run the project step by step.
 git clone https://github.com/jswlee/AS_rainfall.git
 cd AS_rainfall
 
-# 2) Create env
-python3 -m venv .venv && source .venv/bin/activate && python -m pip install --upgrade pip
+# 2) Create and activate Python 3.11 environment
+python3.11 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# 3) Install
-pip install -e .
+# 3) Upgrade pip and install core dependencies
+python -m pip install --upgrade pip setuptools wheel
+
+# 4) Install packages in editable mode with all dependencies
+pip install -e ".[all]"
+```
+
+### Alternative: Using conda (recommended for geospatial dependencies)
+
+```bash
+# Create and activate conda environment
+conda create -n as_rainfall python=3.11 -y
+conda activate as_rainfall
+
+# Install core dependencies
+conda install -c conda-forge \
+  numpy pandas xarray netcdf4 \
+  rasterio geopandas \
+  tensorflow-macos  # or tensorflow for non-Apple Silicon
+
+# Install the rest with pip
+pip install -e ".[all]"
 ```
 
 ## 1) Clone and create an environment

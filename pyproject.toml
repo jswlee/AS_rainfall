@@ -7,21 +7,48 @@ name = "as-rainfall"
 version = "0.1.0"
 description = "AS_rainfall: Modular pipeline for assembling data, tuning, training, and ensembling rainfall models"
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
-authors = [
-  {name = "JR Lee"}
-]
+requires-python = ">=3.9"
 license = {text = "MIT"}
+authors = [
+    {name = "JR Lee"},
+]
 classifiers = [
-  "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
 ]
 
-# Keep runtime deps in setup.cfg [options] install_requires
-# Extras can be declared here for PEP 621 compliant tools, but
-# we centralize in setup.cfg for a single source of truth.
+dependencies = [
+    "numpy>=1.19.0",
+    "pandas>=1.3.0",
+    "xarray>=0.20.0",
+    "netcdf4>=1.5.7",
+    "rasterio>=1.2.0",
+    "scipy>=1.7.0",
+    "h5py>=3.6.0",
+    "pyproj>=3.3.0",
+    "rioxarray>=0.9.0",
+    "geopandas>=0.10.0",
+    "matplotlib>=3.4.0",
+    "seaborn>=0.11.0",
+    "scikit-learn>=1.0.0",
+    "tensorflow>=2.9.0",
+    "keras-tuner>=1.1.3",
+    "jupyterlab>=3.0.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+    "ipywidgets>=7.6.0",
+    "tqdm>=4.62.0"
+]
+
+[project.optional-dependencies]
+# Heavy/conda-preferred geo stack. Prefer installing via conda-forge when possible.
+geo = [
+    "cartopy>=0.20.0 ; platform_system != 'Windows'",  # may require system libs
+    "GDAL>=3.3.0 ; platform_system != 'Windows'"       # pip install often fails; prefer conda
+]
 
 [project.urls]
-Homepage = "https://github.com/jswlee/AS_rainfall"
-Issues = "https://github.com/jswlee/AS_rainfall/issues"
+"Homepage" = "https://github.com/jswlee/AS_rainfall"
+"Bug Tracker" = "https://github.com/jswlee/AS_rainfall/issues"
+"Documentation" = "https://github.com/jswlee/AS_rainfall#readme"
