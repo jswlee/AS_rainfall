@@ -190,13 +190,6 @@ class DEMPatchBuilder:
             # Bilinear interpolation result
             patch_interpolated = zoom(pre_resize, zoom_factor, order=1)  # order=1 is bilinear interpolation
             print(f"Interpolated DEM (shape {patch_interpolated.shape}):\n{patch_interpolated}")
-
-            # Alternative (commented out): block-wise average downsampling via reshape
-            # This computes the mean elevation within non-overlapping blocks so that each
-            # output cell is the average of its corresponding input block, which can be
-            # preferable if you want area-averaged values rather than interpolated ones.
-            # Note: This requires that patch.shape is exactly (patch_size * bh, patch_size * bw)
-            # for some integers bh and bw. If not, you'd need to pad/crop first.
             
             # Compute block-mean from the pre-resize patch using edge padding to ensure divisibility
             # We need the pre-resize array shape to be exactly divisible by patch_size in both dims
