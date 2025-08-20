@@ -89,52 +89,52 @@ def build_model(data_metadata, hp_dir: str = os.path.join(HPT_BASE, 'output_1'),
     # Process local DEM
     local_dem = layers.Flatten()(local_dem_input)
     local_dem = layers.Dense(
-        hyperparams['local_dem_units'], 
+        units=hyperparams['local_dem_units'], 
         activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
+        kernel_regularizer=regularizers.l2(l=hyperparams['l2_reg'])
     )(local_dem)
     local_dem = layers.BatchNormalization()(local_dem)
     
     # Process regional DEM
     regional_dem = layers.Flatten()(regional_dem_input)
     regional_dem = layers.Dense(
-        hyperparams['regional_dem_units'], 
+        units=hyperparams['regional_dem_units'], 
         activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
+        kernel_regularizer=regularizers.l2(l=hyperparams['l2_reg'])
     )(regional_dem)
     regional_dem = layers.BatchNormalization()(regional_dem)
     
     # Process month
     month = layers.Dense(
-        hyperparams['month_units'], 
+        units=hyperparams['month_units'], 
         activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
+        kernel_regularizer=regularizers.l2(l=hyperparams['l2_reg'])
     )(month_input)
     month = layers.BatchNormalization()(month)
     
     # Process climate/reanalysis data
-    climate_flat = layers.Reshape((data_metadata['climate_shape'][0] * 
+    climate_flat = layers.Reshape(target_shape=(data_metadata['climate_shape'][0] * 
                                   data_metadata['climate_shape'][1] * 
                                   data_metadata['climate_shape'][2],))(climate_input)
     
     climate = layers.Dense(
-        hyperparams['climate_units'], 
+        units=hyperparams['climate_units'], 
         activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
+        kernel_regularizer=regularizers.l2(l=hyperparams['l2_reg'])
     )(climate_flat)
     climate = layers.BatchNormalization()(climate)
     
     # Concatenate all features
-    concat = layers.Concatenate()([climate, local_dem, regional_dem, month])
+    concat = layers.Concatenate(axis=-1)([climate, local_dem, regional_dem, month])
     
     # Dense layers
     x = layers.Dense(
-        hyperparams['na'], 
+        units=hyperparams['na'], 
         activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
+        kernel_regularizer=regularizers.l2(l=hyperparams['l2_reg'])
     )(concat)
     x = layers.BatchNormalization()(x)
-    x = layers.Dropout(hyperparams['dropout_rate'])(x)
+    x = layers.Dropout(rate=hyperparams['dropout_rate'])(x)
     
     # Store residual connection if enabled and dimensions match
     residual = None
@@ -142,9 +142,9 @@ def build_model(data_metadata, hp_dir: str = os.path.join(HPT_BASE, 'output_1'),
         residual = x
         
     x = layers.Dense(
-        hyperparams['nb'], 
+        units=hyperparams['nb'], 
         activation=hyperparams['activation'],
-        kernel_regularizer=regularizers.l2(hyperparams['l2_reg'])
+        kernel_regularizer=regularizers.l2(l=hyperparams['l2_reg'])
     )(x)
     x = layers.BatchNormalization()(x)
     
@@ -153,11 +153,11 @@ def build_model(data_metadata, hp_dir: str = os.path.join(HPT_BASE, 'output_1'),
         print("Using residual connection")
         x = layers.Add()([x, residual])
         
-    x = layers.Dropout(hyperparams['dropout_rate'])(x)
+    x = layers.Dropout(rate=hyperparams['dropout_rate'])(x)
     
     # Output layer with non-negative activation to ensure rainfall predictions are never negative
     output_activation = hyperparams.get('output_activation', 'relu')
-    output = layers.Dense(1, activation=output_activation, name='rainfall')(x)
+    output = layers.Dense(units=1, activation=output_activation, name='rainfall')(x)
     
     # Create model
     model = tf.keras.Model(

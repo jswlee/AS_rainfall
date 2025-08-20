@@ -15,7 +15,7 @@ def plot_ensemble_test_predictions(data: Dict[str, Any], test_ensemble_pred, out
     plt.figure(figsize=(10, 8))
     if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
         rs = float(data['metadata']['rainfall_mm_std'])
-        plt.scatter(data['targets']['test'] * rs, test_ensemble_pred * rs, alpha=0.5)
+        plt.scatter(x=data['targets']['test'] * rs, y=test_ensemble_pred * rs, alpha=0.5)
         plt.plot(
             [data['targets']['test'].min() * rs, data['targets']['test'].max() * rs],
             [data['targets']['test'].min() * rs, data['targets']['test'].max() * rs],
@@ -25,7 +25,7 @@ def plot_ensemble_test_predictions(data: Dict[str, Any], test_ensemble_pred, out
         plt.ylabel('Predicted Rainfall (mm)')
         plt.title('Ensemble Model: Actual vs Predicted Rainfall (Test Set)')
     else:
-        plt.scatter(data['targets']['test'] * 100, test_ensemble_pred * 100, alpha=0.5)
+        plt.scatter(x=data['targets']['test'] * 100, y=test_ensemble_pred * 100, alpha=0.5)
         plt.plot(
             [data['targets']['test'].min() * 100, data['targets']['test'].max() * 100],
             [data['targets']['test'].min() * 100, data['targets']['test'].max() * 100],
@@ -35,7 +35,7 @@ def plot_ensemble_test_predictions(data: Dict[str, Any], test_ensemble_pred, out
         plt.ylabel('Predicted Rainfall (inches)')
         plt.title('Ensemble Model: Actual vs Predicted Rainfall (Test Set)')
     plt.grid(True)
-    plt.savefig(os.path.join(output_dir, 'ensemble_test_predictions.png'), dpi=300)
+    plt.savefig(fname=os.path.join(output_dir, 'ensemble_test_predictions.png'), dpi=300)
     plt.close()
 
 
@@ -49,8 +49,8 @@ def plot_individual_vs_ensemble(data: Dict[str, Any], all_test_predictions: List
     if 'metadata' in data and 'rainfall_mm_std' in data['metadata']:
         rs = float(data['metadata']['rainfall_mm_std'])
         for i, preds in enumerate(all_test_predictions):
-            plt.scatter(data['targets']['test'] * rs, preds * rs, alpha=0.3, label=f'Model {i+1}')
-        plt.scatter(data['targets']['test'] * rs, test_ensemble_pred * rs, alpha=0.8, color='red', label='Ensemble')
+            plt.scatter(x=data['targets']['test'] * rs, y=preds * rs, alpha=0.3, label=f'Model {i+1}')
+        plt.scatter(x=data['targets']['test'] * rs, y=test_ensemble_pred * rs, alpha=0.8, color='red', label='Ensemble')
         plt.plot(
             [data['targets']['test'].min() * rs, data['targets']['test'].max() * rs],
             [data['targets']['test'].min() * rs, data['targets']['test'].max() * rs],
@@ -61,8 +61,8 @@ def plot_individual_vs_ensemble(data: Dict[str, Any], all_test_predictions: List
         plt.title('Individual Models vs Ensemble Predictions')
     else:
         for i, preds in enumerate(all_test_predictions):
-            plt.scatter(data['targets']['test'] * 100, preds * 100, alpha=0.3, label=f'Model {i+1}')
-        plt.scatter(data['targets']['test'] * 100, test_ensemble_pred * 100, alpha=0.8, color='red', label='Ensemble')
+            plt.scatter(x=data['targets']['test'] * 100, y=preds * 100, alpha=0.3, label=f'Model {i+1}')
+        plt.scatter(x=data['targets']['test'] * 100, y=test_ensemble_pred * 100, alpha=0.8, color='red', label='Ensemble')
         plt.plot(
             [data['targets']['test'].min() * 100, data['targets']['test'].max() * 100],
             [data['targets']['test'].min() * 100, data['targets']['test'].max() * 100],
@@ -73,7 +73,7 @@ def plot_individual_vs_ensemble(data: Dict[str, Any], all_test_predictions: List
         plt.title('Individual Models vs Ensemble Predictions')
     plt.legend()
     plt.grid(True)
-    plt.savefig(os.path.join(output_dir, 'individual_vs_ensemble.png'), dpi=300)
+    plt.savefig(fname=os.path.join(output_dir, 'individual_vs_ensemble.png'), dpi=300)
     plt.close()
 
 
@@ -86,7 +86,7 @@ def plot_fold_ensemble_predictions(data: Dict[str, Any], fold_ensemble_pred, fol
     plt.figure(figsize=(10, 8))
     if 'metadata' in data and 'rainfall_mm_std' in data['metadata'] and float(data['metadata']['rainfall_mm_std']) > 0:
         rs = float(data['metadata']['rainfall_mm_std'])
-        plt.scatter(data['targets']['test'] * rs, fold_ensemble_pred * rs, alpha=0.5)
+        plt.scatter(x=data['targets']['test'] * rs, y=fold_ensemble_pred * rs, alpha=0.5)
         plt.plot(
             [data['targets']['test'].min() * rs, data['targets']['test'].max() * rs],
             [data['targets']['test'].min() * rs, data['targets']['test'].max() * rs],
@@ -95,7 +95,7 @@ def plot_fold_ensemble_predictions(data: Dict[str, Any], fold_ensemble_pred, fol
         plt.xlabel('Actual Rainfall (mm)')
         plt.ylabel('Predicted Rainfall (mm)')
     else:
-        plt.scatter(data['targets']['test'] * 100, fold_ensemble_pred * 100, alpha=0.5)
+        plt.scatter(x=data['targets']['test'] * 100, y=fold_ensemble_pred * 100, alpha=0.5)
         plt.plot(
             [data['targets']['test'].min() * 100, data['targets']['test'].max() * 100],
             [data['targets']['test'].min() * 100, data['targets']['test'].max() * 100],
@@ -105,7 +105,7 @@ def plot_fold_ensemble_predictions(data: Dict[str, Any], fold_ensemble_pred, fol
         plt.ylabel('Predicted Rainfall (inches)')
     plt.title(f'Fold {fold_idx+1} Ensemble: Actual vs Predicted Rainfall')
     plt.grid(True)
-    plt.savefig(os.path.join(fold_dir, 'fold_ensemble_predictions.png'), dpi=300)
+    plt.savefig(fname=os.path.join(fold_dir, 'fold_ensemble_predictions.png'), dpi=300)
     plt.close()
 
 
@@ -114,7 +114,7 @@ def plot_fold_ensemble_predictions(data: Dict[str, Any], fold_ensemble_pred, fol
 def save_progress(progress_file: str, completed_models: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(progress_file), exist_ok=True)
     with open(progress_file, 'wb') as f:
-        pickle.dump({'completed_models': completed_models}, f)
+        pickle.dump(obj={'completed_models': completed_models}, file=f)
 
 
 def write_training_summary(model_dir: str, model_idx: int, fold_idx: int, random_seed: int,
@@ -184,7 +184,7 @@ def write_test_predictions_csv(output_dir: str, data: Dict[str, Any], test_ensem
             'predicted_inches': (test_ensemble_pred*100).flatten()
         })
     out_path = os.path.join(output_dir, 'test_predictions.csv')
-    test_pred_df.to_csv(out_path, index=False)
+    test_pred_df.to_csv(path_or_buf=out_path, index=False)
     return out_path
 
 

@@ -1,0 +1,11 @@
+Fold 7 Summary
+==============================
+
+Models in fold: 10
+R²: 0.7336
+RMSE: 0.546973
+MAE: 0.355266
+
+Denormalized metrics (mm):
+RMSE: 110.0454 mm
+MAE: 71.4759 mm

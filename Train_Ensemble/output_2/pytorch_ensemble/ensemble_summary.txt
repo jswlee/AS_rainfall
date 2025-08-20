@@ -1,0 +1,22 @@
+PyTorch Ensemble Training Summary
+==================================================
+
+Configuration:
+  Number of folds: 5
+  Models per fold: 5
+  Total models: 25
+  Training time: 1650.45 seconds
+
+Cross-Validation Results:
+  Average R²: 0.7378
+  Average RMSE: 0.542015
+  Average MAE: 0.354037
+
+Final Ensemble Results:
+  R²: 0.7593
+  RMSE: 0.519967
+  MAE: 0.338440
+
+Denormalized Final Results (mm):
+  RMSE: 104.6120 mm
+  MAE: 68.0907 mm

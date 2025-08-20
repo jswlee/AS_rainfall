@@ -1,0 +1,11 @@
+Fold 2 Summary
+==============================
+
+Models in fold: 5
+R²: 0.7500
+RMSE: 0.529871
+MAE: 0.348804
+
+Denormalized metrics (mm):
+RMSE: 106.6047 mm
+MAE: 70.1759 mm
