@@ -1,0 +1,27 @@
+Hyperparameter Tuning Summary
+==================================================
+
+Study name: land_model_tuning
+Number of trials: 50
+Best value: 0.235386
+
+Best hyperparameters:
+  climate_units: 512
+  local_dem_units: 160
+  regional_dem_units: 48
+  month_units: 24
+  na: 384
+  nb: 512
+  dropout_rate: 0.25
+  l2_reg: 0.00025121830634357626
+  learning_rate: 0.0023988444294030403
+  weight_decay: 6.267285505169448e-06
+  batch_size: 128
+  use_residual: True
+  climate_activation: relu
+  output_activation: softplus
+  climate_processing: conv2d
+
+Completed trials: 50
+Pruned trials: 0
+Failed trials: 0

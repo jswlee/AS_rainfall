@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/896248266349991911/947f49d5c9344d46a415bbdb2412d7f9/artifacts
+end_time: 1755733666706
+entry_point_name: ''
+experiment_id: '896248266349991911'
+lifecycle_stage: active
+run_id: 947f49d5c9344d46a415bbdb2412d7f9
+run_name: ambitious-fly-687
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1755733666176
+status: 3
+tags: []
+user_id: jlee

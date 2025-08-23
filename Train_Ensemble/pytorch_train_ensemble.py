@@ -1,17 +1,33 @@
 #!/usr/bin/env python3
 """
 PyTorch ensemble training for rainfall prediction using cross-validation.
+Now supports:
+- Passing through loss selection (e.g., 'weighted_mse') to optimize the intended criterion.
+- Optional MLflow logging of per-epoch weighted/unweighted metrics, fold metrics, and final metrics.
 """
 
 import os
+import sys
 import json
-import time
 import pickle
 import numpy as np
-import torch
-from sklearn.model_selection import KFold
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import KFold
+import mlflow
+import mlflow.pytorch
+from datetime import datetime
+import time
+import tempfile
+
+# Import MLflow utilities for robust experiment tracking
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Hyperparameter_Tuning'))
+from mlflow_utils import create_mlflow_logger, MLFLOW_AVAILABLE
 
 # Import PyTorch utilities
 from Hyperparameter_Tuning.pytorch_data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders, RainfallDataset
@@ -30,7 +46,14 @@ class EnsembleTrainer:
                  test_indices_path: str = None,
                  n_folds: int = 5,
                  n_models_per_fold: int = 5,
-                 random_state: int = 42):
+                 random_state: int = 42,
+                 # Loss selection
+                 loss_name: str = 'mse',
+                 loss_params: dict | None = None,
+                 # MLflow logging
+                 mlflow_enabled: bool = False,
+                 mlflow_experiment: str | None = None,
+                 mlflow_run_name: str | None = None):
         """
         Initialize ensemble trainer.
         
@@ -42,6 +65,11 @@ class EnsembleTrainer:
             n_folds: Number of CV folds
             n_models_per_fold: Number of models per fold
             random_state: Random seed
+            loss_name: Loss function name ('mse' or 'weighted_mse')
+            loss_params: Optional parameters for weighted loss
+            mlflow_enabled: Enable MLflow logging
+            mlflow_experiment: MLflow experiment name (optional)
+            mlflow_run_name: MLflow run name (optional)
         """
         self.npz_path = npz_path
         self.hyperparams_dir = hyperparams_dir
@@ -50,6 +78,26 @@ class EnsembleTrainer:
         self.n_folds = n_folds
         self.n_models_per_fold = n_models_per_fold
         self.random_state = random_state
+        self.loss_name = loss_name
+        self.loss_params = loss_params or None
+        self.mlflow_enabled = bool(mlflow_enabled) and MLFLOW_AVAILABLE
+        self.mlflow_experiment = mlflow_experiment or "pytorch_ensemble_training"
+        self.mlflow_run_name = mlflow_run_name
+        
+        # Initialize MLflow logger for robust experiment tracking
+        # MLflow helps track ensemble training experiments with cross-validation metrics,
+        # fold-level performance, and model artifacts for reproducibility
+        self.mlflow_logger = None
+        if self.mlflow_enabled:
+            try:
+                self.mlflow_logger = create_mlflow_logger(
+                    experiment_name=self.mlflow_experiment,
+                    tracking_uri="./mlruns"
+                )
+                print("MLflow logger initialized successfully for ensemble training")
+            except Exception as e:
+                print(f"Warning: MLflow logger initialization failed: {e}")
+                self.mlflow_enabled = False
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -131,7 +179,9 @@ class EnsembleTrainer:
             weight_decay=self.hyperparams.get('weight_decay', 0.001),
             patience=15,
             device=self.device,
-            verbose=False
+            verbose=False,
+            loss_name=self.loss_name,
+            loss_params=self.loss_params
         )
         
         # Get test predictions
@@ -163,7 +213,7 @@ class EnsembleTrainer:
             Dictionary with ensemble results
         """
         # Check for existing progress
-        progress_file = os.path.join(self.output_dir, 'ensemble_progress.pkl')
+        progress_file = os.path.join('./', 'ensemble_progress.pkl')
         completed_models = {}
         
         if resume and os.path.exists(progress_file):
@@ -182,6 +232,54 @@ class EnsembleTrainer:
         all_test_predictions = []
         
         start_time = time.time()
+        
+        # Initialize MLflow run for ensemble training with robust error handling
+        # This tracks the entire ensemble training process including cross-validation
+        # metrics, fold-level performance, and final ensemble results
+        if self.mlflow_logger:
+            try:
+                # Start MLflow run for the entire ensemble training process
+                run_name = self.mlflow_run_name or f"ensemble_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                self.mlflow_logger.start_run(run_name=run_name)
+                
+                # Log ensemble training configuration parameters
+                # These parameters define the ensemble setup and training configuration
+                ensemble_params = {
+                    'n_folds': self.n_folds,
+                    'n_models_per_fold': self.n_models_per_fold,
+                    'max_epochs': epochs,
+                    'device': str(self.device),
+                    'loss_function': self.loss_name,
+                    'random_state': self.random_state,
+                    'resume_training': resume,
+                }
+                
+                # Add loss-specific parameters if using weighted loss
+                if self.loss_params:
+                    for key, value in self.loss_params.items():
+                        ensemble_params[f'loss_{key}'] = value
+                
+                # Log key hyperparameters for context
+                # These are the model hyperparameters used across all ensemble members
+                for param_name in ['learning_rate', 'weight_decay', 'batch_size', 'na', 'nb', 'dropout_rate', 'output_activation']:
+                    if param_name in self.hyperparams:
+                        ensemble_params[f'model_{param_name}'] = self.hyperparams[param_name]
+                
+                self.mlflow_logger.log_params(ensemble_params)
+                
+                # Log data information for reproducibility
+                data_info = {
+                    'train_samples': len(self.data['datasets']['train']),
+                    'test_samples': len(self.data['datasets']['test']),
+                    'n_features': self.data['metadata']['n_features'],
+                }
+                self.mlflow_logger.log_params(data_info)
+                
+                print("MLflow run started for ensemble training")
+                
+            except Exception as e:
+                print(f"Warning: Failed to start MLflow run: {e}")
+                self.mlflow_logger = None
         
         for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X=self.cv_targets)):
             fold_key = f"fold_{fold_idx + 1}"
@@ -248,6 +346,45 @@ class EnsembleTrainer:
                 fold_predictions.append(test_pred)
                 fold_models.append(model)
                 
+                # Log individual model training metrics with robust error handling
+                # This tracks per-epoch training progress for each model in the ensemble
+                if self.mlflow_logger and isinstance(history, dict):
+                    try:
+                        # Log training history for this specific model
+                        model_prefix = f"fold_{fold_idx+1}_model_{model_idx+1}"
+                        
+                        # Log epoch-by-epoch metrics for detailed training analysis
+                        for epoch, (train_loss, val_loss) in enumerate(zip(
+                            history.get('loss', []), 
+                            history.get('val_loss', [])
+                        )):
+                            epoch_metrics = {
+                                f"{model_prefix}_train_loss": train_loss,
+                                f"{model_prefix}_val_loss": val_loss
+                            }
+                            
+                            # Add unweighted MSE metrics if available
+                            if 'train_mse_unw' in history and epoch < len(history['train_mse_unw']):
+                                epoch_metrics[f"{model_prefix}_train_mse_unw"] = history['train_mse_unw'][epoch]
+                            if 'val_mse_unw' in history and epoch < len(history['val_mse_unw']):
+                                epoch_metrics[f"{model_prefix}_val_mse_unw"] = history['val_mse_unw'][epoch]
+                            
+                            # Log metrics for this epoch
+                            for metric_name, metric_value in epoch_metrics.items():
+                                self.mlflow_logger.log_metric(metric_name, metric_value, step=epoch)
+                        
+                        # Log final model performance summary
+                        if history.get('val_loss'):
+                            final_metrics = {
+                                f"{model_prefix}_final_val_loss": min(history['val_loss']),
+                                f"{model_prefix}_epochs_trained": len(history['val_loss']),
+                                f"{model_prefix}_best_epoch": history['val_loss'].index(min(history['val_loss'])) + 1
+                            }
+                            self.mlflow_logger.log_metrics(final_metrics)
+                            
+                    except Exception as e:
+                        print(f"Warning: Failed to log model {model_idx+1} metrics for fold {fold_idx+1}: {e}")
+                
                 # Save individual model
                 model_dir = os.path.join(fold_dir, f"model_{model_idx + 1}")
                 os.makedirs(model_dir, exist_ok=True)
@@ -277,6 +414,21 @@ class EnsembleTrainer:
             }
             fold_results.append(fold_result)
             all_test_predictions.extend(fold_predictions)
+            
+            # Log fold-level ensemble metrics with robust error handling
+            # These metrics show how well the ensemble performs on each cross-validation fold
+            if self.mlflow_logger:
+                try:
+                    fold_metrics = {
+                        f"fold_{fold_idx+1}_r2": fold_result['r2'],
+                        f"fold_{fold_idx+1}_rmse": fold_result['rmse'] * 100,  # Convert to inches
+                        f"fold_{fold_idx+1}_mae": fold_result['mae'] * 100,    # Convert to inches
+                        f"fold_{fold_idx+1}_n_models": len(fold_predictions)
+                    }
+                    self.mlflow_logger.log_metrics(fold_metrics)
+                    
+                except Exception as e:
+                    print(f"Warning: Failed to log fold {fold_idx+1} metrics: {e}")
             
             # Save fold summary
             self.save_fold_summary(fold_dir, fold_result)
@@ -310,6 +462,48 @@ class EnsembleTrainer:
         
         # Save final results
         self.save_ensemble_results(ensemble_results)
+        
+        # Log final ensemble results with robust error handling
+        # These metrics summarize the overall ensemble performance across all folds
+        if self.mlflow_logger:
+            try:
+                # Log final ensemble metrics (converted to inches for physical meaning)
+                final_metrics = {
+                    'ensemble_r2': ensemble_results['final_r2'],
+                    'ensemble_rmse_inches': ensemble_results['final_rmse'] * 100,
+                    'ensemble_mae_inches': ensemble_results['final_mae'] * 100,
+                    'avg_fold_r2': ensemble_results['avg_fold_r2'],
+                    'avg_fold_rmse_inches': ensemble_results['avg_fold_rmse'] * 100,
+                    'avg_fold_mae_inches': ensemble_results['avg_fold_mae'] * 100,
+                    'training_time_seconds': ensemble_results['training_time'],
+                    'total_models_trained': self.n_folds * self.n_models_per_fold
+                }
+                self.mlflow_logger.log_metrics(final_metrics)
+                
+                # Log ensemble artifacts for model analysis and reproducibility
+                artifact_paths = [
+                    ('ensemble_summary.txt', 'Ensemble training summary with detailed metrics'),
+                    ('ensemble_predictions_scatter.png', 'Scatter plot of ensemble predictions vs actual'),
+                    ('training_summary.txt', 'Overall training configuration and results')
+                ]
+                
+                for filename, description in artifact_paths:
+                    file_path = os.path.join(self.output_dir, filename)
+                    if os.path.exists(file_path):
+                        self.mlflow_logger.log_artifact(file_path, description)
+                
+                # End MLflow run
+                self.mlflow_logger.end_run()
+                print("MLflow logging completed successfully for ensemble training")
+                
+            except Exception as e:
+                print(f"Warning: Failed to log final ensemble results: {e}")
+                # Ensure run is ended even if logging fails
+                try:
+                    if self.mlflow_logger:
+                        self.mlflow_logger.end_run()
+                except:
+                    pass
         
         return ensemble_results
     
@@ -448,7 +642,14 @@ def train_ensemble_pytorch(
     n_folds: int = 5,
     n_models_per_fold: int = 5,
     epochs: int = 150,
-    resume: bool = True
+    resume: bool = True,
+    # Loss selection
+    loss_name: str = 'mse',
+    loss_params: dict | None = None,
+    # MLflow logging
+    mlflow_enabled: bool = False,
+    mlflow_experiment: str | None = None,
+    mlflow_run_name: str | None = None
 ):
     """
     Train PyTorch ensemble with cross-validation.
@@ -483,7 +684,12 @@ def train_ensemble_pytorch(
         output_dir=output_dir,
         test_indices_path=test_indices_path,
         n_folds=n_folds,
-        n_models_per_fold=n_models_per_fold
+        n_models_per_fold=n_models_per_fold,
+        loss_name=loss_name,
+        loss_params=loss_params,
+        mlflow_enabled=mlflow_enabled,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name
     )
     
     # Train ensemble

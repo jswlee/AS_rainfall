@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Optional, Dict, Any, Tuple
 from sklearn.model_selection import train_test_split
+from pprint import pprint
 
 
 class RainfallDataset(Dataset):
@@ -178,21 +179,22 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     # Extract rainfall std for denormalization
     rainfall_mm_std = float(z['rainfall_mm_std']) if 'rainfall_mm_std' in z.files else 1.0
     
-    # Create datasets
-    train_dataset = RainfallDataset(
-        climate[train_indices], local_dem[train_indices], 
-        regional_dem[train_indices], month[train_indices], y[train_indices]
-    )
-    
-    val_dataset = RainfallDataset(
-        climate[val_indices], local_dem[val_indices],
-        regional_dem[val_indices], month[val_indices], y[val_indices]
-    )
-    
-    test_dataset = RainfallDataset(
-        climate[test_indices], local_dem[test_indices],
-        regional_dem[test_indices], month[test_indices], y[test_indices]
-    )
+    # Create datasets (compact loop over splits)
+    indices_dict = {
+        'train': train_indices,
+        'val': val_indices,
+        'test': test_indices,
+    }
+    datasets = {
+        name: RainfallDataset(
+            climate[idx],
+            local_dem[idx],
+            regional_dem[idx],
+            month[idx],
+            y[idx],
+        )
+        for name, idx in indices_dict.items()
+    }
     
     # Prepare metadata
     metadata = {
@@ -208,11 +210,7 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     }
     
     return {
-        'datasets': {
-            'train': train_dataset,
-            'val': val_dataset,
-            'test': test_dataset
-        },
+        'datasets': datasets,
         'metadata': metadata,
         'indices': {
             'train': train_indices,
@@ -226,7 +224,7 @@ def create_pytorch_dataloaders(datasets: Dict[str, Dataset],
                               batch_size: int = 32,
                               shuffle_train: bool = True,
                               num_workers: int = 0,
-                              pin_memory: bool = True) -> Dict[str, DataLoader]:
+                              pin_memory: bool = False) -> Dict[str, DataLoader]:
     """
     Create PyTorch DataLoaders from datasets.
     
@@ -271,7 +269,7 @@ if __name__ == "__main__":
         )
         
         # Create dataloaders
-        dataloaders = create_pytorch_dataloaders(data['datasets'], batch_size=16)
+        dataloaders = create_pytorch_dataloaders(data['datasets'], batch_size=32)
         
         # Test a sample batch
         features, targets = next(iter(dataloaders['train']))
@@ -280,6 +278,12 @@ if __name__ == "__main__":
             print(f"  {key}: {tensor.shape}")
         print(f"  targets: {targets.shape}")
         
-        print(f"\nMetadata: {data['metadata']}")
+        pprint(f"Metadata: {data['metadata']}")
+
+        # Show a sample from each dataset
+        print("\nSample from each dataset:")
+        for split, dataset in data['datasets'].items():
+            print(f"\n{split} dataset:")
+            pprint(dataset[0])
     else:
         print(f"NPZ file not found at {npz_path}")

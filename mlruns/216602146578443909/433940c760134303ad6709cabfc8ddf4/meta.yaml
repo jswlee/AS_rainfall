@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/216602146578443909/433940c760134303ad6709cabfc8ddf4/artifacts
+end_time: 1755974115103
+entry_point_name: ''
+experiment_id: '216602146578443909'
+lifecycle_stage: active
+run_id: 433940c760134303ad6709cabfc8ddf4
+run_name: best_model_training_1755974110
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1755974110837
+status: 3
+tags: []
+user_id: jlee

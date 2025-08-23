@@ -11,11 +11,35 @@ import torch
 import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 from typing import Dict, Any, Optional
 from optuna.visualization.matplotlib import plot_optimization_history as plot_hist
 from optuna.visualization.matplotlib import plot_param_importances as plot_importances
 import matplotlib.pyplot as plt
+ 
+# Import robust MLflow utilities for experiment tracking
+# These utilities provide comprehensive error handling and MLOps best practices
+from Hyperparameter_Tuning.mlflow_utils import (
+    create_mlflow_logger, log_hyperparameters, log_model_summary, 
+    log_evaluation_results, MLFLOW_AVAILABLE
+)
+
+# Optional Optuna MLflow integration
+try:
+    from optuna.integration import MLflowCallback
+except ImportError:
+    try:
+        from optuna.integration.mlflow import MLflowCallback
+    except ImportError:
+        MLflowCallback = None
+
+# Direct MLflow imports for model registration
+try:
+    import mlflow
+    from mlflow.tracking import MlflowClient
+except ImportError:
+    mlflow = None
+    MlflowClient = None
 
 from Hyperparameter_Tuning.pytorch_data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
 from Hyperparameter_Tuning.pytorch_model import create_model_from_hyperparams
@@ -34,7 +58,11 @@ class OptunaTuner:
                  n_folds: int = 3,
                  max_epochs: int = 100,
                  patience: int = 10,
-                 random_state: int = 42):
+                 random_state: int = 42,
+                 loss_name: str = 'mse',
+                 loss_params: Optional[Dict[str, Any]] = None,
+                 enable_mlflow: bool = False,
+                 mlflow_experiment: Optional[str] = None):
         """
         Initialize the tuner.
         
@@ -54,6 +82,20 @@ class OptunaTuner:
         self.max_epochs = max_epochs
         self.patience = patience
         self.random_state = random_state
+        self.loss_name = loss_name
+        self.loss_params = loss_params or None
+        # MLflow experiment tracking setup
+        # Experiments group related runs together (e.g., all hyperparameter tuning runs)
+        self.enable_mlflow = bool(enable_mlflow and MLFLOW_AVAILABLE)
+        self.mlflow_experiment = mlflow_experiment or "AS_Rainfall_Hyperparameter_Tuning"
+        
+        # Initialize MLflow logger for robust experiment tracking
+        self.mlflow_logger = None
+        if self.enable_mlflow:
+            self.mlflow_logger = create_mlflow_logger(
+                experiment_name=self.mlflow_experiment,
+                enabled=True
+            )
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -77,6 +119,22 @@ class OptunaTuner:
         self.cv_targets = torch.cat(tensors=[train_dataset.targets, val_dataset.targets])
         
         print(f"CV data shape: {self.cv_targets.shape[0]} samples")
+        
+        # Prepare stratification bins for regression targets (quantile-based)
+        self._n_strata_bins = 5  # adjustable; 5 bins is a good default
+        y = self.cv_targets.numpy().ravel()
+        try:
+            q = np.linspace(0.0, 1.0, self._n_strata_bins + 1)
+            edges = np.quantile(y, q)
+            # Ensure strictly increasing edges; fallback if duplicates due to ties
+            uniq = np.unique(edges)
+            if uniq.size < edges.size:
+                edges = np.linspace(y.min(), y.max(), self._n_strata_bins + 1)
+            # Digitize into bins 0..n_bins-1
+            self._y_bins = np.digitize(y, edges[1:-1], right=True)
+        except Exception as e:
+            print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
+            self._y_bins = np.zeros_like(y, dtype=int)
         
         # Setup device - prefer CUDA if available, then MPS, then CPU
         if torch.cuda.is_available():
@@ -119,7 +177,7 @@ class OptunaTuner:
             
             # Model architecture choices
             'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
-            'activation': trial.suggest_categorical(name='activation', choices=['relu', 'elu', 'selu']),
+            'climate_activation': trial.suggest_categorical(name='climate_activation', choices=['relu', 'none']),
             'output_activation': trial.suggest_categorical(name='output_activation', choices=['relu', 'softplus']),
             'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d'])
         }
@@ -137,12 +195,56 @@ class OptunaTuner:
         # Get hyperparameters for this trial
         hyperparams = self.suggest_hyperparameters(trial)
         print(f"\nTrial {trial.number}: {hyperparams}", flush=True)
+
+        # ============================================================================
+        # MLflow Experiment Tracking Setup
+        # ============================================================================
+        # MLflow helps track experiments by logging:
+        # 1. Parameters (hyperparameters, configuration)
+        # 2. Metrics (loss, accuracy over time)
+        # 3. Artifacts (models, plots, results)
+        # 4. Tags (metadata for organizing runs)
+        
+        _mlflow_run_started_here = False
+        if self.enable_mlflow and self.mlflow_logger:
+            # Check if Optuna's MLflowCallback already created a run
+            if mlflow and mlflow.active_run() is None:
+                # Start a dedicated run for this trial
+                self.mlflow_logger.active_run = mlflow.start_run(
+                    run_name=f"trial_{trial.number}"
+                )
+                _mlflow_run_started_here = True
+            
+            # Log trial configuration for reproducibility
+            trial_config = {
+                "trial_number": trial.number,
+                "device": str(self.device),
+                "n_folds": self.n_folds,
+                "max_epochs": self.max_epochs,
+                "patience": self.patience,
+                "loss_name": self.loss_name,
+            }
+            
+            # Log hyperparameters with "hp_" prefix for clarity
+            log_hyperparameters(self.mlflow_logger, hyperparams, prefix="hp")
+            self.mlflow_logger.log_params(trial_config)
+            self.mlflow_logger.set_tag("optuna_trial_number", str(trial.number))
+            self.mlflow_logger.set_tag("experiment_type", "hyperparameter_tuning")
+            
+            # Store run ID for model registration later
+            if mlflow and mlflow.active_run():
+                trial.set_user_attr("mlflow_run_id", mlflow.active_run().info.run_id)
         
         # Setup cross-validation - use pre-computed splits for speed
         if not hasattr(self, '_cv_splits'):
-            kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
-            self._cv_splits = list(kf.split(self.cv_targets))
-            print(f"Pre-computed {self.n_folds} CV splits", flush=True)
+            # Use StratifiedKFold on binned targets to balance target distribution per fold
+            skf = StratifiedKFold(n_splits=self.n_folds, shuffle=True, random_state=self.random_state)
+            # X is dummy; stratify on bins
+            dummy_X = np.zeros_like(self._y_bins)
+            self._cv_splits = list(skf.split(dummy_X, self._y_bins))
+            # Diagnostics on bin counts
+            counts = np.bincount(self._y_bins)
+            print(f"Pre-computed {self.n_folds} stratified CV splits (bin counts: {counts.tolist()})", flush=True)
         
         fold_losses = []
         
@@ -177,6 +279,15 @@ class OptunaTuner:
             # Create model
             print(f"    Creating model with {hyperparams['na']} hidden units...", flush=True)
             model = create_model_from_hyperparams(hyperparams, self.data['metadata'])
+
+            # Log model architecture summary for this fold
+            # This helps understand model complexity and debug architecture issues
+            if self.enable_mlflow and self.mlflow_logger and fold_idx == 0:  # Only log once per trial
+                log_model_summary(
+                    self.mlflow_logger, 
+                    model, 
+                    f"trial_{trial.number}_model_architecture.txt"
+                )
             
             # Train model
             try:
@@ -189,27 +300,120 @@ class OptunaTuner:
                     weight_decay=hyperparams['weight_decay'],
                     patience=self.patience,
                     device=self.device,
-                    verbose=True  # Enable verbose to see epoch progress
+                    verbose=True,  # Enable verbose to see epoch progress
+                    loss_name=self.loss_name,
+                    loss_params=self.loss_params
                 )
-                
+
                 # Get best validation loss
                 best_val_loss = min(history['val_loss'])
                 fold_losses.append(best_val_loss)
-                
+
+                # ================================================================
+                # MLflow Logging: Training Curves and Model Artifacts
+                # ================================================================
+                # Log detailed training metrics for this fold
+                # This creates time-series plots in MLflow UI showing training progress
+                if self.enable_mlflow and self.mlflow_logger:
+                    # Log per-epoch training curves with fold prefix
+                    fold_history = {}
+                    for metric_name, values in history.items():
+                        fold_history[f"fold{fold_idx+1}_{metric_name}"] = values
+                    
+                    # Log training curves (creates line plots in MLflow UI)
+                    self.mlflow_logger.log_training_curves(fold_history, start_epoch=1)
+                    
+                    # Log fold-level summary metrics
+                    fold_metrics = {
+                        f"fold{fold_idx+1}_best_val_loss": float(best_val_loss),
+                        f"fold{fold_idx+1}_final_train_loss": float(history['train_loss'][-1]),
+                        f"fold{fold_idx+1}_epochs_trained": len(history['train_loss']),
+                    }
+                    
+                    # Add unweighted MSE if available
+                    if 'val_mse_unweighted' in history:
+                        best_epoch_idx = int(np.argmin(history['val_loss']))
+                        fold_metrics[f"fold{fold_idx+1}_val_mse_unweighted"] = float(
+                            history['val_mse_unweighted'][best_epoch_idx]
+                        )
+                    
+                    self.mlflow_logger.log_metrics(fold_metrics)
+                    
+                    # Log the trained model as an artifact with proper signature
+                    # Models are stored so you can load them later for inference/deployment
+                    try:
+                        # Create a sample input for signature inference
+                        sample_batch = next(iter(dataloaders['val']))
+                        sample_features, _ = sample_batch
+                        
+                        # Log model with modern API and signature
+                        self.mlflow_logger.log_model(
+                            model, 
+                            name=f"model_fold{fold_idx+1}",  # Use name instead of deprecated artifact_path
+                            input_example=sample_features,   # Provide input example for signature
+                        )
+                    except Exception as model_log_error:
+                        self.mlflow_logger.warning(f"Failed to log model with signature: {model_log_error}")
+                        # Fallback to basic model logging
+                        self.mlflow_logger.log_model(
+                            model, 
+                            name=f"model_fold{fold_idx+1}"
+                        )
+
                 # Report intermediate value for pruning
                 trial.report(best_val_loss, fold_idx)
                 
                 # Check if trial should be pruned
                 if trial.should_prune():
                     raise optuna.TrialPruned()
-                    
+
             except Exception as e:
                 print(f"Error in fold {fold_idx}: {e}")
-                # Return a large loss value for failed trials
+                import traceback
+                print(f"Full traceback: {traceback.format_exc()}")
+                
+                # End MLflow run if active to prevent resource leaks
+                if self.mlflow_logger:
+                    try:
+                        self.mlflow_logger.end_run()
+                    except:
+                        pass
+                
+                # Return inf to indicate failed trial
                 return float('inf')
         
         # Return average validation loss across folds
         avg_loss = np.mean(fold_losses)
+
+        # ================================================================
+        # MLflow Logging: Trial Summary and Cleanup
+        # ================================================================
+        # Log aggregated metrics across all folds for this trial
+        if self.enable_mlflow and self.mlflow_logger:
+            # Trial-level summary metrics
+            trial_summary = {
+                "avg_val_loss": float(avg_loss),
+                "std_val_loss": float(np.std(fold_losses)),
+                "min_val_loss": float(np.min(fold_losses)),
+                "max_val_loss": float(np.max(fold_losses)),
+                "n_folds_completed": len(fold_losses),
+            }
+            
+            self.mlflow_logger.log_metrics(trial_summary)
+            
+            # Store metadata for model registration
+            best_fold_idx = int(np.argmin(fold_losses)) + 1
+            trial.set_user_attr("best_fold", best_fold_idx)
+            self.mlflow_logger.set_tag("best_fold", str(best_fold_idx))
+            self.mlflow_logger.set_tag("trial_status", "completed")
+        
+        # Clean up MLflow run if we started it
+        if _mlflow_run_started_here and mlflow:
+            try:
+                mlflow.end_run()
+            except Exception as e:
+                print(f"Warning: Error ending MLflow run: {e}")
+
         return avg_loss
     
     def run_tuning(self, 
@@ -249,8 +453,33 @@ class OptunaTuner:
         print(f"Starting hyperparameter tuning with {n_trials} trials...")
         start_time = time.time()
         
-        # Run optimization
-        study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True)
+        # ================================================================
+        # MLflow Integration with Optuna
+        # ================================================================
+        # Set up MLflow callbacks for automatic logging of Optuna trials
+        callbacks = []
+        if self.enable_mlflow and MLflowCallback is not None:
+            try:
+                # Optuna's MLflowCallback automatically logs trial parameters and results
+                mlflow_cb = MLflowCallback(
+                    tracking_uri=None,  # Use default (local ./mlruns)
+                    experiment_name=self.mlflow_experiment,
+                    metric_name="avg_val_loss"  # Primary metric to optimize
+                )
+                callbacks.append(mlflow_cb)
+                print(f"✓ MLflow callback enabled for experiment: {self.mlflow_experiment}")
+            except Exception as e:
+                print(f"Warning: Could not enable MLflow callback: {e}")
+                print("Falling back to direct MLflow logging")
+        
+        # Ensure experiment exists even without callback
+        if self.enable_mlflow and mlflow:
+            try:
+                mlflow.set_experiment(self.mlflow_experiment)
+                print(f"✓ MLflow experiment set: {self.mlflow_experiment}")
+            except Exception as e:
+                print(f"Warning: Could not set MLflow experiment: {e}")
+        study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True, callbacks=callbacks)
         
         tuning_time = time.time() - start_time
         print(f"Tuning completed in {tuning_time:.2f} seconds")
@@ -259,6 +488,104 @@ class OptunaTuner:
         self.save_results(study)
         
         return study
+
+    def register_best_model(self, study: optuna.Study, model_name: str, stage: str = "Staging") -> Optional[str]:
+        """
+        Register the best model from the study in the MLflow Model Registry.
+
+        This uses the run_id stored on the best trial (user_attr "mlflow_run_id") and
+        the best fold index (user_attr "best_fold") to form the model URI
+        runs:/<run_id>/model_fold<best_fold>.
+
+        Args:
+            study: The completed Optuna study.
+            model_name: The registered model name to use in MLflow.
+            stage: Target stage to transition the registered version to (e.g., "Staging", "Production").
+
+        Returns:
+            The registered model version string, or None if registration not performed.
+        """
+        # Return average validation loss across folds
+        avg_loss = np.mean(fold_losses)
+
+        # ================================================================
+        # MLflow Logging: Trial Summary and Cleanup
+        # ================================================================
+        # Log aggregated metrics across all folds for this trial
+        if self.enable_mlflow and self.mlflow_logger:
+            trial_summary = {
+                "avg_val_loss": float(avg_loss),
+                "std_val_loss": float(np.std(fold_losses)),
+                "min_val_loss": float(np.min(fold_losses)),
+                "max_val_loss": float(np.max(fold_losses)),
+                "n_folds_completed": len(fold_losses),
+            }
+            
+            self.mlflow_logger.log_metrics(trial_summary)
+            
+            # Store metadata for model registration
+            best_fold_idx = int(np.argmin(fold_losses)) + 1
+            trial.set_user_attr("best_fold", best_fold_idx)
+            self.mlflow_logger.set_tag("best_fold", str(best_fold_idx))
+            self.mlflow_logger.set_tag("trial_status", "completed")
+            
+            # End MLflow run
+            self.mlflow_logger.end_run()
+
+        return avg_loss
+    
+    def register_best_model(self, study: optuna.Study, model_name: str, stage: str = "Staging") -> Optional[str]:
+        """
+        Register the best model from the study in the MLflow Model Registry.
+
+        This uses the run_id stored on the best trial (user_attr "mlflow_run_id") and
+        the best fold index (user_attr "best_fold") to form the model URI
+        runs:/<run_id>/model_fold<best_fold>.
+
+        Args:
+            study: The completed Optuna study.
+            model_name: The registered model name to use in MLflow.
+            stage: Target stage to transition the registered version to (e.g., "Staging", "Production").
+
+        Returns:
+            The registered model version string, or None if registration not performed.
+        """
+        if not (self.enable_mlflow and MLFLOW_AVAILABLE):
+            print("MLflow not available or not enabled; skipping model registration.")
+            return None
+            
+        try:
+            # Register best model in model registry (without deprecated staging)
+            best_trial = study.best_trial
+            run_id = best_trial.user_attrs.get("mlflow_run_id")
+            best_fold = best_trial.user_attrs.get("best_fold", 1)
+            
+            if not run_id:
+                print("No MLflow run ID found in best trial; skipping model registration.")
+                return None
+                
+            model_uri = f"runs:/{run_id}/model_fold{best_fold}"
+            
+            # Register the model
+            model_version = mlflow.register_model(model_uri, model_name)
+            print(f"Registered model version {model_version.version} for {model_name} from {model_uri}")
+            
+            # Set model version alias instead of deprecated stage
+            client = mlflow.tracking.MlflowClient()
+            try:
+                client.set_registered_model_alias(
+                    name=model_name,
+                    alias="champion",  # Use alias instead of deprecated stage
+                    version=model_version.version
+                )
+                print(f"Set alias 'champion' for model version {model_version.version}")
+            except AttributeError:
+                # Fallback for older MLflow versions - skip staging
+                print(f"Model registered without alias (MLflow version doesn't support aliases)")
+            
+        except Exception as e:
+            self.mlflow_logger.warning(f"Failed to register model: {e}")
+        return None
     
     def save_results(self, study: optuna.Study):
         """
@@ -312,33 +639,33 @@ class OptunaTuner:
         
         print(f"Tuning summary saved to {summary_path}")
         
-        # Plot optimization history
-        self.plot_optimization_history(study)
-        
-        # Plot parameter importances
-        self.plot_parameter_importances(study)
-    
-    def plot_optimization_history(self, study: optuna.Study):
-        """Plot optimization history (matplotlib backend)."""
+        # Create optimization history plot (suppress experimental warnings)
         try:
-            ax = plot_hist(study)
-            fig = ax.figure
-            out_path = os.path.join(self.output_dir, 'optimization_history.png')
-            fig.savefig(out_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            print(f"Optimization history plot saved to {out_path}")
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning, module="optuna")
+                warnings.filterwarnings("ignore", message=".*experimental.*", module="optuna")
+                # Use matplotlib backend to get a Matplotlib Axes
+                ax = plot_hist(study)
+                ax.figure.savefig(os.path.join(self.output_dir, 'optimization_history.png'), 
+                                dpi=300, bbox_inches='tight')
+                plt.close()
+                print(f"Optimization history plot saved to {self.output_dir}/optimization_history.png")
         except Exception as e:
             print(f"Could not create optimization history plot: {e}")
-    
-    def plot_parameter_importances(self, study: optuna.Study):
-        """Plot parameter importances (matplotlib backend)."""
+        
+        # Create parameter importance plot (suppress experimental warnings)
         try:
-            ax = plot_importances(study)
-            fig = ax.figure
-            out_path = os.path.join(self.output_dir, 'parameter_importances.png')
-            fig.savefig(out_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-            print(f"Parameter importances plot saved to {out_path}")
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning, module="optuna")
+                warnings.filterwarnings("ignore", message=".*experimental.*", module="optuna")
+                # Use matplotlib backend to get a Matplotlib Axes
+                ax = plot_importances(study)
+                ax.figure.savefig(os.path.join(self.output_dir, 'parameter_importances.png'), 
+                                dpi=300, bbox_inches='tight')
+                plt.close()
+                print(f"Parameter importances plot saved to {self.output_dir}/parameter_importances.png")
         except Exception as e:
             print(f"Could not create parameter importances plot: {e}")
 
@@ -378,7 +705,11 @@ def run_hyperparameter_tuning(
     n_folds: int = 5,
     max_epochs: int = 150,
     patience: int = 10,
-    resume: bool = True
+    resume: bool = True,
+    loss_name: str = 'mse',
+    loss_params: Optional[Dict[str, Any]] = None,
+    enable_mlflow: bool = False,
+    mlflow_experiment: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Run hyperparameter tuning with default paths.
@@ -396,13 +727,11 @@ def run_hyperparameter_tuning(
     Returns:
         Dictionary with best hyperparameters and study info
     """
-    # Set default paths
-    if npz_path is None:
-        npz_path = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
-    if output_dir is None:
-        output_dir = os.path.join('Hyperparameter_Tuning', 'output')
-    if test_indices_path is None:
-        test_indices_path = os.path.join('Hyperparameter_Tuning', 'output', 'test_indices.pkl')
+    # Require explicit inputs (no internal defaults)
+    if npz_path is None or output_dir is None or test_indices_path is None:
+        raise ValueError(
+            "npz_path, output_dir, and test_indices_path must be provided to run_hyperparameter_tuning()."
+        )
     
     # Create tuner
     tuner = OptunaTuner(
@@ -411,12 +740,16 @@ def run_hyperparameter_tuning(
         test_indices_path=test_indices_path,
         n_folds=n_folds,
         max_epochs=max_epochs,
-        patience=patience
+        patience=patience,
+        loss_name=loss_name,
+        loss_params=loss_params,
+        enable_mlflow=enable_mlflow,
+        mlflow_experiment=mlflow_experiment
     )
     
     # Run tuning
     study = tuner.run_tuning(n_trials=n_trials, resume=resume)
-    
+    tuner.register_best_model(study=study, model_name="land_rainfall_model", stage="Staging")
     return {
         'best_hyperparameters': study.best_trial.params,
         'best_value': study.best_trial.value,
@@ -426,16 +759,26 @@ def run_hyperparameter_tuning(
 
 
 if __name__ == "__main__":
-    # Test hyperparameter tuning
-    print("Testing PyTorch hyperparameter tuning...")
-    
-    # Run a small test
+    _npz = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
+    _out = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2')
+    _test_idx = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2', 'test_indices.pkl')
+
     results = run_hyperparameter_tuning(
-        output_dir=os.path.join('Hyperparameter_Tuning', 'output'),
-        n_trials=5,  # Small number for testing
-        n_folds=3,   # Fewer folds for testing
-        max_epochs=10,  # Fewer epochs for testing
-        patience=5
+        npz_path=_npz,
+        output_dir=_out,
+        test_indices_path=_test_idx,
+        n_trials=50,
+        n_folds=3,
+        max_epochs=100,
+        patience=10,
+        enable_mlflow=True,
+        mlflow_experiment="pytorch_tuning_weighted_MSE",
+        loss_name="weighted_mse",
+        loss_params = {
+            'alpha': 3.0,
+            'power': 2.0,
+            'percentile': 0.90,
+        }
     )
     
     print(f"Best hyperparameters: {results['best_hyperparameters']}")

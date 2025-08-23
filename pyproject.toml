@@ -41,7 +41,8 @@ dependencies = [
     "ipykernel>=6.0.0",
     "ipywidgets>=7.6.0",
     "tqdm>=4.62.0",
-    "plotly>=6.3.0"
+    "plotly>=6.3.0",
+    "mlflow>=3.0.0"
 ]
 
 [project.optional-dependencies]

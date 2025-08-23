@@ -78,7 +78,7 @@ class CosineAnnealingWarmup:
 
 
 def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optimizer, 
-                criterion: nn.Module, device: torch.device) -> Tuple[float, float]:
+                criterion: nn.Module, device: torch.device) -> Tuple[float, float, float]:
     """
     Train the model for one epoch.
     
@@ -90,11 +90,12 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         device: Device to run on
         
     Returns:
-        Tuple of (average_loss, average_mae)
+        Tuple of (average_loss, average_mae, average_unweighted_mse)
     """
     model.train()
     total_loss = 0.0
     total_mae = 0.0
+    total_mse_unweighted = 0.0
     num_batches = 0
     
     for features, targets in dataloader:
@@ -118,17 +119,63 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         with torch.no_grad():
             mae = torch.mean(input=torch.abs(input=outputs - targets)).item()
             total_mae += mae
+            # Plain (unweighted) MSE regardless of the selected criterion
+            mse_unweighted = torch.mean((outputs - targets) ** 2).item()
+            total_mse_unweighted += mse_unweighted
         
         num_batches += 1
     
-    avg_loss = total_loss / num_batches
-    avg_mae = total_mae / num_batches
+    avg_loss = total_loss / max(1, num_batches)
+    avg_mae = total_mae / max(1, num_batches)
+    avg_mse_unweighted = total_mse_unweighted / max(1, num_batches)
     
-    return avg_loss, avg_mae
+    return avg_loss, avg_mae, avg_mse_unweighted
+
+
+class WeightedMSELoss(nn.Module):
+    """Weighted MSE that emphasizes errors at the high end of the target.
+
+    Weights are computed per-batch based on a percentile threshold of the targets.
+    For targets above the threshold, the weight increases as (target - threshold)^power.
+
+    Args:
+        alpha: Strength of upweighting (>=0). 0 means plain MSE.
+        power: Exponent for how fast weights grow with exceedance.
+        percentile: Quantile in [0,1] to define the heavy-rain threshold.
+                   E.g., 0.8 means top 20% targets are upweighted.
+    """
+
+    def __init__(self, alpha: float = 2.0, power: float = 1.0, percentile: float = 0.95):
+        super().__init__()
+        self.alpha = float(alpha)
+        self.power = float(power)
+        self.percentile = float(percentile)
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Detach targets so threshold calculation doesn't affect autograd
+        detached_targets = targets.detach()
+        quantile_value = torch.tensor(self.percentile, device=detached_targets.device, dtype=detached_targets.dtype)
+        try:
+            threshold = torch.quantile(detached_targets, quantile_value)
+        except Exception:
+            # Fallback if quantile not available
+            sorted_targets, _ = torch.sort(detached_targets.view(-1))
+            k = max(0, min(sorted_targets.numel() - 1, int((self.percentile) * (sorted_targets.numel() - 1))))
+            threshold = sorted_targets[k]
+
+        # Compute how much each targets exceeds threshold
+        excess = (targets - threshold).clamp(min=0.0)
+        # Compute weights for each target
+        raw_weights = 1.0 + self.alpha * (excess ** self.power)
+        # Normalize weights to keep the expected scale of the loss stable
+        normalized_weights = raw_weights / (raw_weights.mean() + 1e-8)
+
+        loss = torch.mean(normalized_weights * (preds - targets) ** 2)
+        return loss
 
 
 def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, 
-                  device: torch.device) -> Tuple[float, float]:
+                  device: torch.device) -> Tuple[float, float, float]:
     """
     Validate the model for one epoch.
     
@@ -144,6 +191,7 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
     model.eval()
     total_loss = 0.0
     total_mae = 0.0
+    total_mse_unweighted = 0.0
     num_batches = 0
     
     with torch.no_grad():
@@ -160,12 +208,16 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
             total_loss += loss.item()
             mae = torch.mean(input=torch.abs(input=outputs - targets)).item()
             total_mae += mae
+            # Plain (unweighted) MSE regardless of criterion
+            mse_unweighted = torch.mean((outputs - targets) ** 2).item()
+            total_mse_unweighted += mse_unweighted
             num_batches += 1
     
     avg_loss = total_loss / num_batches
     avg_mae = total_mae / num_batches
+    avg_mse_unweighted = total_mse_unweighted / num_batches
     
-    return avg_loss, avg_mae
+    return avg_loss, avg_mae, avg_mse_unweighted
 
 
 def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader], 
@@ -173,7 +225,9 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
                 weight_decay: float = 0.001, patience: int = 10,
                 device: Optional[torch.device] = None,
                 save_path: Optional[str] = None,
-                verbose: bool = True) -> Dict[str, List[float]]:
+                verbose: bool = True,
+                loss_name: str = 'mse',
+                loss_params: Optional[Dict[str, Any]] = None) -> Dict[str, List[float]]:
     """
     Train a PyTorch model with early stopping and learning rate scheduling.
     
@@ -192,13 +246,19 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
         Dictionary containing training history
     """
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device(
+            'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+        )
     
     model = model.to(device=device)
     
     # Setup optimizer and loss function
     optimizer = optim.AdamW(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    criterion = nn.MSELoss(reduction='mean')
+    if loss_name == 'weighted_mse':
+        params = loss_params or {}
+        criterion = WeightedMSELoss(**params)
+    else:
+        criterion = nn.MSELoss(reduction='mean')
     
     # Setup learning rate scheduler and early stopping
     scheduler = CosineAnnealingWarmup(optimizer, warmup_epochs=5, total_epochs=epochs)
@@ -210,6 +270,8 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
         'val_loss': [],
         'train_mae': [],
         'val_mae': [],
+        'train_mse_unweighted': [],
+        'val_mse_unweighted': [],
         'lr': []
     }
     
@@ -226,14 +288,16 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
         history['lr'].append(current_lr)
         
         # Train for one epoch
-        train_loss, train_mae = train_epoch(model, dataloaders['train'], optimizer, criterion, device)
+        train_loss, train_mae, train_mse_unw = train_epoch(model, dataloaders['train'], optimizer, criterion, device)
         history['train_loss'].append(train_loss)
         history['train_mae'].append(train_mae)
+        history['train_mse_unweighted'].append(train_mse_unw)
         
         # Validate
-        val_loss, val_mae = validate_epoch(model, dataloaders['val'], criterion, device)
+        val_loss, val_mae, val_mse_unw = validate_epoch(model, dataloaders['val'], criterion, device)
         history['val_loss'].append(val_loss)
         history['val_mae'].append(val_mae)
+        history['val_mse_unweighted'].append(val_mse_unw)
         
         # Always show progress for hyperparameter tuning (more frequent updates)
         if verbose and (epoch + 1) % 5 == 0:
@@ -251,7 +315,17 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
     
     if verbose:
         print(f"Training completed in {training_time:.2f} seconds")
-        print(f"Best validation loss: {early_stopping.best_loss:.6f}")
+        # Clarify which criterion the validation loss refers to, and report the plain MSE too
+        try:
+            import numpy as _np
+            best_idx = int(_np.argmin(history['val_loss']))
+            mse_unw_at_best = history.get('val_mse_unweighted', [None])[best_idx]
+        except Exception:
+            best_idx = None
+            mse_unw_at_best = None
+        print(f"Best validation loss (criterion={loss_name}): {early_stopping.best_loss:.6f}")
+        if mse_unw_at_best is not None:
+            print(f"Validation MSE (unweighted) at best epoch{f' {best_idx+1}' if best_idx is not None else ''}: {mse_unw_at_best:.6f}")
     
     # Save model if path provided
     if save_path:
@@ -287,7 +361,9 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader,
         Dictionary of evaluation metrics
     """
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device(
+            'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+        )
     
     model = model.to(device=device)
     model.eval()
@@ -305,8 +381,8 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader,
             all_predictions.append(outputs.cpu().numpy().flatten())
             all_targets.append(targets.cpu().numpy().flatten())
     
-    predictions = np.concatenate(arrays=all_predictions)
-    targets = np.concatenate(arrays=all_targets)
+    predictions = np.concatenate(all_predictions)
+    targets = np.concatenate(all_targets)
     
     # Calculate metrics in normalized space
     mse = mean_squared_error(y_true=targets, y_pred=predictions)
@@ -349,12 +425,15 @@ def plot_training_history(history: Dict[str, List[float]], save_path: Optional[s
     """
     fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(12, 8))
     
-    # Loss plot
-    axes[0, 0].plot(history['train_loss'], label='Train Loss', alpha=0.8)
-    axes[0, 0].plot(history['val_loss'], label='Val Loss', alpha=0.8)
+    # Loss plot (criterion loss) with optional overlay of plain MSE
+    axes[0, 0].plot(history['train_loss'], label='Train Loss (criterion)', alpha=0.9)
+    axes[0, 0].plot(history['val_loss'], label='Val Loss (criterion)', alpha=0.9)
+    if 'train_mse_unweighted' in history and 'val_mse_unweighted' in history:
+        axes[0, 0].plot(history['train_mse_unweighted'], '--', label='Train MSE (unweighted)', alpha=0.7)
+        axes[0, 0].plot(history['val_mse_unweighted'], '--', label='Val MSE (unweighted)', alpha=0.7)
     axes[0, 0].set_title('Loss')
     axes[0, 0].set_xlabel('Epoch')
-    axes[0, 0].set_ylabel('MSE Loss')
+    axes[0, 0].set_ylabel('Loss')
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
     
@@ -377,11 +456,14 @@ def plot_training_history(history: Dict[str, List[float]], save_path: Optional[s
     
     # Loss zoom (last 50% of training)
     start_idx = len(history['train_loss']) // 2
-    axes[1, 1].plot(history['train_loss'][start_idx:], label='Train Loss', alpha=0.8)
-    axes[1, 1].plot(history['val_loss'][start_idx:], label='Val Loss', alpha=0.8)
+    axes[1, 1].plot(history['train_loss'][start_idx:], label='Train Loss (criterion)', alpha=0.9)
+    axes[1, 1].plot(history['val_loss'][start_idx:], label='Val Loss (criterion)', alpha=0.9)
+    if 'train_mse_unweighted' in history and 'val_mse_unweighted' in history:
+        axes[1, 1].plot(history['train_mse_unweighted'][start_idx:], '--', label='Train MSE (unweighted)', alpha=0.7)
+        axes[1, 1].plot(history['val_mse_unweighted'][start_idx:], '--', label='Val MSE (unweighted)', alpha=0.7)
     axes[1, 1].set_title('Loss (Last 50% of Training)')
     axes[1, 1].set_xlabel('Epoch')
-    axes[1, 1].set_ylabel('MSE Loss')
+    axes[1, 1].set_ylabel('Loss')
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
     
@@ -408,7 +490,9 @@ def save_predictions(model: nn.Module, dataloader: DataLoader, save_path: str,
         rainfall_std: Standard deviation for denormalizing
     """
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device(
+            'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+        )
     
     model = model.to(device=device)
     model.eval()

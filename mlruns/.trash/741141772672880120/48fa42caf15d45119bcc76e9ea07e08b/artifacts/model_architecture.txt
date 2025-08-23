@@ -1,0 +1,27 @@
+LANDModel Architecture
+==============================
+LANDModel(
+  (climate_conv): Conv2d(16, 384, kernel_size=(3, 3), stride=(1, 1), groups=16)
+  (climate_bn): BatchNorm1d(384, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (climate_fc2): Linear(in_features=384, out_features=384, bias=True)
+  (climate_bn2): BatchNorm1d(384, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (local_dem_fc): Linear(in_features=9, out_features=16, bias=True)
+  (local_dem_bn): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (local_dem_fc2): Linear(in_features=16, out_features=16, bias=True)
+  (local_dem_bn2): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (regional_dem_fc): Linear(in_features=9, out_features=128, bias=True)
+  (regional_dem_bn): BatchNorm1d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (regional_dem_fc2): Linear(in_features=128, out_features=128, bias=True)
+  (regional_dem_bn2): BatchNorm1d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (month_fc): Linear(in_features=12, out_features=16, bias=True)
+  (month_bn): BatchNorm1d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (fc1): Linear(in_features=544, out_features=512, bias=True)
+  (bn1): BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (dropout1): Dropout(p=0.1, inplace=False)
+  (fc2): Linear(in_features=512, out_features=64, bias=True)
+  (bn2): BatchNorm1d(64, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (dropout2): Dropout(p=0.1, inplace=False)
+  (output): Linear(in_features=64, out_features=1, bias=True)
+)
+
+Trainable parameters: 485,345

@@ -30,7 +30,7 @@ class LANDModel(nn.Module):
                  dropout_rate: float,
                  l2_reg: float,
                  use_residual: bool,
-                 activation: str,
+                 climate_activation: str,
                  output_activation: Optional[str],
                  climate_processing: str,
                  climate_shape: tuple = (16, 3, 3),
@@ -51,7 +51,7 @@ class LANDModel(nn.Module):
             dropout_rate: Dropout rate
             l2_reg: L2 regularization strength (applied via weight decay in optimizer)
             use_residual: Whether to use residual connection between na and nb layers
-            activation: Activation function ('relu', 'elu', 'selu')
+            climate_activation: Activation for climate/reanalysis branch only ('relu' or 'none')
             output_activation: Output activation ('relu', 'softplus', None)
             climate_processing: Method to process climate data ('flatten' or 'conv2d')
             climate_shape: Shape of climate/reanalysis patches (channels, height, width)
@@ -69,8 +69,8 @@ class LANDModel(nn.Module):
         self.output_activation = output_activation
         self.climate_processing = climate_processing
         
-        # Get activation function
-        self.activation_fn = self._get_activation(activation)
+        # Climate branch activation can be independently set to 'relu' or 'none'
+        self.climate_activation_fn = self._get_optional_activation(climate_activation)
         
         # Climate/reanalysis processing - support both flatten and conv2d options
         if climate_processing == 'conv2d':
@@ -92,16 +92,25 @@ class LANDModel(nn.Module):
             climate_input_size = climate_shape[0] * climate_shape[1] * climate_shape[2]
             self.climate_fc = nn.Linear(in_features=climate_input_size, out_features=climate_units)
             self.climate_bn = nn.BatchNorm1d(num_features=climate_units)
+        # Second dense stage for climate branch (applied after BN+activation of the first stage)
+        self.climate_fc2 = nn.Linear(in_features=climate_units, out_features=climate_units)
+        self.climate_bn2 = nn.BatchNorm1d(num_features=climate_units)
         
         # Local DEM processing
         local_dem_input_size = local_dem_shape[0] * local_dem_shape[1]
         self.local_dem_fc = nn.Linear(in_features=local_dem_input_size, out_features=local_dem_units)
         self.local_dem_bn = nn.BatchNorm1d(num_features=local_dem_units)
+        # Second dense stage for local DEM branch
+        self.local_dem_fc2 = nn.Linear(in_features=local_dem_units, out_features=local_dem_units)
+        self.local_dem_bn2 = nn.BatchNorm1d(num_features=local_dem_units)
         
         # Regional DEM processing
         regional_dem_input_size = regional_dem_shape[0] * regional_dem_shape[1]
         self.regional_dem_fc = nn.Linear(in_features=regional_dem_input_size, out_features=regional_dem_units)
         self.regional_dem_bn = nn.BatchNorm1d(num_features=regional_dem_units)
+        # Second dense stage for regional DEM branch
+        self.regional_dem_fc2 = nn.Linear(in_features=regional_dem_units, out_features=regional_dem_units)
+        self.regional_dem_bn2 = nn.BatchNorm1d(num_features=regional_dem_units)
         
         # Month processing
         self.month_fc = nn.Linear(in_features=num_month_encodings, out_features=month_units)
@@ -123,16 +132,14 @@ class LANDModel(nn.Module):
         # Initialize weights
         self._initialize_weights()
     
-    def _get_activation(self, activation: str):
-        """Get activation function by name."""
-        if activation == 'relu':
+    def _get_optional_activation(self, activation: str):
+        """Get activation function where 'none' maps to identity."""
+        if activation == 'none':
+            return lambda x: x
+        elif activation == 'relu':
             return F.relu
-        elif activation == 'elu':
-            return F.elu
-        elif activation == 'selu':
-            return F.selu
         else:
-            raise ValueError(f"Unknown activation: {activation}")
+            raise ValueError(f"Unknown climate_activation: {activation}. Use 'relu' or 'none'.")
     
     def _initialize_weights(self):
         """Initialize model weights using Xavier/Glorot initialization."""
@@ -173,27 +180,40 @@ class LANDModel(nn.Module):
             
         # Common processing for both methods
         climate_out = self.climate_bn(climate_out)
-        climate_out = self.activation_fn(climate_out)
+        climate_out = self.climate_activation_fn(climate_out)
+        # Second dense stage for climate branch
+        climate_out = self.climate_fc2(climate_out)
+        climate_out = self.climate_bn2(climate_out)
+        climate_out = self.climate_activation_fn(climate_out)
         
         # Process local DEM data
         local_dem = features['local_dem']
         local_dem_flat = local_dem.view(local_dem.size(0), -1)  # Flatten to (batch_size, H*W)
         local_dem_out = self.local_dem_fc(local_dem_flat)
         local_dem_out = self.local_dem_bn(local_dem_out)
-        local_dem_out = self.activation_fn(local_dem_out)
+        # Non-climate branches always use ReLU
+        local_dem_out = F.relu(local_dem_out)
+        # Second dense stage for local DEM branch
+        local_dem_out = self.local_dem_fc2(local_dem_out)
+        local_dem_out = self.local_dem_bn2(local_dem_out)
+        local_dem_out = F.relu(local_dem_out)
         
         # Process regional DEM data
         regional_dem = features['regional_dem']
         regional_dem_flat = regional_dem.view(regional_dem.size(0), -1)  # Flatten to (batch_size, H*W)
         regional_dem_out = self.regional_dem_fc(regional_dem_flat)
         regional_dem_out = self.regional_dem_bn(regional_dem_out)
-        regional_dem_out = self.activation_fn(regional_dem_out)
+        regional_dem_out = F.relu(regional_dem_out)
+        # Second dense stage for regional DEM branch
+        regional_dem_out = self.regional_dem_fc2(regional_dem_out)
+        regional_dem_out = self.regional_dem_bn2(regional_dem_out)
+        regional_dem_out = F.relu(regional_dem_out)
         
         # Process month data
         month = features['month']
         month_out = self.month_fc(month)
         month_out = self.month_bn(month_out)
-        month_out = self.activation_fn(month_out)
+        month_out = F.relu(month_out)
         
         # Concatenate all features
         combined = torch.cat(tensors=[climate_out, local_dem_out, regional_dem_out, month_out], dim=1)
@@ -201,9 +221,9 @@ class LANDModel(nn.Module):
         # First dense layer
         x = self.fc1(combined)
         x = self.bn1(x)
-        x = self.activation_fn(x)
-        x = self.dropout1(x)
-        
+        # Dense head uses ReLU as requested
+        x = F.relu(x)
+
         # Store for potential residual connection
         residual = x if self.use_residual else None
         
@@ -215,7 +235,7 @@ class LANDModel(nn.Module):
         if self.use_residual and residual is not None:
             x = x + residual
         
-        x = self.activation_fn(x)
+        x = F.relu(x)
         x = self.dropout2(x)
         
         # Output layer
@@ -250,7 +270,8 @@ def create_model_from_hyperparams(hyperparams: Dict, metadata: Dict) -> LANDMode
     required_keys = [
         'climate_units', 'local_dem_units', 'regional_dem_units', 'month_units',
         'na', 'nb', 'dropout_rate', 'l2_reg', 'use_residual',
-        'activation', 'output_activation', 'climate_processing'
+        'output_activation', 'climate_processing'
+        # 'climate_activation' is optional; defaults to 'relu'
     ]
     missing = [k for k in required_keys if k not in hyperparams]
     if missing:
@@ -266,7 +287,7 @@ def create_model_from_hyperparams(hyperparams: Dict, metadata: Dict) -> LANDMode
         dropout_rate=hyperparams['dropout_rate'],
         l2_reg=hyperparams['l2_reg'],
         use_residual=hyperparams['use_residual'],
-        activation=hyperparams['activation'],
+        climate_activation=hyperparams.get('climate_activation', 'relu'),
         output_activation=hyperparams['output_activation'],
         climate_processing=hyperparams['climate_processing'],
         climate_shape=metadata['climate_shape'],

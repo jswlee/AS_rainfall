@@ -1,0 +1,10 @@
+artifact_location: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/216602146578443909/models/m-f38889ec7d6d4754a79a7007b3e1f012/artifacts
+creation_timestamp: 1755975976006
+experiment_id: '216602146578443909'
+last_updated_timestamp: 1755975979898
+model_id: m-f38889ec7d6d4754a79a7007b3e1f012
+model_type: null
+name: trained_model
+source_run_id: f2975c30f31845a68bf7c4e52ca9a4ce
+status: 2
+status_message: null

@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/653990129664931023/54ad33f1ca6f4d48a68e4a7544551ad0/artifacts
+deleted_time: 1755906103227
+end_time: 1755906012133
+entry_point_name: ''
+experiment_id: '653990129664931023'
+lifecycle_stage: deleted
+run_id: 54ad33f1ca6f4d48a68e4a7544551ad0
+run_name: trial_15
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1755905980572
+status: 3
+tags: []
+user_id: jlee
