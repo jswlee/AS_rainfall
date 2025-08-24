@@ -1,0 +1,23 @@
+artifact_path: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/547931419339990701/models/m-6b2ac7e6818344d98f79aee62077912a/artifacts
+flavors:
+  python_function:
+    config:
+      device: null
+    data: data
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pytorch
+    pickle_module_name: mlflow.pytorch.pickle_module
+    python_version: 3.11.9
+  pytorch:
+    code: null
+    model_data: data
+    pytorch_version: 2.8.0
+mlflow_version: 3.3.1
+model_id: m-6b2ac7e6818344d98f79aee62077912a
+model_size_bytes: 2356782
+model_uuid: m-6b2ac7e6818344d98f79aee62077912a
+prompts: null
+run_id: a43ddf899dff485b84fcc3b7c2c66504
+utc_time_created: '2025-08-23 22:42:43.610608'

@@ -1,8 +1,8 @@
 aliases:
-  champion: '4'
+  champion: '6'
 creation_timestamp: 1755903716879
 deployment_job_id: null
 deployment_job_state: null
 description: null
-last_updated_timestamp: 1755910196394
+last_updated_timestamp: 1755989275290
 name: land_rainfall_model

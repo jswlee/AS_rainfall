@@ -763,14 +763,14 @@ def train_best_model_pytorch(
 
 
 if __name__ == "__main__":
-    output_dir = os.path.join('Train_Best_Model', 'output_WeightedMSE', 'pytorch_best_model')
+    output_dir = os.path.join('Train_Best_Model', 'output_WeightedMSE_2', 'pytorch_best_model')
     os.makedirs(output_dir, exist_ok=True)
 
     results = train_best_model_pytorch(
         npz_path=os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
-        hyperparams_dir=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE'),
+        hyperparams_dir=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2'),
         output_dir=output_dir,
-        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE', 'test_indices.pkl'),
+        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2', 'test_indices.pkl'),
         epochs=150,
         save_model=True,
         loss_name='weighted_mse',

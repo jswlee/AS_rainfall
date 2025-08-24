@@ -173,7 +173,7 @@ class OptunaTuner:
             # Training parameters
             'learning_rate': trial.suggest_float(name='learning_rate', low=1e-3, high=1e-2, log=True),
             'weight_decay': trial.suggest_float(name='weight_decay', low=1e-6, high=1e-3, log=True),
-            'batch_size': trial.suggest_categorical(name='batch_size', choices=[16, 32, 64, 128]),
+            'batch_size': trial.suggest_categorical(name='batch_size', choices=[64, 128, 256]),
             
             # Model architecture choices
             'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
@@ -760,8 +760,8 @@ def run_hyperparameter_tuning(
 
 if __name__ == "__main__":
     _npz = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
-    _out = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2')
-    _test_idx = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2', 'test_indices.pkl')
+    _out = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_3')
+    _test_idx = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_3', 'test_indices.pkl')
 
     results = run_hyperparameter_tuning(
         npz_path=_npz,
@@ -770,7 +770,7 @@ if __name__ == "__main__":
         n_trials=50,
         n_folds=3,
         max_epochs=100,
-        patience=10,
+        patience=15,
         enable_mlflow=True,
         mlflow_experiment="pytorch_tuning_weighted_MSE",
         loss_name="weighted_mse",
