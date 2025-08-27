@@ -5,3 +5,4 @@ data/climate_variables/
 *.nc
 *.pkl
 *.egg-info
+ipynb_checkpoints
