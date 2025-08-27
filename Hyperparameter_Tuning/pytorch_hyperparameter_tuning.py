@@ -385,7 +385,6 @@ class OptunaTuner:
             trial.set_user_attr("best_fold", best_fold_idx)
             self.mlflow_logger.set_tag("best_fold", str(best_fold_idx))
             self.mlflow_logger.set_tag("trial_status", "completed")
-            self.mlflow_logger.set_tag("final_test_r2", str(results['test_metrics']['r2']))
         
         # Clean up MLflow run if we started it
         if _mlflow_run_started_here and mlflow:
