@@ -9,6 +9,7 @@ import time
 import torch
 import numpy as np
 import random
+import argparse
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.model_selection import StratifiedKFold
 import matplotlib.pyplot as plt
@@ -786,23 +787,52 @@ def train_best_model_pytorch(
 
 
 if __name__ == "__main__":
-    output_dir = os.path.join('Train_Best_Model', 'output_WeightedMSE_4', 'pytorch_best_model')
-    os.makedirs(output_dir, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
+    parser.add_argument("--npz-path", required=True, help="Path to assembled NPZ data file")
+    parser.add_argument("--hyperparams-dir", required=True, help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", required=True, help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", required=True, help="Path to test indices file for reproducibility")
+
+    parser.add_argument("--epochs", type=int, default=300, help="Maximum training epochs")
+    parser.add_argument("--save-model", action="store_true", help="Save trained model state_dict to output dir")
+    parser.add_argument("--no-save-model", dest="save_model", action="store_false", help="Do not save model")
+    parser.set_defaults(save_model=True)
+
+    parser.add_argument("--loss-name", type=str, default="mse", choices=["mse", "weighted_mse"], help="Training loss name")
+    parser.add_argument("--loss-params", type=str, default=None, help="JSON string of loss params, e.g. '{\"alpha\": 5, \"power\": 4, \"percentile\": 0.9}'")
+
+    parser.add_argument("--n-folds", type=int, default=5, help="If >1, perform CV on train+val and select best fold")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    parser.add_argument("--enable-mlflow", action="store_true", help="Enable MLflow experiment tracking")
+    parser.add_argument("--mlflow-experiment", type=str, default="AS_Rainfall_Production_Training", help="MLflow experiment name")
+    parser.add_argument("--mlflow-run-name", type=str, default=None, help="Optional MLflow run name")
+
+    args = parser.parse_args()
+
+    # Parse loss params JSON if provided
+    loss_params = None
+    if args.loss_params:
+        try:
+            loss_params = json.loads(args.loss_params)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"Invalid --loss-params JSON: {e}")
 
     results = train_best_model_pytorch(
-        npz_path=os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
-        hyperparams_dir=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4'),
-        output_dir=output_dir,
-        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4', 'test_indices.pkl'),
-        epochs=150,
-        save_model=True,
-        loss_name='weighted_mse',
-        loss_params={'alpha': 5.0, 'power': 4.0, 'percentile': 0.90},
-        n_folds=15,
-        enable_mlflow=True,
-        mlflow_experiment='AS_Rainfall_Production_Training',
-        mlflow_run_name=None,
+        npz_path=args.npz_path,
+        hyperparams_dir=args.hyperparams_dir,
+        output_dir=args.output_dir,
+        test_indices_path=args.test_indices_path,
+        epochs=args.epochs,
+        save_model=args.save_model,
+        loss_name=args.loss_name,
+        loss_params=loss_params,
+        n_folds=args.n_folds,
+        seed=args.seed,
+        enable_mlflow=args.enable_mlflow,
+        mlflow_experiment=args.mlflow_experiment,
+        mlflow_run_name=args.mlflow_run_name,
     )
 
-    print(f"\nTraining completed successfully!")
+    print("\nTraining completed successfully!")
     print(f"Final test R²: {results['test_metrics']['r2']:.4f}")

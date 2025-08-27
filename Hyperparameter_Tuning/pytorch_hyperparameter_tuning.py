@@ -8,6 +8,7 @@ import json
 import time
 import numpy as np
 import torch
+import argparse
 import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
@@ -700,7 +701,8 @@ def run_hyperparameter_tuning(
     loss_name: str = 'mse',
     loss_params: Optional[Dict[str, Any]] = None,
     enable_mlflow: bool = False,
-    mlflow_experiment: Optional[str] = None
+    mlflow_experiment: Optional[str] = None,
+    study_name: str = "land_model_tuning",
 ) -> Dict[str, Any]:
     """
     Run hyperparameter tuning with default paths.
@@ -739,7 +741,7 @@ def run_hyperparameter_tuning(
     )
     
     # Run tuning
-    study = tuner.run_tuning(n_trials=n_trials, resume=resume)
+    study = tuner.run_tuning(n_trials=n_trials, study_name=study_name, resume=resume)
     tuner.register_best_model(study=study, model_name="land_rainfall_model", stage="Staging")
     return {
         'best_hyperparameters': study.best_trial.params,
@@ -748,30 +750,56 @@ def run_hyperparameter_tuning(
         'study': study
     }
 
-
 if __name__ == "__main__":
-    _npz = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
-    _out = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4')
-    _test_idx = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4', 'test_indices.pkl')
+    # Command-line interface for running hyperparameter tuning
+    parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
+    parser.add_argument("--npz-path", required=True, default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
+    parser.add_argument("--output-dir", required=True, default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4"), help="Directory to write tuning outputs")
+    parser.add_argument("--test-indices-path", required=True, default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4", "test_indices.pkl"), help="Path to test indices file for reproducibility")
 
-    results = run_hyperparameter_tuning(
-        npz_path=_npz,
-        output_dir=_out,
-        test_indices_path=_test_idx,
-        n_trials=100,
-        n_folds=3,
-        max_epochs=100,
-        patience=20,
-        enable_mlflow=True,
-        mlflow_experiment="pytorch_tuning_weighted_MSE",
-        loss_name="weighted_mse",
-        loss_params = {
-            'alpha': 3.0,
-            'power': 1.5,
-            'percentile': 0.90,
-        }
+    parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
+    parser.add_argument("--n-folds", type=int, default=5, help="Number of cross-validation folds")
+    parser.add_argument("--max-epochs", type=int, default=150, help="Max epochs per trial")
+    parser.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    parser.add_argument("--study-name", type=str, default="land_model_tuning", help="Optuna study name")
+
+    parser.add_argument("--loss-name", type=str, default="mse", choices=["mse", "weighted_mse"], help="Loss function name")
+    parser.add_argument("--loss-params", type=str, default=None, help="JSON string of loss params, e.g. '{\"w\": 0.5}'")
+
+    parser.add_argument("--enable-mlflow", action="store_true", help="Enable MLflow experiment tracking")
+    parser.add_argument("--mlflow-experiment", type=str, default=None, help="MLflow experiment name")
+
+    # Resume flags
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument("--resume", dest="resume", action="store_true", help="Resume existing study if found (default)")
+    resume_group.add_argument("--no-resume", dest="resume", action="store_false", help="Start a fresh study")
+    parser.set_defaults(resume=True)
+
+    args = parser.parse_args()
+
+    # Parse loss params JSON if provided
+    loss_params = None
+    if args.loss_params:
+        try:
+            loss_params = json.loads(args.loss_params)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"Invalid --loss-params JSON: {e}")
+
+    run_hyperparameter_tuning(
+        npz_path=args.npz_path,
+        output_dir=args.output_dir,
+        test_indices_path=args.test_indices_path,
+        n_trials=args.n_trials,
+        n_folds=args.n_folds,
+        max_epochs=args.max_epochs,
+        patience=args.patience,
+        resume=args.resume,
+        loss_name=args.loss_name,
+        loss_params=loss_params,
+        enable_mlflow=args.enable_mlflow,
+        mlflow_experiment=args.mlflow_experiment,
+        study_name=args.study_name,
     )
-    
-    print(f"Best hyperparameters: {results['best_hyperparameters']}")
-    print(f"Best validation loss: {results['best_value']:.6f}")
-    print(f"Completed {results['n_trials']} trials")
+
+
+ 
