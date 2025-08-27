@@ -753,9 +753,9 @@ def run_hyperparameter_tuning(
 if __name__ == "__main__":
     # Command-line interface for running hyperparameter tuning
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
-    parser.add_argument("--npz-path", required=True, default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
-    parser.add_argument("--output-dir", required=True, default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4"), help="Directory to write tuning outputs")
-    parser.add_argument("--test-indices-path", required=True, default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4", "test_indices.pkl"), help="Path to test indices file for reproducibility")
+    parser.add_argument("--npz-path", default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
+    parser.add_argument("--output-dir", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4"), help="Directory to write tuning outputs")
+    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4", "test_indices.pkl"), help="Path to test indices file for reproducibility")
 
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
     parser.add_argument("--n-folds", type=int, default=5, help="Number of cross-validation folds")
