@@ -338,27 +338,6 @@ class OptunaTuner:
                         )
                     
                     self.mlflow_logger.log_metrics(fold_metrics)
-                    
-                    # Log the trained model as an artifact with proper signature
-                    # Models are stored so you can load them later for inference/deployment
-                    try:
-                        # Create a sample input for signature inference
-                        sample_batch = next(iter(dataloaders['val']))
-                        sample_features, _ = sample_batch
-                        
-                        # Log model with modern API and signature
-                        self.mlflow_logger.log_model(
-                            model, 
-                            name=f"model_fold{fold_idx+1}",  # Use name instead of deprecated artifact_path
-                            input_example=sample_features,   # Provide input example for signature
-                        )
-                    except Exception as model_log_error:
-                        self.mlflow_logger.warning(f"Failed to log model with signature: {model_log_error}")
-                        # Fallback to basic model logging
-                        self.mlflow_logger.log_model(
-                            model, 
-                            name=f"model_fold{fold_idx+1}"
-                        )
 
                 # Report intermediate value for pruning
                 trial.report(best_val_loss, fold_idx)
@@ -406,6 +385,7 @@ class OptunaTuner:
             trial.set_user_attr("best_fold", best_fold_idx)
             self.mlflow_logger.set_tag("best_fold", str(best_fold_idx))
             self.mlflow_logger.set_tag("trial_status", "completed")
+            self.mlflow_logger.set_tag("final_test_r2", str(results['test_metrics']['r2']))
         
         # Clean up MLflow run if we started it
         if _mlflow_run_started_here and mlflow:
@@ -603,11 +583,18 @@ class OptunaTuner:
         for key, value in best_trial.params.items():
             print(f"    {key}: {value}")
         
-        # Save best hyperparameters
+        # Save best hyperparameters with trial metadata
         best_hyperparams_path = os.path.join(self.output_dir, 'best_hyperparameters.json')
+        best_trial_data = {
+            'hyperparameters': best_trial.params,
+            'trial_number': best_trial.number,
+            'best_value': best_trial.value,
+            'trial_datetime': best_trial.datetime_start.isoformat() if best_trial.datetime_start else None
+        }
         with open(best_hyperparams_path, 'w') as f:
-            json.dump(best_trial.params, f, indent=2)
+            json.dump(best_trial_data, f, indent=2)
         print(f"\nBest hyperparameters saved to {best_hyperparams_path}")
+        print(f"Best trial number: {best_trial.number}")
         
         # Save best hyperparameters in Python format (for compatibility)
         python_hp_path = os.path.join(self.output_dir, 'best_hyperparameters.py')
@@ -684,7 +671,12 @@ def load_best_hyperparameters_pytorch(output_dir: str) -> Dict[str, Any]:
     json_path = os.path.join(output_dir, 'best_hyperparameters.json')
     if os.path.exists(json_path):
         with open(json_path, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            # Handle both old format (direct hyperparams) and new format (with metadata)
+            if 'hyperparameters' in data:
+                return data  # Return full metadata including trial_number
+            else:
+                return {'hyperparameters': data}  # Wrap old format for compatibility
     
     # Try Python format
     py_path = os.path.join(output_dir, 'best_hyperparameters.py')
@@ -760,23 +752,23 @@ def run_hyperparameter_tuning(
 
 if __name__ == "__main__":
     _npz = os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz')
-    _out = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_3')
-    _test_idx = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_3', 'test_indices.pkl')
+    _out = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4')
+    _test_idx = os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4', 'test_indices.pkl')
 
     results = run_hyperparameter_tuning(
         npz_path=_npz,
         output_dir=_out,
         test_indices_path=_test_idx,
-        n_trials=50,
+        n_trials=100,
         n_folds=3,
         max_epochs=100,
-        patience=15,
+        patience=20,
         enable_mlflow=True,
         mlflow_experiment="pytorch_tuning_weighted_MSE",
         loss_name="weighted_mse",
         loss_params = {
             'alpha': 3.0,
-            'power': 2.0,
+            'power': 1.5,
             'percentile': 0.90,
         }
     )

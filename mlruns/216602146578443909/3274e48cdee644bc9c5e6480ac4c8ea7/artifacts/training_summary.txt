@@ -1,0 +1,38 @@
+PyTorch LAND Model Training Summary
+==================================================
+
+Hyperparameters:
+  climate_units: 448
+  local_dem_units: 160
+  regional_dem_units: 48
+  month_units: 16
+  na: 384
+  nb: 896
+  dropout_rate: 0.35000000000000003
+  l2_reg: 2.6051168123679446e-05
+  learning_rate: 0.0020205647312388345
+  weight_decay: 4.801680924393211e-06
+  batch_size: 128
+  use_residual: False
+  climate_activation: relu
+  output_activation: softplus
+  climate_processing: flatten
+
+Training Results:
+  Criterion (loss_name): weighted_mse
+  Training time: 312.77 seconds
+  Final train loss (criterion): 0.030368
+  Final val loss (criterion): 0.140983
+  Best val loss (criterion): 0.127991 at epoch 115
+  Val MSE (unweighted) at best epoch: 0.120584
+  Total epochs: 145
+
+Test Set Evaluation:
+  R²: 0.7796
+  MSE: 0.247553
+  RMSE: 0.497547
+  MAE: 0.331318
+
+Denormalized Metrics (mm):
+  RMSE: 100.1015 mm
+  MAE: 66.6578 mm

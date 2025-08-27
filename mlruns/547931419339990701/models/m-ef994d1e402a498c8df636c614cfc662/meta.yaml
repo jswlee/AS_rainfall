@@ -1,0 +1,10 @@
+artifact_location: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/547931419339990701/models/m-ef994d1e402a498c8df636c614cfc662/artifacts
+creation_timestamp: 1756054988276
+experiment_id: '547931419339990701'
+last_updated_timestamp: 1756054990318
+model_id: m-ef994d1e402a498c8df636c614cfc662
+model_type: null
+name: model_fold2
+source_run_id: 1ce7a0ac32a74234ba3d76774d958058
+status: 2
+status_message: null

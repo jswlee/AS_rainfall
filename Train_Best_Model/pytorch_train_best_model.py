@@ -241,18 +241,40 @@ def train_best_model_pytorch(
     # Load best hyperparameters
     print(f"Loading hyperparameters from {hyperparams_dir}...")
     # Prefer loading directly from the Optuna SQLite database
-    hyperparams = None
-    db_path = os.path.join(hyperparams_dir, 'land_model_tuning.db')
-    if os.path.exists(db_path):
-        try:
-            storage = f"sqlite:///{db_path}"
-            study = optuna.load_study(study_name="land_model_tuning", storage=storage)
-            hyperparams = dict(study.best_trial.params)
-            print("Loaded hyperparameters from Optuna DB:")
+    # Load hyperparameters from JSON first (includes trial metadata), fallback to Optuna DB
+    hyperparams_data = None
+    trial_number = None
+    
+    try:
+        hyperparams_data = load_best_hyperparameters_pytorch(hyperparams_dir)
+        if 'hyperparameters' in hyperparams_data:
+            hyperparams = hyperparams_data['hyperparameters']
+            trial_number = hyperparams_data.get('trial_number')
+            print("Loaded hyperparameters from JSON:")
             for k, v in hyperparams.items():
                 print(f"  {k}: {v}")
-        except Exception as e:
-            print(f"Warning: Failed to load hyperparameters from DB: {e}")
+            if trial_number is not None:
+                print(f"  Source trial: {trial_number}")
+        else:
+            hyperparams = hyperparams_data
+            print("Loaded hyperparameters from JSON (legacy format)")
+    except FileNotFoundError:
+        # Fallback to Optuna DB
+        db_path = os.path.join(hyperparams_dir, 'land_model_tuning.db')
+        if os.path.exists(db_path):
+            try:
+                storage = f"sqlite:///{db_path}"
+                study = optuna.load_study(study_name="land_model_tuning", storage=storage)
+                hyperparams = dict(study.best_trial.params)
+                trial_number = study.best_trial.number
+                print("Loaded hyperparameters from Optuna DB:")
+                for k, v in hyperparams.items():
+                    print(f"  {k}: {v}")
+                print(f"  Source trial: {trial_number}")
+            except Exception as e:
+                print(f"Warning: Failed to load hyperparameters from DB: {e}")
+                hyperparams = None
+        else:
             hyperparams = None
     
     # No fallback: require DB presence
@@ -580,6 +602,7 @@ def train_best_model_pytorch(
                 "device": str(torch.device('cuda' if torch.cuda.is_available() 
                                          else 'mps' if torch.backends.mps.is_available() 
                                          else 'cpu')),
+                "source_trial_number": trial_number,
                 "model_saved": save_model,
                 "training_mode": "cross_validation" if n_folds and n_folds > 1 else "single_split"
             }
@@ -763,18 +786,18 @@ def train_best_model_pytorch(
 
 
 if __name__ == "__main__":
-    output_dir = os.path.join('Train_Best_Model', 'output_WeightedMSE_2', 'pytorch_best_model')
+    output_dir = os.path.join('Train_Best_Model', 'output_WeightedMSE_4', 'pytorch_best_model')
     os.makedirs(output_dir, exist_ok=True)
 
     results = train_best_model_pytorch(
         npz_path=os.path.join('ML_Data_Preprocessing', 'output', 'assembled_npz', 'full_training_data.npz'),
-        hyperparams_dir=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2'),
+        hyperparams_dir=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4'),
         output_dir=output_dir,
-        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_2', 'test_indices.pkl'),
+        test_indices_path=os.path.join('Hyperparameter_Tuning', 'output_WeightedMSE_4', 'test_indices.pkl'),
         epochs=150,
         save_model=True,
         loss_name='weighted_mse',
-        loss_params={'alpha': 3.0, 'power': 2.0, 'percentile': 0.90},
+        loss_params={'alpha': 5.0, 'power': 4.0, 'percentile': 0.90},
         n_folds=15,
         enable_mlflow=True,
         mlflow_experiment='AS_Rainfall_Production_Training',

@@ -1,0 +1,14 @@
+{
+  "dem_local_min": 0.0,
+  "dem_local_max": 1.0,
+  "dem_regional_min": 0.0,
+  "dem_regional_max": 1.0,
+  "climate_mean": -4.015621755115717e-07,
+  "climate_std": 0.9999999403953552,
+  "climate_min": -6.08860445022583,
+  "climate_max": 5.2400994300842285,
+  "rainfall_mean": 0.254295289516449,
+  "rainfall_std": 0.18694499135017395,
+  "rainfall_min": 0.0,
+  "rainfall_max": 1.0
+}

@@ -56,3 +56,25 @@ geo = [
 "Homepage" = "https://github.com/jswlee/AS_rainfall"
 "Bug Tracker" = "https://github.com/jswlee/AS_rainfall/issues"
 "Documentation" = "https://github.com/jswlee/AS_rainfall#readme"
+
+# Limit package discovery to actual Python packages we intend to install
+[tool.setuptools.packages.find]
+include = [
+  "Hyperparameter_Tuning*",
+  "ML_Data_Preprocessing*",
+  "Process_Rainfall_Data*",
+  "Train_Best_Model*",
+  "Train_Ensemble*"
+]
+exclude = [
+  "api*",
+  "notebooks*",
+  "raw_data*",
+  "mlruns*",
+  "archived_*",
+  "resources*",
+  "misc*",
+  "validation*",
+  "__pycache__*",
+  ".ipynb_checkpoints*"
+]
