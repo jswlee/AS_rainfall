@@ -42,8 +42,8 @@ except ImportError:
     mlflow = None
     MlflowClient = None
 
-from Hyperparameter_Tuning.pytorch_data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
-from Hyperparameter_Tuning.pytorch_model import create_model_from_hyperparams
+from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
+from Hyperparameter_Tuning.model import create_model_from_hyperparams
 from Hyperparameter_Tuning.pytorch_training import train_model, evaluate_model
 
 
@@ -251,7 +251,7 @@ class OptunaTuner:
         
         for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
             # Create fold datasets (faster with pre-converted numpy arrays)
-            from Hyperparameter_Tuning.pytorch_data_utils import RainfallDataset
+            from Hyperparameter_Tuning.data_utils import RainfallDataset
             
             fold_train_dataset = RainfallDataset(
                 self.cv_climate[train_idx].numpy(),
@@ -754,8 +754,8 @@ if __name__ == "__main__":
     # Command-line interface for running hyperparameter tuning
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
     parser.add_argument("--npz-path", default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
-    parser.add_argument("--output-dir", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4"), help="Directory to write tuning outputs")
-    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE4", "test_indices.pkl"), help="Path to test indices file for reproducibility")
+    parser.add_argument("--output-dir", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE2"), help="Directory to write tuning outputs")
+    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE2", "test_indices.pkl"), help="Path to test indices file for reproducibility")
 
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
     parser.add_argument("--n-folds", type=int, default=5, help="Number of cross-validation folds")

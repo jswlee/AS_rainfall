@@ -107,7 +107,7 @@ api/
 │   └── preprocessing.json     # Data preprocessing stats
 ├── Hyperparameter_Tuning/     # Model architecture code
 │   ├── __init__.py
-│   └── pytorch_model.py
+│   └── model.py
 ├── extract_preprocessing_stats.py  # Utility to extract stats
 └── prepare_artifacts.py       # Utility to prepare artifacts
 ```

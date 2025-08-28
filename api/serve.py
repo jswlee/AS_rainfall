@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import model architecture from installed package
-from Hyperparameter_Tuning.pytorch_model import create_model_from_hyperparams
+from Hyperparameter_Tuning.model import create_model_from_hyperparams
 
 app = FastAPI(
     title="Rainfall Prediction API",

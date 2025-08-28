@@ -25,10 +25,10 @@ The LAND model processes four types of input features:
 ### 1. Hyperparameter Tuning (`Hyperparameter_Tuning/`)
 
 **New PyTorch Files:**
-- `pytorch_data_utils.py` - PyTorch Dataset classes and data loading
-- `pytorch_model.py` - LAND model architecture in PyTorch
+- `data_utils.py` - PyTorch Dataset classes and data loading
+- `model.py` - LAND model architecture in PyTorch
 - `pytorch_training.py` - Training utilities with early stopping and scheduling
-- `pytorch_hyperparameter_tuning.py` - Optuna-based hyperparameter optimization
+- `hp_tuning.py` - Optuna-based hyperparameter optimization
 - `run_pytorch_tuning.py` - Main entry point for tuning
 
 **Key Features:**
@@ -82,7 +82,7 @@ python run_pytorch_ensemble.py
 
 ## Data Flow
 
-1. **Data Loading**: NPZ files are loaded using `pytorch_data_utils.py`
+1. **Data Loading**: NPZ files are loaded using `data_utils.py`
 2. **Dataset Creation**: PyTorch `RainfallDataset` handles feature organization
 3. **Model Creation**: `LANDModel` class implements the architecture
 4. **Training**: Advanced training loop with early stopping and scheduling

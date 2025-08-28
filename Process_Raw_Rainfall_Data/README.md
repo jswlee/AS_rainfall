@@ -1,4 +1,4 @@
-# Process_Rainfall_Data
+# Process_Raw_Rainfall_Data
 
 This module contains utilities and scripts for transforming raw rainfall station measurements into clean monthly aggregates suitable for ML consumption. Outputs feed the `ML_Data_Preprocessing` module and ultimately the combined NPZ used for model training.
 
@@ -14,12 +14,12 @@ All paths are intended to be project-root-relative with the working directory se
     - `monthly_total_precip_in` (sum in inches; if any daily value is NaN in a month, that month is recorded as NA)
   - Defaults:
     - Input: `raw_data/rainfall/`
-    - Output: `Process_Rainfall_Data/output/monthly_rainfall/`
+    - Output: `Process_Raw_Rainfall_Data/output/monthly_rainfall/`
   - Usage:
     ```bash
-    python Process_Rainfall_Data/scripts/rainfall_daily_to_monthly.py \
+    python Process_Raw_Rainfall_Data/scripts/rainfall_daily_to_monthly.py \
       --input_dir raw_data/rainfall \
-      --output_dir Process_Rainfall_Data/output/monthly_rainfall
+      --output_dir Process_Raw_Rainfall_Data/output/monthly_rainfall
     ```
 
 - `scripts/process_wide_format_rainfall.py`
@@ -57,24 +57,24 @@ All paths are intended to be project-root-relative with the working directory se
 
 1) Aggregate raw daily files to monthly totals:
 ```bash
-python Process_Rainfall_Data/scripts/rainfall_daily_to_monthly.py \
+python Process_Raw_Rainfall_Data/scripts/rainfall_daily_to_monthly.py \
   --input_dir raw_data/rainfall \
-  --output_dir Process_Rainfall_Data/output/monthly_rainfall
+  --output_dir Process_Raw_Rainfall_Data/output/monthly_rainfall
 ```
 
 2) (Optional) Convert or clean wide-format historical datasets:
 ```bash
-python Process_Rainfall_Data/scripts/process_wide_format_rainfall.py
+python Process_Raw_Rainfall_Data/scripts/process_wide_format_rainfall.py
 ```
 
 3) (Optional) Compare two sources to reconcile differences:
 ```bash
-python Process_Rainfall_Data/scripts/compare_rainfall_files.py
+python Process_Raw_Rainfall_Data/scripts/compare_rainfall_files.py
 ```
 
 4) (Optional) Visualize coverage over time:
 ```bash
-python Process_Rainfall_Data/scripts/rainfall_monthly_coverage_viz.py
+python Process_Raw_Rainfall_Data/scripts/rainfall_monthly_coverage_viz.py
 ```
 
 Programmatic assembly from a notebook:

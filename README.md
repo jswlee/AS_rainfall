@@ -93,7 +93,7 @@ Outputs (examples):
 
 ## 8) Repository structure (high level)
 - `ML_Data_Preprocessing/` — Build features and combined NPZ
-- `Process_Rainfall_Data/` — Raw rainfall processing helpers
+- `Process_Raw_Rainfall_Data/` — Raw rainfall processing helpers
 - `Hyperparameter_Tuning/` — Tuning scripts and outputs
 - `Train_Best_Model/` — Best model training utilities and scripts
 - `Train_Ensemble/` — Ensemble CV training utilities and scripts

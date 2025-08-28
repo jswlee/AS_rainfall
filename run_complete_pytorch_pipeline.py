@@ -9,7 +9,7 @@ import sys
 import time
 import argparse
 
-from Hyperparameter_Tuning.pytorch_hyperparameter_tuning import (
+from Hyperparameter_Tuning.hp_tuning import (
     run_hyperparameter_tuning as run_hp_tuning,
 ) 
 
@@ -74,7 +74,7 @@ def run_best_model_training(
     print("STEP 2: BEST MODEL TRAINING")
     print("="*60)
     
-    from Train_Best_Model.pytorch_train_best_model import train_best_model_pytorch
+    from Train_Best_Model.train_land_model import train_best_model_pytorch
     
     epochs = 300 if quick_test else 300
     print(f"Training best model for up to {epochs} epochs...")
@@ -119,7 +119,7 @@ def run_ensemble_training(
     print("STEP 3: ENSEMBLE TRAINING")
     print("="*60)
     
-    from Train_Ensemble.pytorch_train_ensemble import train_ensemble_pytorch
+    from Train_Ensemble.train_ensemble import train_ensemble_pytorch
     
     if quick_test:
         config = {
