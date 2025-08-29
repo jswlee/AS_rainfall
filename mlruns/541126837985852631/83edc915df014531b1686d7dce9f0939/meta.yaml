@@ -1,0 +1,14 @@
+artifact_uri: file:///home/exouser/AS_rainfall/mlruns/541126837985852631/83edc915df014531b1686d7dce9f0939/artifacts
+end_time: 1756345856855
+entry_point_name: ''
+experiment_id: '541126837985852631'
+lifecycle_stage: active
+run_id: 83edc915df014531b1686d7dce9f0939
+run_name: trial_23
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1756345772064
+status: 3
+tags: []
+user_id: exouser
