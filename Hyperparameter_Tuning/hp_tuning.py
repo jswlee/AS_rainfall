@@ -44,7 +44,7 @@ except ImportError:
 
 from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
-from Hyperparameter_Tuning.pytorch_training import train_model, evaluate_model
+from Hyperparameter_Tuning.model_training import train_model, evaluate_model
 
 
 class OptunaTuner:

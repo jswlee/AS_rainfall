@@ -10,7 +10,7 @@ import os
 STATION_METADATA_PATH = "raw_data/station_locations.csv"
 DEM_PATH = "raw_data/DEM/DEM_Tut1.tif"
 REANALYSIS_DIR = "raw_data/climate_variables"
-RAINFALL_DATA_DIR = "Process_Rainfall_Data/output/monthly_rainfall"
+RAINFALL_DATA_DIR = "Process_Raw_Rainfall_Data/output/monthly_rainfall"
 
 # Output paths
 OUTPUT_DIR = "ML_Data_Preprocessing/output"

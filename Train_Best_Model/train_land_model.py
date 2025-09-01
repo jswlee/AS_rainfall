@@ -28,7 +28,7 @@ from Hyperparameter_Tuning.mlflow_utils import (
 
 from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
-from Hyperparameter_Tuning.pytorch_training import train_model, evaluate_model, plot_training_history, save_predictions
+from Hyperparameter_Tuning.model_training import train_model, evaluate_model, plot_training_history, save_predictions
 from Hyperparameter_Tuning.pytorch_hyperparameter_tuning import load_best_hyperparameters_pytorch
 
 

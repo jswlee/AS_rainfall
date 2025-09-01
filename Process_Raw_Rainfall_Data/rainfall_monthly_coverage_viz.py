@@ -79,5 +79,5 @@ def rainfall_monthly_coverage_viz(monthly_dir, output_dir):
 def main():
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '../..'))
-    MONTHLY_DIR = os.path.join(PROJECT_ROOT, '1_Process_Rainfall_Data', 'output', 'monthly_rainfall')
+    MONTHLY_DIR = os.path.join(PROJECT_ROOT, 'Process_Raw_Rainfall_Data', 'output', 'monthly_rainfall')
     rainfall_monthly_coverage_viz(MONTHLY_DIR, os.path.join(PROJECT_ROOT, 'Process_Raw_Rainfall_Data', 'figures'))

@@ -32,8 +32,8 @@ from mlflow_utils import create_mlflow_logger, MLFLOW_AVAILABLE
 # Import PyTorch utilities
 from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders, RainfallDataset
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
-from Hyperparameter_Tuning.pytorch_training import train_model, evaluate_model
-from Hyperparameter_Tuning.pytorch_hyperparameter_tuning import load_best_hyperparameters_pytorch
+from Hyperparameter_Tuning.model_training import train_model, evaluate_model
+from Hyperparameter_Tuning.hp_tuning import load_best_hyperparameters_pytorch
 
 
 class EnsembleTrainer:
