@@ -9,8 +9,12 @@ import os
 # Input data paths
 STATION_METADATA_PATH = "raw_data/station_locations.csv"
 DEM_PATH = "raw_data/DEM/DEM_Tut1.tif"
-REANALYSIS_DIR = "raw_data/climate_variables_monthly"
+REANALYSIS_DIR_MONTHLY = "raw_data/climate_variables_monthly"
+REANALYSIS_DIR_DAILY = "raw_data/climate_variables_daily_processed"
 RAINFALL_DATA_DIR = "Process_Raw_Rainfall_Data/output/monthly_rainfall"
+
+# Backward compatibility - defaults to monthly
+REANALYSIS_DIR = REANALYSIS_DIR_MONTHLY
 
 # Output paths
 OUTPUT_DIR = "ML_Data_Preprocessing/output"
@@ -179,6 +183,8 @@ def get_config():
             'station_metadata': STATION_METADATA_PATH,
             'dem': DEM_PATH,
             'reanalysis_dir': REANALYSIS_DIR,
+            'reanalysis_dir_monthly': REANALYSIS_DIR_MONTHLY,
+            'reanalysis_dir_daily': REANALYSIS_DIR_DAILY,
             'rainfall_data_dir': RAINFALL_DATA_DIR,
             'output_dir': OUTPUT_DIR,
         },

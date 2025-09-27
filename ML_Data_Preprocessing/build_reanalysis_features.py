@@ -29,14 +29,16 @@ class ReanalysisFeatureBuilder:
     Implementation aligns with the climate processor approach from Create_ML_Data.
     """
     
-    def __init__(self, reanalysis_dir=None, lon_slice=None, lat_slice=None, time_slice=None):
+    def __init__(self, reanalysis_dir=None, time_interval="monthly", lon_slice=None, lat_slice=None, time_slice=None):
         """
         Initialize the ReanalysisFeatureBuilder.
         
         Parameters
         ----------
         reanalysis_dir : str, optional
-            Directory containing climate data files. If None, uses the path from config.
+            Directory containing climate data files. If None, uses the path from config based on time_interval.
+        time_interval : str, optional
+            Time interval for data processing ("monthly" or "daily"). Default is "monthly".
         lon_slice : slice, optional
             Longitude slice for data selection
         lat_slice : slice, optional
@@ -44,7 +46,15 @@ class ReanalysisFeatureBuilder:
         time_slice : slice, optional
             Time slice for data selection
         """
-        self.reanalysis_dir = reanalysis_dir if reanalysis_dir is not None else config.REANALYSIS_DIR
+        # Set reanalysis directory based on time interval if not provided
+        if reanalysis_dir is not None:
+            self.reanalysis_dir = reanalysis_dir
+        elif time_interval == "daily":
+            self.reanalysis_dir = config.REANALYSIS_DIR_DAILY
+        else:
+            self.reanalysis_dir = config.REANALYSIS_DIR_MONTHLY
+        
+        self.time_interval = time_interval
         self.lon_slice = lon_slice
         self.lat_slice = lat_slice
         self.time_slice = time_slice
@@ -55,8 +65,8 @@ class ReanalysisFeatureBuilder:
         self.time_interval_mapping = config.TIME_INTERVAL_MAPPING
         self.statistic_mapping = config.STATISTIC_MAPPING
         
-        # Default time interval and statistic for all variables
-        self.default_time_interval = config.DEFAULT_TIME_INTERVAL
+        # Use the specified time interval, or fall back to config default
+        self.default_time_interval = time_interval if time_interval in self.time_interval_mapping else config.DEFAULT_TIME_INTERVAL
         self.default_statistic = config.DEFAULT_STATISTIC
         
         # Dictionary to store variable configurations
@@ -680,16 +690,22 @@ class ReanalysisFeatureBuilder:
         return save_path
 
 
-def main():
+def main(time_interval="monthly"):
     """
     Main function to demonstrate the usage of the ReanalysisFeatureBuilder class.
+    
+    Parameters
+    ----------
+    time_interval : str
+        Time interval for processing ("monthly" or "daily")
     """
     # Load station metadata via unified helper
     station_metadata = get_station_metadata(config.STATION_METADATA_PATH)
     
     # Create a feature builder and process variables
-    feature_builder = ReanalysisFeatureBuilder()
-    print("Processing climate variables...")
+    feature_builder = ReanalysisFeatureBuilder(time_interval=time_interval)
+    print(f"Processing climate variables at {time_interval} scale...")
+    print(f"Using data directory: {feature_builder.reanalysis_dir}")
     success = feature_builder.process_all_variables()
     if not success:
         print("Warning: Some variables could not be processed.")
@@ -710,9 +726,10 @@ def main():
     standardized_features = feature_builder.standardize_features(all_features, variable_stats)
 
     # Export a single aggregate NPZ file with all entries
-    npz_dir = os.path.join(str(config.OUTPUT_DIR), "reanalysis_npz")
+    npz_dir = os.path.join(str(config.OUTPUT_DIR), f"reanalysis_npz_{time_interval}")
     os.makedirs(npz_dir, exist_ok=True)
-    agg_path = feature_builder.export_all_features_npz(standardized_features, npz_dir, filename="reanalysis_features_all_standardized.npz")
+    filename = f"reanalysis_features_all_standardized_{time_interval}.npz"
+    agg_path = feature_builder.export_all_features_npz(standardized_features, npz_dir, filename=filename)
     if agg_path:
         print(f"Saved aggregate NPZ to {agg_path}")
 
@@ -735,4 +752,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # Allow command line argument to specify time interval
+    time_interval = "monthly"  # default
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ["daily", "monthly"]:
+            time_interval = sys.argv[1]
+        else:
+            print("Usage: python build_reanalysis_features.py [daily|monthly]")
+            sys.exit(1)
+    
+    main(time_interval)
