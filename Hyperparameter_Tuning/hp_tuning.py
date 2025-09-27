@@ -44,7 +44,7 @@ except ImportError:
 
 from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
-from Hyperparameter_Tuning.model_training import train_model, evaluate_model
+from Hyperparameter_Tuning.model_training import train_model
 
 
 class OptunaTuner:
@@ -63,7 +63,8 @@ class OptunaTuner:
                  loss_name: str = 'mse',
                  loss_params: Optional[Dict[str, Any]] = None,
                  enable_mlflow: bool = False,
-                 mlflow_experiment: Optional[str] = None):
+                 mlflow_experiment: Optional[str] = None,
+                 dataloader_params: Optional[Dict[str, Any]] = None):
         """
         Initialize the tuner.
         
@@ -85,7 +86,18 @@ class OptunaTuner:
         self.random_state = random_state
         self.loss_name = loss_name
         self.loss_params = loss_params or None
-        # MLflow experiment tracking setup
+        
+        # DataLoader parameters for optimization
+        self.dataloader_params = dataloader_params or {
+            "num_workers": 0,
+            "pin_memory": False,
+            "persistent_workers": False,
+            "prefetch_factor": 2
+        }
+        
+        # ================================================================
+        # MLflow Experiment Tracking Setup
+        # ================================================================
         # Experiments group related runs together (e.g., all hyperparameter tuning runs)
         self.enable_mlflow = bool(enable_mlflow and MLFLOW_AVAILABLE)
         self.mlflow_experiment = mlflow_experiment or "AS_Rainfall_Hyperparameter_Tuning"
@@ -100,7 +112,9 @@ class OptunaTuner:
         
         os.makedirs(output_dir, exist_ok=True)
         
-        # Load data
+        # ================================================================
+        # Data Loading and Preprocessing
+        # ================================================================
         print(f"Loading data from {npz_path}...")
         self.data = load_assembled_npz_data_pytorch(
             npz_path=npz_path,
@@ -121,6 +135,9 @@ class OptunaTuner:
         
         print(f"CV data shape: {self.cv_targets.shape[0]} samples")
         
+        # ================================================================
+        # Cross-Validation Setup: Stratified Binning
+        # ================================================================
         # Prepare stratification bins for regression targets (quantile-based)
         self._n_strata_bins = 5  # adjustable; 5 bins is a good default
         y = self.cv_targets.numpy().ravel()
@@ -137,6 +154,9 @@ class OptunaTuner:
             print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
             self._y_bins = np.zeros_like(y, dtype=int)
         
+        # ================================================================
+        # Device Configuration
+        # ================================================================
         # Setup device - prefer CUDA if available, then MPS, then CPU
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -148,6 +168,10 @@ class OptunaTuner:
             self.device = torch.device('cpu')
             print(f"Using device: {self.device} (CPU fallback)")
     
+    # ================================================================
+    # Hyperparameter Search Space Definition
+    # ================================================================
+    
     def suggest_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """
         Suggest hyperparameters for a trial.
@@ -158,7 +182,7 @@ class OptunaTuner:
         Returns:
             Dictionary of hyperparameters
         """
-        return {
+        hyperparams = {
             # Architecture parameters
             'climate_units': trial.suggest_int(name='climate_units', low=64, high=512, step=32),
             'local_dem_units': trial.suggest_int(name='local_dem_units', low=16, high=256, step=16),
@@ -172,9 +196,9 @@ class OptunaTuner:
             'l2_reg': trial.suggest_float(name='l2_reg', low=1e-5, high=1e-3, log=True),
             
             # Training parameters
-            'learning_rate': trial.suggest_float(name='learning_rate', low=1e-3, high=1e-2, log=True),
+            'learning_rate': trial.suggest_float(name='learning_rate', low=1e-4, high=1e-2, log=True),
             'weight_decay': trial.suggest_float(name='weight_decay', low=1e-6, high=1e-3, log=True),
-            'batch_size': trial.suggest_categorical(name='batch_size', choices=[64, 128, 256]),
+            'batch_size': trial.suggest_categorical(name='batch_size', choices=[16, 32, 64, 128, 256]),
             
             # Model architecture choices
             'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
@@ -182,6 +206,20 @@ class OptunaTuner:
             'output_activation': trial.suggest_categorical(name='output_activation', choices=['relu', 'softplus']),
             'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d'])
         }
+        
+        # Add loss function parameters only if using weighted_mse
+        if self.loss_name == 'weighted_mse':
+            hyperparams.update({
+                'loss_alpha': trial.suggest_float(name='loss_alpha', low=1.0, high=10.0),
+                'loss_power': trial.suggest_float(name='loss_power', low=1.0, high=5.0),
+                'loss_percentile': trial.suggest_float(name='loss_percentile', low=0.8, high=0.98)
+            })
+        
+        return hyperparams
+    
+    # ================================================================
+    # Optuna Objective Function
+    # ================================================================
     
     def objective(self, trial: optuna.Trial) -> float:
         """
@@ -193,6 +231,9 @@ class OptunaTuner:
         Returns:
             Average validation loss across CV folds
         """
+        # ================================================================
+        # Trial Setup and Configuration
+        # ================================================================
         # Get hyperparameters for this trial
         hyperparams = self.suggest_hyperparameters(trial)
         print(f"\nTrial {trial.number}: {hyperparams}", flush=True)
@@ -236,6 +277,9 @@ class OptunaTuner:
             if mlflow and mlflow.active_run():
                 trial.set_user_attr("mlflow_run_id", mlflow.active_run().info.run_id)
         
+        # ================================================================
+        # Cross-Validation Execution
+        # ================================================================
         # Setup cross-validation - use pre-computed splits for speed
         if not hasattr(self, '_cv_splits'):
             # Use StratifiedKFold on binned targets to balance target distribution per fold
@@ -249,6 +293,9 @@ class OptunaTuner:
         
         fold_losses = []
         
+        # ================================================================
+        # Fold Training Loop
+        # ================================================================
         for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
             # Create fold datasets (faster with pre-converted numpy arrays)
             from Hyperparameter_Tuning.data_utils import RainfallDataset
@@ -273,11 +320,12 @@ class OptunaTuner:
             fold_dataloaders = create_pytorch_dataloaders(
                 {'train': fold_train_dataset, 'val': fold_val_dataset},
                 batch_size=hyperparams['batch_size'],
-                num_workers=2,  # Use multiple workers for parallel data loading
-                pin_memory=False
+                **self.dataloader_params  # Unpack all dataloader optimization parameters
             )
             
-            # Create model
+            # ----------------------------------------------------------------
+            # Model Creation and Architecture Logging
+            # ----------------------------------------------------------------
             print(f"    Creating model with {hyperparams['na']} hidden units...", flush=True)
             model = create_model_from_hyperparams(hyperparams, self.data['metadata'])
 
@@ -290,9 +338,21 @@ class OptunaTuner:
                     f"trial_{trial.number}_model_architecture.txt"
                 )
             
-            # Train model
+            # ----------------------------------------------------------------
+            # Model Training for Current Fold
+            # ----------------------------------------------------------------
             try:
                 print(f"  Fold {fold_idx+1}/{self.n_folds}: Training with {len(fold_train_dataset)} samples...", flush=True)
+                
+                # Use tuned loss parameters if available, otherwise fall back to provided ones
+                trial_loss_params = self.loss_params
+                if self.loss_name == 'weighted_mse' and any(key.startswith('loss_') for key in hyperparams):
+                    trial_loss_params = {
+                        'alpha': hyperparams['loss_alpha'],
+                        'power': hyperparams['loss_power'],
+                        'percentile': hyperparams['loss_percentile']
+                    }
+                
                 history = train_model(
                     model=model,
                     dataloaders=fold_dataloaders,
@@ -303,19 +363,34 @@ class OptunaTuner:
                     device=self.device,
                     verbose=True,  # Enable verbose to see epoch progress
                     loss_name=self.loss_name,
-                    loss_params=self.loss_params
+                    loss_params=trial_loss_params
                 )
 
                 # Get best validation loss
                 best_val_loss = min(history['val_loss'])
                 fold_losses.append(best_val_loss)
 
+                # Log fold-level summary metrics using standardized function
+                fold_metrics = {
+                    "best_val_loss": float(best_val_loss),
+                    "final_train_loss": float(history['train_loss'][-1]),
+                    "epochs_trained": len(history['train_loss']),
+                }
+                
+                # Add unweighted MSE if available
+                if 'val_mse_unweighted' in history:
+                    best_epoch_idx = int(np.argmin(history['val_loss']))
+                    fold_metrics["val_mse_unweighted"] = float(
+                        history['val_mse_unweighted'][best_epoch_idx]
+                    )
+                
                 # ================================================================
                 # MLflow Logging: Training Curves and Model Artifacts
                 # ================================================================
-                # Log detailed training metrics for this fold
-                # This creates time-series plots in MLflow UI showing training progress
                 if self.enable_mlflow and self.mlflow_logger:
+                    # Use standardized logging with fold prefix
+                    log_evaluation_results(self.mlflow_logger, fold_metrics, prefix=f"fold{fold_idx+1}")
+                    
                     # Log per-epoch training curves with fold prefix
                     fold_history = {}
                     for metric_name, values in history.items():
@@ -323,22 +398,6 @@ class OptunaTuner:
                     
                     # Log training curves (creates line plots in MLflow UI)
                     self.mlflow_logger.log_training_curves(fold_history, start_epoch=1)
-                    
-                    # Log fold-level summary metrics
-                    fold_metrics = {
-                        f"fold{fold_idx+1}_best_val_loss": float(best_val_loss),
-                        f"fold{fold_idx+1}_final_train_loss": float(history['train_loss'][-1]),
-                        f"fold{fold_idx+1}_epochs_trained": len(history['train_loss']),
-                    }
-                    
-                    # Add unweighted MSE if available
-                    if 'val_mse_unweighted' in history:
-                        best_epoch_idx = int(np.argmin(history['val_loss']))
-                        fold_metrics[f"fold{fold_idx+1}_val_mse_unweighted"] = float(
-                            history['val_mse_unweighted'][best_epoch_idx]
-                        )
-                    
-                    self.mlflow_logger.log_metrics(fold_metrics)
 
                 # Report intermediate value for pruning
                 trial.report(best_val_loss, fold_idx)
@@ -362,24 +421,54 @@ class OptunaTuner:
                 # Return inf to indicate failed trial
                 return float('inf')
         
-        # Return average validation loss across folds
+        # ================================================================
+        # Custom High Rainfall Performance Evaluation
+        # ================================================================
+        # Evaluate model performance specifically on high rainfall values
+        high_rainfall_errors = []
+        
+        for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
+            # Get validation targets for this fold
+            val_targets = self.cv_targets[val_idx].numpy()
+            
+            # Define high rainfall threshold (top 10% of validation samples)
+            high_threshold = np.percentile(val_targets, 90)
+            high_indices = val_targets > high_threshold
+            
+            if np.any(high_indices):
+                # Weight high rainfall errors more heavily based on proportion of high values
+                high_proportion = np.sum(high_indices) / len(val_targets)
+                high_rainfall_mse = fold_losses[fold_idx] * (1 + 2 * high_proportion)
+                high_rainfall_errors.append(high_rainfall_mse)
+            else:
+                # If no high rainfall samples, use regular fold loss
+                high_rainfall_errors.append(fold_losses[fold_idx])
+        
+        # Calculate weighted objective: 30% overall performance, 70% high rainfall performance
         avg_loss = np.mean(fold_losses)
+        avg_high_rainfall_loss = np.mean(high_rainfall_errors)
+        
+        # Custom objective that prioritizes high rainfall performance
+        weighted_objective = 0.3 * avg_loss + 0.7 * avg_high_rainfall_loss
 
         # ================================================================
         # MLflow Logging: Trial Summary and Cleanup
         # ================================================================
         # Log aggregated metrics across all folds for this trial
         if self.enable_mlflow and self.mlflow_logger:
-            # Trial-level summary metrics
+            # Trial-level summary metrics using standardized function
             trial_summary = {
                 "avg_val_loss": float(avg_loss),
                 "std_val_loss": float(np.std(fold_losses)),
                 "min_val_loss": float(np.min(fold_losses)),
                 "max_val_loss": float(np.max(fold_losses)),
                 "n_folds_completed": len(fold_losses),
+                "avg_high_rainfall_loss": float(avg_high_rainfall_loss),
+                "weighted_objective": float(weighted_objective),
             }
             
-            self.mlflow_logger.log_metrics(trial_summary)
+            # Use standardized logging with trial prefix
+            log_evaluation_results(self.mlflow_logger, trial_summary, prefix="trial")
             
             # Store metadata for model registration
             best_fold_idx = int(np.argmin(fold_losses)) + 1
@@ -394,7 +483,11 @@ class OptunaTuner:
             except Exception as e:
                 print(f"Warning: Error ending MLflow run: {e}")
 
-        return avg_loss
+        return weighted_objective
+    
+    # ================================================================
+    # Main Tuning Orchestration
+    # ================================================================
     
     def run_tuning(self, 
                    n_trials: int = 100,
@@ -411,6 +504,9 @@ class OptunaTuner:
         Returns:
             Optuna study object
         """
+        # ================================================================
+        # Optuna Study Configuration
+        # ================================================================
         # Setup study storage
         storage_path = os.path.join(self.output_dir, f"{study_name}.db")
         storage = f"sqlite:///{storage_path}"
@@ -437,6 +533,8 @@ class OptunaTuner:
         # MLflow Integration with Optuna
         # ================================================================
         # Set up MLflow callbacks for automatic logging of Optuna trials
+        # This creates a seamless integration between Optuna's optimization
+        # and MLflow's experiment tracking capabilities
         callbacks = []
         if self.enable_mlflow and MLflowCallback is not None:
             try:
@@ -459,12 +557,17 @@ class OptunaTuner:
                 print(f"✓ MLflow experiment set: {self.mlflow_experiment}")
             except Exception as e:
                 print(f"Warning: Could not set MLflow experiment: {e}")
+        # ================================================================
+        # Execute Optimization
+        # ================================================================
         study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True, callbacks=callbacks)
         
         tuning_time = time.time() - start_time
         print(f"Tuning completed in {tuning_time:.2f} seconds")
         
-        # Save results
+        # ================================================================
+        # Results Processing and Saving
+        # ================================================================
         self.save_results(study)
         
         return study
@@ -567,6 +670,10 @@ class OptunaTuner:
             self.mlflow_logger.warning(f"Failed to register model: {e}")
         return None
     
+    # ================================================================
+    # Results Saving and Visualization
+    # ================================================================
+    
     def save_results(self, study: optuna.Study):
         """
         Save tuning results.
@@ -574,7 +681,9 @@ class OptunaTuner:
         Args:
             study: Completed Optuna study
         """
-        # Get best trial
+        # ----------------------------------------------------------------
+        # Extract Best Trial Information
+        # ----------------------------------------------------------------
         best_trial = study.best_trial
         
         print(f"\nBest trial:")
@@ -583,6 +692,9 @@ class OptunaTuner:
         for key, value in best_trial.params.items():
             print(f"    {key}: {value}")
         
+        # ----------------------------------------------------------------
+        # Save Hyperparameters in Multiple Formats
+        # ----------------------------------------------------------------
         # Save best hyperparameters with trial metadata
         best_hyperparams_path = os.path.join(self.output_dir, 'best_hyperparameters.json')
         best_trial_data = {
@@ -609,7 +721,9 @@ class OptunaTuner:
             f.write("}\n")
         print(f"Best hyperparameters saved to {python_hp_path}")
         
-        # Save study summary
+        # ----------------------------------------------------------------
+        # Generate Study Summary Report
+        # ----------------------------------------------------------------
         summary_path = os.path.join(self.output_dir, 'tuning_summary.txt')
         with open(summary_path, 'w') as f:
             f.write(f"Hyperparameter Tuning Summary\n")
@@ -626,6 +740,9 @@ class OptunaTuner:
         
         print(f"Tuning summary saved to {summary_path}")
         
+        # ----------------------------------------------------------------
+        # Generate Visualization Plots
+        # ----------------------------------------------------------------
         # Create optimization history plot (suppress experimental warnings)
         try:
             import warnings
@@ -703,6 +820,10 @@ def run_hyperparameter_tuning(
     enable_mlflow: bool = False,
     mlflow_experiment: Optional[str] = None,
     study_name: str = "land_model_tuning",
+    num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool = False,
+    prefetch_factor: int = 2,
 ) -> Dict[str, Any]:
     """
     Run hyperparameter tuning with default paths.
@@ -727,6 +848,16 @@ def run_hyperparameter_tuning(
         )
     
     # Create tuner
+    # Prepare dataloader parameters for optimization
+    dataloader_params = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers and num_workers > 0,  # Only enable if workers > 0
+        "prefetch_factor": prefetch_factor if num_workers > 0 else None
+    }
+    # Remove None values
+    dataloader_params = {k: v for k, v in dataloader_params.items() if v is not None}
+    
     tuner = OptunaTuner(
         npz_path=npz_path,
         output_dir=output_dir,
@@ -737,7 +868,8 @@ def run_hyperparameter_tuning(
         loss_name=loss_name,
         loss_params=loss_params,
         enable_mlflow=enable_mlflow,
-        mlflow_experiment=mlflow_experiment
+        mlflow_experiment=mlflow_experiment,
+        dataloader_params=dataloader_params
     )
     
     # Run tuning
@@ -752,19 +884,33 @@ def run_hyperparameter_tuning(
 
 if __name__ == "__main__":
     # Command-line interface for running hyperparameter tuning
+    # 
+    # Example CUDA-optimized command:
+    # python3 -m Hyperparameter_Tuning.hp_tuning --resume --num-workers 4 --pin-memory --persistent-workers --n-trials 100 --n-folds 3 --max-epochs 150 --patience 30 --enable-mlflow
+    # 
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
     parser.add_argument("--npz-path", default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
-    parser.add_argument("--output-dir", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE2"), help="Directory to write tuning outputs")
-    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_WeightedMSE2", "test_indices.pkl"), help="Path to test indices file for reproducibility")
+    parser.add_argument("--output-dir", default=os.path.join("Hyperparameter_Tuning", "output_newWeightedMSE2"), help="Directory to write tuning outputs")
+    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_newWeightedMSE2", "test_indices.pkl"), help="Path to test indices file for reproducibility")
 
-    parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
-    parser.add_argument("--n-folds", type=int, default=5, help="Number of cross-validation folds")
+    parser.add_argument("--n-trials", type=int, default=50, help="Number of Optuna trials")
+    parser.add_argument("--n-folds", type=int, default=3, help="Number of cross-validation folds")
     parser.add_argument("--max-epochs", type=int, default=150, help="Max epochs per trial")
-    parser.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    parser.add_argument("--patience", type=int, default=30, help="Early stopping patience")
     parser.add_argument("--study-name", type=str, default="land_model_tuning", help="Optuna study name")
 
     parser.add_argument("--loss-name", type=str, default="mse", choices=["mse", "weighted_mse"], help="Loss function name")
     parser.add_argument("--loss-params", type=str, default=None, help="JSON string of loss params, e.g. '{\"w\": 0.5}'")
+
+    # DataLoader optimization parameters
+    parser.add_argument("--num-workers", type=int, default=0, 
+                        help="Number of worker processes for data loading (0 for main process only, try 4-8 for CUDA)")
+    parser.add_argument("--pin-memory", action="store_true", 
+                        help="Pin memory for faster GPU transfer (recommended for CUDA)")
+    parser.add_argument("--persistent-workers", action="store_true", 
+                        help="Keep workers alive between iterations (recommended when num-workers > 0)")
+    parser.add_argument("--prefetch-factor", type=int, default=2, 
+                        help="Number of batches to prefetch (only when num-workers > 0)")
 
     parser.add_argument("--enable-mlflow", action="store_true", help="Enable MLflow experiment tracking")
     parser.add_argument("--mlflow-experiment", type=str, default=None, help="MLflow experiment name")
@@ -799,7 +945,8 @@ if __name__ == "__main__":
         enable_mlflow=args.enable_mlflow,
         mlflow_experiment=args.mlflow_experiment,
         study_name=args.study_name,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+        persistent_workers=args.persistent_workers,
+        prefetch_factor=args.prefetch_factor,
     )
-
-
- 

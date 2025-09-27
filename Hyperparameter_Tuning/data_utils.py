@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
 PyTorch data utilities for the assembled NPZ data.
-Provides PyTorch Dataset classes and data loading functions.
+
+This module provides:
+- RainfallDataset: PyTorch Dataset for multi-modal rainfall prediction
+- Data loading functions with train/val/test splitting
+- DataLoader creation with optimized settings
+- Test indices management for reproducible experiments
 """
 
 import os
@@ -13,6 +18,10 @@ from typing import Optional, Dict, Any, Tuple
 from sklearn.model_selection import train_test_split
 from pprint import pprint
 
+
+# ================================================================
+# PyTorch Dataset Implementation
+# ================================================================
 
 class RainfallDataset(Dataset):
     """
@@ -76,6 +85,10 @@ class RainfallDataset(Dataset):
         return features, target
 
 
+# ================================================================
+# Data Loading and Splitting Functions
+# ================================================================
+
 def load_assembled_npz_data_pytorch(npz_path: str,
                                    test_indices_path: Optional[str] = None,
                                    test_size: float = 0.1,
@@ -94,15 +107,22 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     Returns:
         Dictionary containing PyTorch datasets and metadata
     """
+    # ----------------------------------------------------------------
+    # Load NPZ Data and Validate Structure
+    # ----------------------------------------------------------------
     print(f"Loading NPZ data from {npz_path}...")
     z = np.load(str(npz_path), allow_pickle=True)
     
-    # Load reanalysis/climate patches (N, V, H, W)
+    # ----------------------------------------------------------------
+    # Extract Climate/Reanalysis Data
+    # ----------------------------------------------------------------
     if 'reanalysis_patches' not in z.files:
         raise KeyError("NPZ missing 'reanalysis_patches'")
     climate = z['reanalysis_patches'].astype(np.float32)
     
-    # Load DEM patches (prefer std-normalized versions)
+    # ----------------------------------------------------------------
+    # Extract DEM Data (Local and Regional)
+    # ----------------------------------------------------------------
     required_local = 'dem_local_divstd'
     required_regional = 'dem_regional_divstd'
     if required_local not in z.files or required_regional not in z.files:
@@ -113,12 +133,16 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     local_dem = z[required_local].astype(np.float32)
     regional_dem = z[required_regional].astype(np.float32)
     
-    # Load month one-hot encodings (N, 12)
+    # ----------------------------------------------------------------
+    # Extract Temporal Features (Month One-Hot)
+    # ----------------------------------------------------------------
     if "month_onehot" not in z.files:
         raise KeyError("NPZ missing 'month_onehot'")
     month = z["month_onehot"].astype(np.float32)
     
-    # Load rainfall targets (use std-normalized version)
+    # ----------------------------------------------------------------
+    # Extract Target Variable (Rainfall)
+    # ----------------------------------------------------------------
     y = z["rainfall_mm_divstd"].astype(np.float32)
     
     n = int(y.shape[0])
@@ -135,7 +159,9 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     print(f"  Month: {month.shape}")
     print(f"  Targets: {y.shape}")
     
-    # Handle test indices for reproducibility
+    # ----------------------------------------------------------------
+    # Train/Val/Test Splitting with Reproducible Test Indices
+    # ----------------------------------------------------------------
     indices = np.arange(n)
     
     def _generate_and_save_test_indices():
@@ -165,7 +191,9 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     else:
         test_indices = _generate_and_save_test_indices()
     
-    # Split remaining data into train/val
+    # ----------------------------------------------------------------
+    # Create Train/Validation Split from Remaining Data
+    # ----------------------------------------------------------------
     train_val_indices = np.setdiff1d(indices, test_indices)
     train_indices, val_indices = train_test_split(
         train_val_indices, test_size=val_size, random_state=random_state
@@ -176,10 +204,14 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     print(f"  Val: {len(val_indices)} samples")
     print(f"  Test: {len(test_indices)} samples")
     
-    # Extract rainfall std for denormalization
+    # ----------------------------------------------------------------
+    # Extract Metadata for Denormalization
+    # ----------------------------------------------------------------
     rainfall_mm_std = float(z['rainfall_mm_std']) if 'rainfall_mm_std' in z.files else 1.0
     
-    # Create datasets (compact loop over splits)
+    # ----------------------------------------------------------------
+    # Create PyTorch Datasets for Each Split
+    # ----------------------------------------------------------------
     indices_dict = {
         'train': train_indices,
         'val': val_indices,
@@ -220,11 +252,17 @@ def load_assembled_npz_data_pytorch(npz_path: str,
     }
 
 
+# ================================================================
+# DataLoader Creation Functions
+# ================================================================
+
 def create_pytorch_dataloaders(datasets: Dict[str, Dataset], 
                               batch_size: int = 32,
                               shuffle_train: bool = True,
                               num_workers: int = 0,
-                              pin_memory: bool = False) -> Dict[str, DataLoader]:
+                              pin_memory: bool = False,
+                              persistent_workers: Optional[bool] = None,
+                              prefetch_factor: Optional[int] = None) -> Dict[str, DataLoader]:
     """
     Create PyTorch DataLoaders from datasets.
     
@@ -243,18 +281,32 @@ def create_pytorch_dataloaders(datasets: Dict[str, Dataset],
     for split, dataset in datasets.items():
         shuffle = shuffle_train if split == 'train' else False
         
-        dataloaders[split] = DataLoader(
-            dataset=dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            persistent_workers=num_workers > 0,  # Keep workers alive between iterations
-            drop_last=False  # Keep all samples
-        )
+        # Build DataLoader kwargs safely to support different PyTorch versions
+        dl_kwargs: Dict[str, Any] = {
+            'dataset': dataset,
+            'batch_size': batch_size,
+            'shuffle': shuffle,
+            'num_workers': num_workers,
+            'pin_memory': pin_memory,
+            'drop_last': False,
+        }
+
+        # persistent_workers is only meaningful when num_workers > 0
+        # If not provided, default to (num_workers > 0) to preserve prior behavior
+        if num_workers > 0:
+            dl_kwargs['persistent_workers'] = (num_workers > 0) if (persistent_workers is None) else bool(persistent_workers)
+            # prefetch_factor is only supported when num_workers > 0 in PyTorch
+            if prefetch_factor is not None:
+                dl_kwargs['prefetch_factor'] = int(prefetch_factor)
+        
+        dataloaders[split] = DataLoader(**dl_kwargs)
     
     return dataloaders
 
+
+# ================================================================
+# Testing and Validation
+# ================================================================
 
 if __name__ == "__main__":
     # Test the data loading

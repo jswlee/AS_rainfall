@@ -5,8 +5,6 @@ This module handles the extraction and cleaning of station metadata from the sta
 """
 
 import pandas as pd
-import numpy as np
-from pathlib import Path
 from . import config
 
 

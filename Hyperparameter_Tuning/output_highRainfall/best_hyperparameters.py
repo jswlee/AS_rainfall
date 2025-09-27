@@ -1,0 +1,22 @@
+# Best hyperparameters from Optuna tuning
+
+best_hyperparameters = {
+    'climate_units': 512,
+    'local_dem_units': 192,
+    'regional_dem_units': 80,
+    'month_units': 24,
+    'na': 192,
+    'nb': 192,
+    'dropout_rate': 0.35000000000000003,
+    'l2_reg': 0.00018348718418703032,
+    'learning_rate': 0.0006358851575969539,
+    'weight_decay': 2.1599413009753816e-05,
+    'batch_size': 16,
+    'use_residual': False,
+    'climate_activation': 'relu',
+    'output_activation': 'relu',
+    'climate_processing': 'conv2d',
+    'loss_alpha': 1.7255500079037258,
+    'loss_power': 3.61742341345085,
+    'loss_percentile': 0.9793263249818532,
+}

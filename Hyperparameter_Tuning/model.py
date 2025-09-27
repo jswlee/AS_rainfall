@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
 PyTorch implementation of the LAND-inspired rainfall prediction model.
+
+This module provides:
+- LANDModel: Multi-branch neural network for rainfall prediction
+- Support for different climate processing methods (flatten/conv2d)
+- Configurable activation functions and output constraints
+- Model factory function for hyperparameter-driven creation
 """
 
 import torch
@@ -8,6 +14,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional
 
+
+# ================================================================
+# LAND Model Architecture
+# ================================================================
 
 class LANDModel(nn.Module):
     """
@@ -72,7 +82,10 @@ class LANDModel(nn.Module):
         # Climate branch activation can be independently set to 'relu' or 'none'
         self.climate_activation_fn = self._get_optional_activation(climate_activation)
         
-        # Climate/reanalysis processing - support both flatten and conv2d options
+        # ----------------------------------------------------------------
+        # Climate/Reanalysis Branch Architecture
+        # ----------------------------------------------------------------
+        # Support both flatten and conv2d processing options
         if climate_processing == 'conv2d':
             # Conv2D with groups=16 for channel-wise processing as shown in diagram
             self.climate_conv = nn.Conv2d(
@@ -96,7 +109,9 @@ class LANDModel(nn.Module):
         self.climate_fc2 = nn.Linear(in_features=climate_units, out_features=climate_units)
         self.climate_bn2 = nn.BatchNorm1d(num_features=climate_units)
         
-        # Local DEM processing
+        # ----------------------------------------------------------------
+        # Local DEM Branch Architecture
+        # ----------------------------------------------------------------
         local_dem_input_size = local_dem_shape[0] * local_dem_shape[1]
         self.local_dem_fc = nn.Linear(in_features=local_dem_input_size, out_features=local_dem_units)
         self.local_dem_bn = nn.BatchNorm1d(num_features=local_dem_units)
@@ -104,7 +119,9 @@ class LANDModel(nn.Module):
         self.local_dem_fc2 = nn.Linear(in_features=local_dem_units, out_features=local_dem_units)
         self.local_dem_bn2 = nn.BatchNorm1d(num_features=local_dem_units)
         
-        # Regional DEM processing
+        # ----------------------------------------------------------------
+        # Regional DEM Branch Architecture
+        # ----------------------------------------------------------------
         regional_dem_input_size = regional_dem_shape[0] * regional_dem_shape[1]
         self.regional_dem_fc = nn.Linear(in_features=regional_dem_input_size, out_features=regional_dem_units)
         self.regional_dem_bn = nn.BatchNorm1d(num_features=regional_dem_units)
@@ -112,11 +129,15 @@ class LANDModel(nn.Module):
         self.regional_dem_fc2 = nn.Linear(in_features=regional_dem_units, out_features=regional_dem_units)
         self.regional_dem_bn2 = nn.BatchNorm1d(num_features=regional_dem_units)
         
-        # Month processing
+        # ----------------------------------------------------------------
+        # Month/Temporal Branch Architecture
+        # ----------------------------------------------------------------
         self.month_fc = nn.Linear(in_features=num_month_encodings, out_features=month_units)
         self.month_bn = nn.BatchNorm1d(num_features=month_units)
         
-        # Combined feature processing
+        # ----------------------------------------------------------------
+        # Combined Feature Processing (Dense Head)
+        # ----------------------------------------------------------------
         combined_size = climate_units + local_dem_units + regional_dem_units + month_units
         self.fc1 = nn.Linear(in_features=combined_size, out_features=na)
         self.bn1 = nn.BatchNorm1d(num_features=na)
@@ -129,7 +150,9 @@ class LANDModel(nn.Module):
         # Output layer
         self.output = nn.Linear(in_features=nb, out_features=1)
         
-        # Initialize weights
+        # ----------------------------------------------------------------
+        # Weight Initialization
+        # ----------------------------------------------------------------
         self._initialize_weights()
     
     def _get_optional_activation(self, activation: str):
@@ -152,6 +175,10 @@ class LANDModel(nn.Module):
                 nn.init.ones_(tensor=module.weight)
                 nn.init.zeros_(tensor=module.bias)
     
+    # ================================================================
+    # Forward Pass Implementation
+    # ================================================================
+    
     def forward(self, features: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Forward pass through the model.
@@ -166,7 +193,9 @@ class LANDModel(nn.Module):
         Returns:
             Rainfall predictions (batch_size, 1)
         """
-        # Process climate data based on selected processing method
+        # ----------------------------------------------------------------
+        # Climate/Reanalysis Branch Processing
+        # ----------------------------------------------------------------
         climate = features['climate']  # Shape: (batch_size, 16, 3, 3)
         
         if self.climate_processing == 'conv2d':
@@ -186,7 +215,9 @@ class LANDModel(nn.Module):
         climate_out = self.climate_bn2(climate_out)
         climate_out = self.climate_activation_fn(climate_out)
         
-        # Process local DEM data
+        # ----------------------------------------------------------------
+        # Local DEM Branch Processing
+        # ----------------------------------------------------------------
         local_dem = features['local_dem']
         local_dem_flat = local_dem.view(local_dem.size(0), -1)  # Flatten to (batch_size, H*W)
         local_dem_out = self.local_dem_fc(local_dem_flat)
@@ -198,7 +229,9 @@ class LANDModel(nn.Module):
         local_dem_out = self.local_dem_bn2(local_dem_out)
         local_dem_out = F.relu(local_dem_out)
         
-        # Process regional DEM data
+        # ----------------------------------------------------------------
+        # Regional DEM Branch Processing
+        # ----------------------------------------------------------------
         regional_dem = features['regional_dem']
         regional_dem_flat = regional_dem.view(regional_dem.size(0), -1)  # Flatten to (batch_size, H*W)
         regional_dem_out = self.regional_dem_fc(regional_dem_flat)
@@ -209,12 +242,17 @@ class LANDModel(nn.Module):
         regional_dem_out = self.regional_dem_bn2(regional_dem_out)
         regional_dem_out = F.relu(regional_dem_out)
         
-        # Process month data
+        # ----------------------------------------------------------------
+        # Month/Temporal Branch Processing
+        # ----------------------------------------------------------------
         month = features['month']
         month_out = self.month_fc(month)
         month_out = self.month_bn(month_out)
         month_out = F.relu(month_out)
         
+        # ----------------------------------------------------------------
+        # Feature Fusion and Dense Processing
+        # ----------------------------------------------------------------
         # Concatenate all features
         combined = torch.cat(tensors=[climate_out, local_dem_out, regional_dem_out, month_out], dim=1)
         
@@ -238,7 +276,9 @@ class LANDModel(nn.Module):
         x = F.relu(x)
         x = self.dropout2(x)
         
-        # Output layer
+        # ----------------------------------------------------------------
+        # Output Layer and Activation
+        # ----------------------------------------------------------------
         output = self.output(x)
         
         # Apply output activation if specified
@@ -254,6 +294,10 @@ class LANDModel(nn.Module):
         """Get the total number of trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+
+# ================================================================
+# Model Factory Function
+# ================================================================
 
 def create_model_from_hyperparams(hyperparams: Dict, metadata: Dict) -> LANDModel:
     """

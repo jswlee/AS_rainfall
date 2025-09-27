@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
 PyTorch training utilities for the LAND rainfall prediction model.
+
+This module provides:
+- Training and validation loops with early stopping
+- Custom loss functions (WeightedMSE)
+- Model evaluation and metrics calculation
+- Training visualization and result saving
 """
 
 import os
@@ -15,6 +21,10 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import json
 
+
+# ================================================================
+# Training Utilities and Custom Components
+# ================================================================
 
 class EarlyStopping:
     """Early stopping utility to prevent overfitting."""
@@ -77,6 +87,10 @@ class CosineAnnealingWarmup:
             param_group['lr'] = lr
 
 
+# ================================================================
+# Core Training and Validation Functions
+# ================================================================
+
 def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optimizer, 
                 criterion: nn.Module, device: torch.device) -> Tuple[float, float, float]:
     """
@@ -132,38 +146,66 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
     return avg_loss, avg_mae, avg_mse_unweighted
 
 
+# ================================================================
+# Global Threshold Computation
+# ================================================================
+
+def compute_global_thresholds(train_loader, device, percentiles=(0.95, 0.99)) -> dict:
+    """
+    Compute global percentile thresholds from the entire training set.
+    
+    Args:
+        train_loader: Training DataLoader
+        device: Device to compute on
+        percentiles: Tuple of percentiles to compute (e.g., (0.95, 0.99))
+        
+    Returns:
+        Dictionary mapping percentiles to threshold tensors
+    """
+    vals = []
+    with torch.no_grad():
+        for _, targets in train_loader:
+            vals.append(targets.view(-1))
+    
+    all_targets = torch.cat(vals).to(device=device, dtype=torch.float32)
+    thresholds = {}
+    
+    for q in percentiles:
+        thresholds[q] = torch.quantile(all_targets, torch.tensor(q, device=all_targets.device))
+    
+    return thresholds  # e.g. {0.95: tensor(...), 0.99: tensor(...)}
+
+
+# ================================================================
+# Custom Loss Functions
+# ================================================================
+
 class WeightedMSELoss(nn.Module):
     """Weighted MSE that emphasizes errors at the high end of the target.
 
-    Weights are computed per-batch based on a percentile threshold of the targets.
-    For targets above the threshold, the weight increases as (target - threshold)^power.
+    Uses a precomputed global threshold (from the full training set) to define
+    the heavy-rain region. For targets above the threshold, the weight increases
+    as (target - threshold)^power.
 
     Args:
         alpha: Strength of upweighting (>=0). 0 means plain MSE.
         power: Exponent for how fast weights grow with exceedance.
-        percentile: Quantile in [0,1] to define the heavy-rain threshold.
-                   E.g., 0.8 means top 20% targets are upweighted.
+        global_threshold: Required precomputed threshold tensor (on any device).
     """
 
-    def __init__(self, alpha: float = 2.0, power: float = 1.0, percentile: float = 0.95):
+    def __init__(self, alpha: float = 2.0, power: float = 1.0, global_threshold: torch.Tensor = None):
         super().__init__()
         self.alpha = float(alpha)
         self.power = float(power)
-        self.percentile = float(percentile)
+        self.global_threshold = global_threshold
 
     def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        # Detach targets so threshold calculation doesn't affect autograd
-        detached_targets = targets.detach()
-        quantile_value = torch.tensor(self.percentile, device=detached_targets.device, dtype=detached_targets.dtype)
-        try:
-            threshold = torch.quantile(detached_targets, quantile_value)
-        except Exception:
-            # Fallback if quantile not available
-            sorted_targets, _ = torch.sort(detached_targets.view(-1))
-            k = max(0, min(sorted_targets.numel() - 1, int((self.percentile) * (sorted_targets.numel() - 1))))
-            threshold = sorted_targets[k]
+        # Require global threshold to be set (no per-batch fallback)
+        if self.global_threshold is None:
+            raise ValueError("WeightedMSELoss requires a precomputed global_threshold; per-batch mode is disabled.")
+        threshold = self.global_threshold.to(targets.device)
 
-        # Compute how much each targets exceeds threshold
+        # Compute how much each target exceeds threshold
         excess = (targets - threshold).clamp(min=0.0)
         # Compute weights for each target
         raw_weights = 1.0 + self.alpha * (excess ** self.power)
@@ -252,11 +294,33 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
     
     model = model.to(device=device)
     
+    # ================================================================
+    # Training Configuration Setup
+    # ================================================================
     # Setup optimizer and loss function
     optimizer = optim.AdamW(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
     if loss_name == 'weighted_mse':
-        params = loss_params or {}
-        criterion = WeightedMSELoss(**params)
+        params = (loss_params or {}).copy()
+
+        # Compute global threshold from training data for stability
+        if verbose:
+            print("Computing global thresholds from training data...")
+
+        percentile = params.pop('percentile', 0.95)  # used only for computing the threshold
+        global_thresholds = compute_global_thresholds(
+            dataloaders['train'],
+            device,
+            percentiles=(percentile,)
+        )
+
+        # Build criterion with required args only
+        alpha = float(params.get('alpha', 2.0))
+        power = float(params.get('power', 1.0))
+        criterion = WeightedMSELoss(alpha=alpha, power=power, global_threshold=global_thresholds[percentile])
+
+        if verbose:
+            print(f"Global threshold ({percentile*100:.1f}%): {global_thresholds[percentile]:.6f}")
     else:
         criterion = nn.MSELoss(reduction='mean')
     
@@ -264,6 +328,9 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
     scheduler = CosineAnnealingWarmup(optimizer, warmup_epochs=5, total_epochs=epochs)
     early_stopping = EarlyStopping(patience=patience, restore_best_weights=True)
     
+    # ================================================================
+    # Training Loop Execution
+    # ================================================================
     # Training history
     history = {
         'train_loss': [],
@@ -278,10 +345,16 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
     if verbose:
         print(f"Training on {device}")
         print(f"Model has {sum(p.numel() for p in model.parameters() if p.requires_grad):,} parameters")
+        print(f"Loss function: {loss_name}")
+        if loss_name == 'weighted_mse':
+            print(f"Loss params: {loss_params}")
     
     start_time = time.time()
     
     for epoch in range(epochs):
+        # ----------------------------------------------------------------
+        # Epoch Training and Validation
+        # ----------------------------------------------------------------
         # Update learning rate
         scheduler.step(epoch)
         current_lr = optimizer.param_groups[0]['lr']
@@ -327,6 +400,9 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
         if mse_unw_at_best is not None:
             print(f"Validation MSE (unweighted) at best epoch{f' {best_idx+1}' if best_idx is not None else ''}: {mse_unw_at_best:.6f}")
     
+    # ================================================================
+    # Model Saving and Cleanup
+    # ================================================================
     # Save model if path provided
     if save_path:
         torch.save(obj={
@@ -344,6 +420,10 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
     
     return history
 
+
+# ================================================================
+# Model Evaluation and Metrics
+# ================================================================
 
 def evaluate_model(model: nn.Module, dataloader: DataLoader, 
                   device: Optional[torch.device] = None,
@@ -368,6 +448,9 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader,
     model = model.to(device=device)
     model.eval()
     
+    # ----------------------------------------------------------------
+    # Inference Loop
+    # ----------------------------------------------------------------
     all_predictions = []
     all_targets = []
     
@@ -384,6 +467,9 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader,
     predictions = np.concatenate(all_predictions)
     targets = np.concatenate(all_targets)
     
+    # ----------------------------------------------------------------
+    # Metrics Calculation
+    # ----------------------------------------------------------------
     # Calculate metrics in normalized space
     mse = mean_squared_error(y_true=targets, y_pred=predictions)
     rmse = np.sqrt(mse)
@@ -414,6 +500,10 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader,
     
     return metrics
 
+
+# ================================================================
+# Visualization and Results Saving
+# ================================================================
 
 def plot_training_history(history: Dict[str, List[float]], save_path: Optional[str] = None):
     """

@@ -39,6 +39,10 @@ except ImportError:
     logger.warning("MLflow not available. Experiment tracking will be disabled.")
 
 
+# ================================================================
+# MLflow Logger Class
+# ================================================================
+
 class MLflowLogger:
     """
     Robust MLflow logger with comprehensive error handling.
@@ -95,9 +99,9 @@ class MLflowLogger:
             logger.error(f"Failed to initialize MLflow: {e}")
             self.enabled = False
 
-    # ------------------------------------------------------------------
-    # Instance logging helpers to avoid AttributeErrors and add run context
-    # ------------------------------------------------------------------
+    # ================================================================
+    # Context and Logging Helper Methods
+    # ================================================================
     def _ctx(self) -> str:
         """Build a short context string with experiment and run id."""
         run_id = None
@@ -124,6 +128,10 @@ class MLflowLogger:
 
     def error(self, msg: str):
         logger.error(f"{self._ctx()} {msg}")
+    
+    # ================================================================
+    # Run Management (Context Manager)
+    # ================================================================
     
     @contextmanager
     def start_run(self, run_name: Optional[str] = None, nested: bool = False):
@@ -176,6 +184,10 @@ class MLflowLogger:
                 finally:
                     self.active_run = None
                     self._run_started_here = False
+    
+    # ================================================================
+    # Parameter Logging Methods
+    # ================================================================
     
     def log_params(self, params: Dict[str, Any]) -> bool:
         """
@@ -238,6 +250,10 @@ class MLflowLogger:
         """Log a single parameter."""
         return self.log_params({key: value})
     
+    # ================================================================
+    # Metric Logging Methods
+    # ================================================================
+    
     def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> bool:
         """
         Log metrics (performance measurements that change over time).
@@ -282,6 +298,10 @@ class MLflowLogger:
     def log_metric(self, key: str, value: float, step: Optional[int] = None) -> bool:
         """Log a single metric."""
         return self.log_metrics({key: value}, step=step)
+    
+    # ================================================================
+    # Artifact Logging Methods
+    # ================================================================
     
     def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> bool:
         """
@@ -330,6 +350,10 @@ class MLflowLogger:
         except Exception as e:
             logger.error(f"Failed to log artifacts from {local_dir}: {e}")
             return False
+    
+    # ================================================================
+    # Model Logging Methods
+    # ================================================================
     
     def log_model(self, model, name: str = None, artifact_path: str = None, 
                   input_example=None, signature=None, **kwargs) -> bool:
@@ -432,6 +456,10 @@ class MLflowLogger:
             logger.error(f"Failed to log text to {artifact_file}: {e}")
             return False
     
+    # ================================================================
+    # Tag Management Methods
+    # ================================================================
+    
     def set_tag(self, key: str, value: str) -> bool:
         """
         Set a tag on the current run.
@@ -469,11 +497,19 @@ class MLflowLogger:
                 success = False
         return success
     
+    # ================================================================
+    # Run Information Methods
+    # ================================================================
+    
     def get_run_id(self) -> Optional[str]:
         """Get the current run ID."""
         if not self.enabled or not self.active_run:
             return None
         return self.active_run.info.run_id
+    
+    # ================================================================
+    # Training Curve Logging
+    # ================================================================
     
     def log_training_curves(self, history: Dict[str, List[float]], 
                           start_epoch: int = 1) -> bool:
@@ -516,6 +552,10 @@ class MLflowLogger:
             return False
 
 
+# ================================================================
+# Factory Functions
+# ================================================================
+
 def create_mlflow_logger(experiment_name: str, 
                         run_name: Optional[str] = None,
                         enabled: bool = True) -> MLflowLogger:
@@ -538,6 +578,10 @@ def create_mlflow_logger(experiment_name: str,
         enabled=enabled
     )
 
+
+# ================================================================
+# Specialized Logging Functions
+# ================================================================
 
 def start_pretraining_preview_run(
     experiment_name: str,
@@ -587,7 +631,10 @@ def start_pretraining_preview_run(
         return False
 
 
-# Convenience functions for common logging patterns
+# ================================================================
+# Convenience Functions for Common Logging Patterns
+# ================================================================
+
 def log_hyperparameters(logger: MLflowLogger, hyperparams: Dict[str, Any], 
                        prefix: str = "") -> bool:
     """
@@ -646,6 +693,10 @@ def log_model_summary(logger: MLflowLogger, model,
         logger.error(f"Failed to create model summary: {e}")
         return False
 
+
+# ================================================================
+# Standardized Evaluation Logging
+# ================================================================
 
 def log_evaluation_results(logger: MLflowLogger, metrics: Dict[str, float],
                           prefix: str = "test") -> bool:

@@ -29,7 +29,7 @@ from Hyperparameter_Tuning.mlflow_utils import (
 from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
 from Hyperparameter_Tuning.model_training import train_model, evaluate_model, plot_training_history, save_predictions
-from Hyperparameter_Tuning.pytorch_hyperparameter_tuning import load_best_hyperparameters_pytorch
+from Hyperparameter_Tuning.hp_tuning import load_best_hyperparameters_pytorch
 
 
 def create_scatter_plot(y_true, y_pred, title, save_path, rainfall_std=None):
@@ -189,7 +189,7 @@ def train_best_model_pytorch(
     mlflow_run_name: str | None = None,
 ):
     """
-    Train the best LAND model using PyTorch.
+    Train the best LAND model using PyTorch with cross-validation.
     
     Args:
         npz_path: Path to assembled NPZ data (required)
@@ -198,10 +198,24 @@ def train_best_model_pytorch(
         test_indices_path: Path to test indices (required)
         epochs: Maximum training epochs
         save_model: Whether to save the trained model
+        loss_name: Loss function name ('mse' or 'weighted_mse')
+        loss_params: Parameters for the loss function
+        n_folds: Number of cross-validation folds (minimum 2)
+        seed: Random seed for reproducibility
+        enable_mlflow: Whether to enable MLflow experiment tracking
+        mlflow_experiment: MLflow experiment name
+        mlflow_run_name: Optional MLflow run name
     """
+    # ================================================================
+    # Input Validation and Setup
+    # ================================================================
     # Validate required paths (no internal defaults)
     if npz_path is None or hyperparams_dir is None or output_dir is None or test_indices_path is None:
         raise ValueError("npz_path, hyperparams_dir, output_dir, and test_indices_path must be provided. Use CLI arguments in __main__.")
+    
+    # Enforce minimum number of folds for cross-validation
+    if n_folds < 2:
+        raise ValueError("n_folds must be at least 2 for cross-validation training")
     
     os.makedirs(output_dir, exist_ok=True)
 
@@ -231,7 +245,9 @@ def train_best_model_pytorch(
     print("PyTorch LAND Model Training")
     print("=" * 50)
     
-    # Load data
+    # ================================================================
+    # Data Loading and Preprocessing
+    # ================================================================
     print(f"Loading data from {npz_path}...")
     data = load_assembled_npz_data_pytorch(
         npz_path=npz_path,
@@ -239,7 +255,9 @@ def train_best_model_pytorch(
         random_state=seed
     )
     
-    # Load best hyperparameters
+    # ================================================================
+    # Hyperparameter Loading and Configuration
+    # ================================================================
     print(f"Loading hyperparameters from {hyperparams_dir}...")
     # Prefer loading directly from the Optuna SQLite database
     # Load hyperparameters from JSON first (includes trial metadata), fallback to Optuna DB
@@ -278,12 +296,40 @@ def train_best_model_pytorch(
         else:
             hyperparams = None
     
-    # No fallback: require DB presence
+    # Require at least one of the above to succeed
     if hyperparams is None:
         raise RuntimeError(
             "No hyperparameters found in Optuna DB. Please run hyperparameter tuning first "
             "(run_complete_pytorch_pipeline.py --only-tuning) so that Hyperparameter_Tuning/output/land_model_tuning.db exists."
         )
+    
+    # ================================================================
+    # Extract Loss Parameters from Hyperparameter Tuning Results
+    # ================================================================
+    # If loss parameters were tuned, extract them and override command-line params
+    tuned_loss_params = None
+    if loss_name == 'weighted_mse':
+        # Check if loss parameters were tuned as part of hyperparameter search
+        if any(key.startswith('loss_') for key in hyperparams):
+            tuned_loss_params = {
+                'alpha': hyperparams.get('loss_alpha'),
+                'power': hyperparams.get('loss_power'), 
+                'percentile': hyperparams.get('loss_percentile')
+            }
+            print(f"Found tuned loss parameters: {tuned_loss_params}")
+            
+            # Override command-line loss_params with tuned parameters
+            if loss_params is None:
+                loss_params = tuned_loss_params
+                print("Using tuned loss parameters from hyperparameter optimization")
+            else:
+                print("Warning: Both command-line and tuned loss parameters found.")
+                print(f"Command-line params: {loss_params}")
+                print(f"Tuned params: {tuned_loss_params}")
+                print("Using command-line parameters (override tuned parameters)")
+        elif loss_params is None:
+            print("Warning: Using weighted_mse but no loss parameters provided and none found in tuning results")
+            print("Consider providing --loss-params or re-running hyperparameter tuning with loss parameter optimization")
     
     # ------------------------------------------------------------------
     # Kick off a short pre-training MLflow run so the experiment appears
@@ -295,11 +341,11 @@ def train_best_model_pytorch(
                 "loss_criterion": loss_name,
                 "loss_params": loss_params,
                 "epochs_requested": epochs,
-                "n_folds": n_folds if n_folds and n_folds > 1 else 1,
+                "n_folds": n_folds,
                 "device": str(torch.device('cuda' if torch.cuda.is_available()
                                          else 'mps' if torch.backends.mps.is_available()
                                          else 'cpu')),
-                "training_mode": "cross_validation" if n_folds and n_folds > 1 else "single_split",
+                "training_mode": "cross_validation",
                 "model_type": "LAND_rainfall_prediction",
             }
             _ = start_pretraining_preview_run(
@@ -315,177 +361,157 @@ def train_best_model_pytorch(
     # Main training loop
     # ------------------------------------------------------------------
 
-    # If n_folds > 1, run cross-validation on train+val and select best fold model
+    # ================================================================
+    # Cross-Validation Training Setup
+    # ================================================================
     batch_size = hyperparams.get('batch_size', 32)
     cv_results = None
     model_save_path = os.path.join(output_dir, 'best_model.pth') if save_model else None
-    if n_folds and n_folds > 1:
-        print(f"\nRunning cross-validation with {n_folds} folds on train+val...")
-        # Combine train and val like the tuner
-        train_dataset = data['datasets']['train']
-        val_dataset = data['datasets']['val']
-        cv_climate = torch.cat([train_dataset.climate_data, val_dataset.climate_data])
-        cv_local_dem = torch.cat([train_dataset.local_dem_data, val_dataset.local_dem_data])
-        cv_regional_dem = torch.cat([train_dataset.regional_dem_data, val_dataset.regional_dem_data])
-        cv_month = torch.cat([train_dataset.month_data, val_dataset.month_data])
-        cv_targets = torch.cat([train_dataset.targets, val_dataset.targets])
+    
+    # ----------------------------------------------------------------
+    # Cross-Validation Training Path
+    # ----------------------------------------------------------------
+    print(f"\nRunning cross-validation with {n_folds} folds on train+val...")
+    # Combine train and val like the tuner
+    train_dataset = data['datasets']['train']
+    val_dataset = data['datasets']['val']
+    cv_climate = torch.cat([train_dataset.climate_data, val_dataset.climate_data])
+    cv_local_dem = torch.cat([train_dataset.local_dem_data, val_dataset.local_dem_data])
+    cv_regional_dem = torch.cat([train_dataset.regional_dem_data, val_dataset.regional_dem_data])
+    cv_month = torch.cat([train_dataset.month_data, val_dataset.month_data])
+    cv_targets = torch.cat([train_dataset.targets, val_dataset.targets])
 
-        # Create stratification bins (same approach as tuner)
-        y = cv_targets.numpy().ravel()
-        n_bins = 5
-        try:
-            q = np.linspace(0.0, 1.0, n_bins + 1)
-            edges = np.quantile(y, q)
-            uniq = np.unique(edges)
-            if uniq.size < edges.size:
-                edges = np.linspace(y.min(), y.max(), n_bins + 1)
-            y_bins = np.digitize(y, edges[1:-1], right=True)
-        except Exception as e:
-            print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
-            y_bins = np.zeros_like(y, dtype=int)
+    # ----------------------------------------------------------------
+    # Stratified Cross-Validation Setup
+    # ----------------------------------------------------------------
+    # Create stratification bins (same approach as tuner)
+    y = cv_targets.numpy().ravel()
+    n_bins = 5
+    try:
+        q = np.linspace(0.0, 1.0, n_bins + 1)
+        edges = np.quantile(y, q)
+        uniq = np.unique(edges)
+        if uniq.size < edges.size:
+            edges = np.linspace(y.min(), y.max(), n_bins + 1)
+        y_bins = np.digitize(y, edges[1:-1], right=True)
+    except Exception as e:
+        print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
+        y_bins = np.zeros_like(y, dtype=int)
 
-        skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-        splits = list(skf.split(np.zeros_like(y_bins), y_bins))
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    splits = list(skf.split(np.zeros_like(y_bins), y_bins))
 
-        from Hyperparameter_Tuning.data_utils import RainfallDataset
+    from Hyperparameter_Tuning.data_utils import RainfallDataset
 
-        fold_histories = []
-        fold_val_losses = []
-        fold_val_metrics = []
-        fold_models = []
+    # ----------------------------------------------------------------
+    # Cross-Validation Execution Loop
+    # ----------------------------------------------------------------
+    fold_histories = []
+    fold_val_losses = []
+    fold_val_metrics = []
+    fold_models = []
 
-        start_time = time.time()
-        for fold_idx, (tr_idx, va_idx) in enumerate(splits):
-            print(f"Fold {fold_idx+1}/{n_folds}: train={len(tr_idx)} val={len(va_idx)}")
+    start_time = time.time()
+    for fold_idx, (tr_idx, va_idx) in enumerate(splits):
+        print(f"Fold {fold_idx+1}/{n_folds}: train={len(tr_idx)} val={len(va_idx)}")
 
-            fold_train_ds = RainfallDataset(
-                cv_climate[tr_idx].numpy(),
-                cv_local_dem[tr_idx].numpy(),
-                cv_regional_dem[tr_idx].numpy(),
-                cv_month[tr_idx].numpy(),
-                cv_targets[tr_idx].numpy(),
-            )
-            fold_val_ds = RainfallDataset(
-                cv_climate[va_idx].numpy(),
-                cv_local_dem[va_idx].numpy(),
-                cv_regional_dem[va_idx].numpy(),
-                cv_month[va_idx].numpy(),
-                cv_targets[va_idx].numpy(),
-            )
-
-            fold_loaders = create_pytorch_dataloaders(
-                {'train': fold_train_ds, 'val': fold_val_ds},
-                batch_size=batch_size,
-                num_workers=0,
-            )
-
-            model = create_model_from_hyperparams(hyperparams, data['metadata'])
-            hist = train_model(
-                model=model,
-                dataloaders=fold_loaders,
-                epochs=epochs,
-                learning_rate=hyperparams.get('learning_rate', 0.001),
-                weight_decay=hyperparams.get('weight_decay', 0.001),
-                patience=30,
-                save_path=None,
-                verbose=True,
-                loss_name=loss_name,
-                loss_params=loss_params,
-            )
-
-            best_idx_fold = int(np.argmin(hist['val_loss']))
-            best_val = float(hist['val_loss'][best_idx_fold])
-            fold_val_losses.append(best_val)
-            fold_histories.append(hist)
-            # Evaluate on the fold's validation set for R² and other metrics
-            rainfall_std = data['metadata'].get('rainfall_mm_std', None)
-            val_metrics = evaluate_model(model, fold_loaders['val'], rainfall_std=rainfall_std)
-            fold_val_metrics.append(val_metrics)
-            fold_models.append(model)
-
-            # Also capture unweighted MSE at the best criterion epoch for clarity
-            val_mse_unw_best = float(hist['val_mse_unweighted'][best_idx_fold]) if 'val_mse_unweighted' in hist else float('nan')
-            print(f"Best val loss (criterion={loss_name}): {best_val:.6f} | Val MSE (unweighted) at best epoch: {val_mse_unw_best:.6f}")
-            # Stash for CV summary
-            if 'fold_val_mse_unw' not in locals():
-                fold_val_mse_unw = []
-            fold_val_mse_unw.append(val_mse_unw_best)
-
-        training_time = time.time() - start_time
-        best_fold = int(np.argmin(fold_val_losses))
-        print(f"Best fold: {best_fold+1} with val_loss={fold_val_losses[best_fold]:.6f}")
-
-        # Select best fold model and history for downstream saving/plots
-        model = fold_models[best_fold]
-        history = fold_histories[best_fold]
-        # Optionally save the selected best-fold model
-        if model_save_path is not None:
-            torch.save(model.state_dict(), model_save_path)
-
-        # Summarize CV
-        cv_results = {
-            'fold_val_losses': fold_val_losses,
-            'avg_val_loss': float(np.mean(fold_val_losses)),
-            'std_val_loss': float(np.std(fold_val_losses)),
-            'fold_val_mse_unweighted': fold_val_mse_unw if 'fold_val_mse_unw' in locals() else [],
-            'avg_val_mse_unweighted': float(np.mean(fold_val_mse_unw)) if 'fold_val_mse_unw' in locals() else float('nan'),
-            'std_val_mse_unweighted': float(np.std(fold_val_mse_unw)) if 'fold_val_mse_unw' in locals() else float('nan'),
-            'fold_val_r2': [m['r2'] for m in fold_val_metrics],
-            'avg_val_r2': float(np.mean([m['r2'] for m in fold_val_metrics])),
-            'std_val_r2': float(np.std([m['r2'] for m in fold_val_metrics])),
-            'best_fold_index': best_fold,
-        }
-    else:
-        # Original single-split training path
-        dataloaders = create_pytorch_dataloaders(
-            data['datasets'],
-            batch_size=batch_size,
-            num_workers=0
+        fold_train_ds = RainfallDataset(
+            cv_climate[tr_idx].numpy(),
+            cv_local_dem[tr_idx].numpy(),
+            cv_regional_dem[tr_idx].numpy(),
+            cv_month[tr_idx].numpy(),
+            cv_targets[tr_idx].numpy(),
+        )
+        fold_val_ds = RainfallDataset(
+            cv_climate[va_idx].numpy(),
+            cv_local_dem[va_idx].numpy(),
+            cv_regional_dem[va_idx].numpy(),
+            cv_month[va_idx].numpy(),
+            cv_targets[va_idx].numpy(),
         )
 
-        print(f"\nData splits:")
-        print(f"  Train: {len(data['datasets']['train'])} samples")
-        print(f"  Val: {len(data['datasets']['val'])} samples")
-        print(f"  Test: {len(data['datasets']['test'])} samples")
+        fold_loaders = create_pytorch_dataloaders(
+            {'train': fold_train_ds, 'val': fold_val_ds},
+            batch_size=batch_size,
+            num_workers=0,
+        )
 
-        print(f"\nCreating model...")
         model = create_model_from_hyperparams(hyperparams, data['metadata'])
-        print(f"Model has {model.get_num_parameters():,} trainable parameters")
-
-        print(f"\nTraining model for up to {epochs} epochs...")
-        start_time = time.time()
-
-        model_save_path = os.path.join(output_dir, 'best_model.pth') if save_model else None
-
-        history = train_model(
+        hist = train_model(
             model=model,
-            dataloaders=dataloaders,
+            dataloaders=fold_loaders,
             epochs=epochs,
             learning_rate=hyperparams.get('learning_rate', 0.001),
             weight_decay=hyperparams.get('weight_decay', 0.001),
             patience=30,
-            save_path=model_save_path,
+            save_path=None,
             verbose=True,
             loss_name=loss_name,
-            loss_params=loss_params
+            loss_params=loss_params,
         )
 
-        training_time = time.time() - start_time
-        print(f"\nTraining completed in {training_time:.2f} seconds")
+        best_idx_fold = int(np.argmin(hist['val_loss']))
+        best_val = float(hist['val_loss'][best_idx_fold])
+        fold_val_losses.append(best_val)
+        fold_histories.append(hist)
+        # Evaluate on the fold's validation set for R² and other metrics
+        rainfall_std = data['metadata'].get('rainfall_mm_std', None)
+        val_metrics = evaluate_model(model, fold_loaders['val'], rainfall_std=rainfall_std)
+        fold_val_metrics.append(val_metrics)
+        fold_models.append(model)
+
+        # Also capture unweighted MSE at the best criterion epoch for clarity
+        val_mse_unw_best = float(hist['val_mse_unweighted'][best_idx_fold]) if 'val_mse_unweighted' in hist else float('nan')
+        print(f"Best val loss (criterion={loss_name}): {best_val:.6f} | Val MSE (unweighted) at best epoch: {val_mse_unw_best:.6f}")
+        # Stash for CV summary
+        if 'fold_val_mse_unw' not in locals():
+            fold_val_mse_unw = []
+        fold_val_mse_unw.append(val_mse_unw_best)
+
+    # ----------------------------------------------------------------
+    # Cross-Validation Results Analysis
+    # ----------------------------------------------------------------
+    training_time = time.time() - start_time
+    best_fold = int(np.argmin(fold_val_losses))
+    print(f"Best fold: {best_fold+1} with val_loss={fold_val_losses[best_fold]:.6f}")
+
+    # Select best fold model and history for downstream saving/plots
+    model = fold_models[best_fold]
+    history = fold_histories[best_fold]
+    # Optionally save the selected best-fold model
+    if model_save_path is not None:
+        torch.save(model.state_dict(), model_save_path)
+
+    # Summarize CV
+    cv_results = {
+        'fold_val_losses': fold_val_losses,
+        'avg_val_loss': float(np.mean(fold_val_losses)),
+        'std_val_loss': float(np.std(fold_val_losses)),
+        'fold_val_mse_unweighted': fold_val_mse_unw if 'fold_val_mse_unw' in locals() else [],
+        'avg_val_mse_unweighted': float(np.mean(fold_val_mse_unw)) if 'fold_val_mse_unw' in locals() else float('nan'),
+        'std_val_mse_unweighted': float(np.std(fold_val_mse_unw)) if 'fold_val_mse_unw' in locals() else float('nan'),
+        'fold_val_r2': [m['r2'] for m in fold_val_metrics],
+        'avg_val_r2': float(np.mean([m['r2'] for m in fold_val_metrics])),
+        'std_val_r2': float(np.std([m['r2'] for m in fold_val_metrics])),
+        'best_fold_index': best_fold,
+    }
     
-    # Evaluate on test set
+    # Print model information
+    print(f"Model has {model.get_num_parameters():,} trainable parameters")
+    print(f"\nTraining completed in {training_time:.2f} seconds")
+    
+    # ================================================================
+    # Final Model Evaluation on Test Set
+    # ================================================================
     print(f"\nEvaluating on test set...")
     rainfall_std = data['metadata'].get('rainfall_mm_std', None)
-    # Build a unified test_loader
-    if n_folds and n_folds > 1:
-        test_loaders = create_pytorch_dataloaders(
-            {'test': data['datasets']['test']},
-            batch_size=batch_size,
-            num_workers=0,
-        )
-        test_loader = test_loaders['test']
-    else:
-        test_loader = dataloaders['test']
+    # Build a test loader
+    test_loaders = create_pytorch_dataloaders(
+        {'test': data['datasets']['test']},
+        batch_size=batch_size,
+        num_workers=0,
+    )
+    test_loader = test_loaders['test']
 
     test_metrics = evaluate_model(
         model=model,
@@ -505,7 +531,9 @@ def train_best_model_pytorch(
         print(f"  RMSE (inches): {test_metrics['rmse'] * 100:.4f}")
         print(f"  MAE (inches): {test_metrics['mae'] * 100:.4f}")
     
-    # Save results
+    # ================================================================
+    # Results Saving and Visualization
+    # ================================================================
     print(f"\nSaving results to {output_dir}...")
     
     # Plot training history
@@ -516,7 +544,9 @@ def train_best_model_pytorch(
     metrics_path = os.path.join(output_dir, 'evaluation_metrics.csv')
     save_evaluation_metrics(test_metrics, metrics_path, rainfall_std)
 
-    # Save CV summary if applicable
+    # ----------------------------------------------------------------
+    # Cross-Validation Summary Reports
+    # ----------------------------------------------------------------
     if cv_results is not None:
         cv_txt = os.path.join(output_dir, 'cv_summary.txt')
         with open(cv_txt, 'w') as f:
@@ -543,6 +573,9 @@ def train_best_model_pytorch(
         })
         df.to_csv(cv_csv, index=False)
     
+    # ----------------------------------------------------------------
+    # Generate Prediction Visualizations
+    # ----------------------------------------------------------------
     # Create scatter plots (we also log this image as an artifact when MLflow is enabled)
     model.eval()
     with torch.no_grad():
@@ -657,54 +690,57 @@ def train_best_model_pytorch(
                     "final_val_mse_unweighted": float(history['val_mse_unweighted'][-1])
                 })
             
-            mlflow_logger.log_metrics(training_summary)
+            # Use standardized logging with training prefix
+            log_evaluation_results(mlflow_logger, training_summary, prefix="training")
             
             ### 4. Log Cross-Validation Results (if applicable)
             if cv_results is not None:
                 cv_metrics = {
-                    "cv_avg_val_loss": cv_results['avg_val_loss'],
-                    "cv_std_val_loss": cv_results['std_val_loss'],
-                    "cv_avg_val_r2": cv_results['avg_val_r2'],
-                    "cv_std_val_r2": cv_results['std_val_r2'],
-                    "cv_best_fold": cv_results['best_fold_index'] + 1
+                    "avg_val_loss": cv_results['avg_val_loss'],
+                    "std_val_loss": cv_results['std_val_loss'],
+                    "avg_val_r2": cv_results['avg_val_r2'],
+                    "std_val_r2": cv_results['std_val_r2'],
+                    "best_fold": cv_results['best_fold_index'] + 1
                 }
                 
                 if cv_results['avg_val_mse_unweighted'] != float('nan'):
                     cv_metrics.update({
-                        "cv_avg_val_mse_unweighted": cv_results['avg_val_mse_unweighted'],
-                        "cv_std_val_mse_unweighted": cv_results['std_val_mse_unweighted']
+                        "avg_val_mse_unweighted": cv_results['avg_val_mse_unweighted'],
+                        "std_val_mse_unweighted": cv_results['std_val_mse_unweighted']
                     })
                 
-                mlflow_logger.log_metrics(cv_metrics)
+                # Use standardized logging with cv prefix
+                log_evaluation_results(mlflow_logger, cv_metrics, prefix="cv")
                 mlflow_logger.set_tag("cv_enabled", "true")
             else:
                 mlflow_logger.set_tag("cv_enabled", "false")
             
             ### 5. Log Test Set Evaluation Results
 
-            # Log comprehensive test metrics for model performance assessment
-            test_metrics_log = {
-                "test_r2": test_metrics["r2"],
-                "test_mse": test_metrics["mse"],
-                "test_rmse": test_metrics["rmse"],
-                "test_mae": test_metrics["mae"]
+            # Log comprehensive test metrics using standardized function
+            test_metrics_base = {
+                "r2": test_metrics["r2"],
+                "mse": test_metrics["mse"],
+                "rmse": test_metrics["rmse"],
+                "mae": test_metrics["mae"]
             }
             
             # Add unit-specific metrics (mm or inches)
             if rainfall_std is not None and rainfall_std > 0:
-                test_metrics_log.update({
-                    "test_rmse_mm": test_metrics.get("denorm_rmse_mm", 0.0),
-                    "test_mae_mm": test_metrics.get("denorm_mae_mm", 0.0)
+                test_metrics_base.update({
+                    "rmse_mm": test_metrics.get("denorm_rmse_mm", 0.0),
+                    "mae_mm": test_metrics.get("denorm_mae_mm", 0.0)
                 })
                 mlflow_logger.set_tag("units", "mm")
             else:
-                test_metrics_log.update({
-                    "test_rmse_inches": test_metrics["rmse"] * 100.0,
-                    "test_mae_inches": test_metrics["mae"] * 100.0
+                test_metrics_base.update({
+                    "rmse_inches": test_metrics["rmse"] * 100.0,
+                    "mae_inches": test_metrics["mae"] * 100.0
                 })
                 mlflow_logger.set_tag("units", "inches")
             
-            mlflow_logger.log_metrics(test_metrics_log)
+            # Use standardized logging with test prefix
+            log_evaluation_results(mlflow_logger, test_metrics_base, prefix="test")
             
             ### 6. Log Artifacts (Files, Plots, Models)
   
@@ -788,10 +824,10 @@ def train_best_model_pytorch(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
-    parser.add_argument("--npz-path", required=True, help="Path to assembled NPZ data file")
-    parser.add_argument("--hyperparams-dir", required=True, help="Directory containing best_hyperparameters.json or Optuna DB")
-    parser.add_argument("--output-dir", required=True, help="Directory to write training outputs")
-    parser.add_argument("--test-indices-path", required=True, help="Path to test indices file for reproducibility")
+    parser.add_argument("--npz-path", default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
+    parser.add_argument("--hyperparams-dir", default=os.path.join("Hyperparameter_Tuning", "output_highRainfall"), help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", default=os.path.join("Train_Best_Model", "output_highRainfall"), help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_highRainfall", "test_indices.pkl"), help="Path to test indices file for reproducibility")
 
     parser.add_argument("--epochs", type=int, default=300, help="Maximum training epochs")
     parser.add_argument("--save-model", action="store_true", help="Save trained model state_dict to output dir")
