@@ -6,10 +6,12 @@ creating patches of climate variables centered on the nearest grid point to each
 """
 
 import os
+import time
 import numpy as np
 import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import ML_Data_Preprocessing.config as config
 from ML_Data_Preprocessing.utils import find_nearest_point, discover_station_months, visualize_grid
@@ -50,7 +52,13 @@ class ReanalysisFeatureBuilder:
         if reanalysis_dir is not None:
             self.reanalysis_dir = reanalysis_dir
         elif time_interval == "daily":
-            self.reanalysis_dir = config.REANALYSIS_DIR_DAILY
+            # Check if subset directory exists and use it if available
+            subset_dir = "raw_data/climate_variables_daily_processed_as_subset"
+            if os.path.exists(subset_dir):
+                self.reanalysis_dir = subset_dir
+                print(f"Using American Samoa subset data from {subset_dir}")
+            else:
+                self.reanalysis_dir = config.REANALYSIS_DIR_DAILY
         else:
             self.reanalysis_dir = config.REANALYSIS_DIR_MONTHLY
         
@@ -70,7 +78,57 @@ class ReanalysisFeatureBuilder:
         self.default_statistic = config.DEFAULT_STATISTIC
         
         # Dictionary to store variable configurations
-        self.variable_configs = config.REANALYSIS_VARIABLE_CONFIGS.copy()
+        # For daily subset data, use simplified configs that match available files
+        if time_interval == "daily" and "subset" in self.reanalysis_dir:
+            self.variable_configs = {
+                "air_2m": {
+                    "description": "2m air temperature",
+                    "variable": "Air 2m"
+                },
+                "air_temp": {
+                    "description": "Air temperature",
+                    "variable": "Air"
+                },
+                "hgt": {
+                    "description": "Geopotential height",
+                    "variable": "Geopotential Height"
+                },
+                "omega": {
+                    "description": "Omega (vertical velocity)",
+                    "variable": "Omega"
+                },
+                "pottmp": {
+                    "description": "Potential temperature",
+                    "variable": "Potential Temperature"
+                },
+                "pr_wtr": {
+                    "description": "Precipitable water",
+                    "variable": "Precipitable Water",
+                    "custom_file": "pr_wtr.eatm.day.mean.nc"
+                },
+                "shum": {
+                    "description": "Specific humidity",
+                    "variable": "Specific Humidity"
+                },
+                "skin_temp": {
+                    "description": "Skin temperature",
+                    "variable": "Skin Temperature"
+                },
+                "slp": {
+                    "description": "Sea level pressure",
+                    "variable": "Sea Level Pressure"
+                },
+                "uwnd": {
+                    "description": "Zonal wind",
+                    "variable": "Zonal Wind"
+                },
+                "vwnd": {
+                    "description": "Meridional wind",
+                    "variable": "Meridional Wind"
+                }
+            }
+        else:
+            self.variable_configs = config.REANALYSIS_VARIABLE_CONFIGS.copy()
         
         # Dictionary to store each variable's data
         self.climate_data = {}
@@ -260,6 +318,11 @@ class ReanalysisFeatureBuilder:
                 print(f"Error selecting data for {var_name}: {e}")
                 return False
         
+        # Materialize into memory to avoid thread-time IO/contention later
+        try:
+            result = result.load()
+        except Exception:
+            pass
         # Store result
         self.climate_data[var_name] = result
         return True
@@ -280,7 +343,7 @@ class ReanalysisFeatureBuilder:
                 success = False
         return success
     
-    def extract_features_at_location(self, var_name, year, month, lat, lon):
+    def extract_features_at_location(self, var_name, year, month, day, lat, lon):
         """
         Extract a patch of reanalysis data for a specific climate variable centered around a rainfall station location.
         
@@ -296,6 +359,8 @@ class ReanalysisFeatureBuilder:
             Year of the data to extract
         month : int
             Month of the data to extract (1-12)
+        day : int
+            Day of the data to extract (1-31)
         lat : float
             Latitude of the rainfall station location
         lon : float
@@ -317,34 +382,64 @@ class ReanalysisFeatureBuilder:
             
             # Check if the dataset has time dimension
             if 'time' in da.dims:
-                # Convert year and month to datetime
-                target_date = np.datetime64(f"{year}-{month:02d}")
-                
-                # Find the nearest time index
-                time_idx = np.abs(da.time.values - target_date).argmin()
-                
-                # Select the data for the specific time
-                da = da.isel(time=time_idx)
+                # Handle different time formats in daily vs monthly data
+                try:
+                    # For daily data, time might be stored as integers (days since epoch)
+                    if da.time.dtype.kind in ['i', 'u']:  # integer types
+                        # Convert to datetime if needed
+                        time_values = pd.to_datetime(da.time.values, unit='D', origin='1980-01-01')
+                    else:
+                        time_values = pd.to_datetime(da.time.values)
+                    
+                    # Create target datetime for the specific day
+                    target_date = pd.to_datetime(f"{year}-{month:02d}-{day:02d}")
+                    
+                    # Find the nearest time index
+                    time_diffs = np.abs(time_values - target_date)
+                    time_idx = time_diffs.argmin()
+                    
+                    # Select the data for the specific time
+                    da = da.isel(time=time_idx)
+                except Exception as e:
+                    print(f"Warning: Could not process time dimension for {var_name}: {e}")
+                    # If time processing fails, just take the first time step
+                    da = da.isel(time=0)
             
-            # Get latitude and longitude arrays
-            if 'latitude' in da.dims:
-                lats = da.latitude.values
-            elif 'lat' in da.dims:
-                lats = da.lat.values
-            else:
+            # Get latitude and longitude arrays - handle different dimension naming conventions
+            lat_dim = None
+            lon_dim = None
+            
+            # Check for latitude dimension
+            for dim in ['latitude', 'lat']:
+                if dim in da.dims:
+                    lat_dim = dim
+                    lats = da[dim].values
+                    break
+            
+            # Check for longitude dimension
+            for dim in ['longitude', 'lon']:
+                if dim in da.dims:
+                    lon_dim = dim
+                    lons = da[dim].values
+                    break
+            
+            if lat_dim is None:
                 print(f"Warning: No latitude dimension found for {var_name}")
                 return np.zeros((self.patch_size, self.patch_size))
             
-            if 'longitude' in da.dims:
-                lons = da.longitude.values
-            elif 'lon' in da.dims:
-                lons = da.lon.values
-            else:
+            if lon_dim is None:
                 print(f"Warning: No longitude dimension found for {var_name}")
                 return np.zeros((self.patch_size, self.patch_size))
             
-            # Find the nearest grid point to the station
-            lat_idx, lon_idx = find_nearest_point(lat, lon, lats, lons)
+            # Handle longitude wrapping for American Samoa (near the date line)
+            # Convert longitude to -180 to 180 format if needed
+            if lon < 0 and lons.max() > 180:  # If station is in -180 to 0 range but data is in 0 to 360
+                lon_360 = lon + 360
+                # Find nearest using 0-360 format
+                lat_idx, lon_idx = find_nearest_point(lat, lon_360, lats, lons)
+            else:
+                # Standard case
+                lat_idx, lon_idx = find_nearest_point(lat, lon, lats, lons)
             
             # Calculate patch boundaries
             half_size = self.patch_size // 2
@@ -353,18 +448,12 @@ class ReanalysisFeatureBuilder:
             lon_start = max(0, lon_idx - half_size)
             lon_end = min(len(lons), lon_idx + half_size + 1)
             
-            # Extract the patch
-            if 'latitude' in da.dims and 'longitude' in da.dims:
-                patch = da.isel(latitude=slice(lat_start, lat_end), longitude=slice(lon_start, lon_end)).values
-            elif 'lat' in da.dims and 'lon' in da.dims:
-                patch = da.isel(lat=slice(lat_start, lat_end), lon=slice(lon_start, lon_end)).values
-            else:
-                print(f"Warning: Incompatible dimensions for {var_name}")
-                return np.zeros((self.patch_size, self.patch_size))
+            # Extract the patch using the detected dimension names
+            patch = da.isel({lat_dim: slice(lat_start, lat_end), lon_dim: slice(lon_start, lon_end)}).values
             
             # Handle level dimension if present
-            if len(patch.shape) > 2:
-                # If there are multiple levels, take the first one (usually surface)
+            while len(patch.shape) > 2:
+                # If there are multiple levels or other dimensions, take the first one
                 patch = patch[0]
             
             # Ensure the patch has the correct shape
@@ -640,57 +729,182 @@ class ReanalysisFeatureBuilder:
                 # Extract patches for each climate variable centered on the station's coordinates
                 # These patches complement the DEM patches by providing atmospheric context
                 for var_name in self.variable_configs.keys():
-                    # Extract a patch centered on the station's coordinates
-                    patch = self.extract_features_at_location(var_name, year, month, lat, lon)
+                    # Extract a patch centered on the station's coordinates (use day 15 for monthly data)
+                    patch = self.extract_features_at_location(var_name, year, month, 15, lat, lon)
                     station_feats[key][var_name] = patch
                     
             # Store all features for this station
             all_features[station_name] = station_feats
         return all_features
 
+    def build_daily_features_for_all_stations(self, station_metadata, start_year=1980, end_year=1984, max_workers=None):
+        """
+        Build daily reanalysis feature patches for all rainfall stations.
+        
+        For daily data, we extract features for each day in the available time range,
+        creating a dataset with station-year-month-day resolution.
+        
+        Parameters
+        ----------
+        station_metadata : dict
+            Dictionary mapping station names to metadata including latitude and longitude coordinates
+        start_year : int
+            Starting year for feature extraction
+        end_year : int
+            Ending year for feature extraction
+            
+        Returns
+        -------
+        dict
+            Nested dictionary of daily reanalysis features for each station, year, month, day, and variable
+        """
+        # Initialize dictionary to store features for all stations
+        all_features = {}
+        station_list = list(station_metadata.keys())
+        var_list = list(self.variable_configs.keys())
+        if max_workers is None:
+            max_workers = max(1, os.cpu_count() or 1)
+        print(
+            f"Daily build plan: {len(station_list)} stations, years {start_year}-{end_year}, "
+            f"variables: {var_list}, max_workers={max_workers}",
+            flush=True,
+        )
+        
+        # Process each rainfall station using its coordinates
+        for si, (station_name, metadata) in enumerate(station_metadata.items(), start=1):
+            station_start = time.time()
+            print(f"[Station {si}/{len(station_list)}] {station_name}...", flush=True)
+            
+            # Get the station's geographic coordinates
+            lat = float(metadata['latitude'])
+            lon = float(metadata['longitude'])
+            print(f"  Coords: lat={lat:.3f}, lon={lon:.3f}", flush=True)
+            
+            # Initialize dictionary to store features for this station
+            station_feats = {}
+            total_keys_before = len(station_feats)
+            
+            # Process each year in the range
+            for year in range(start_year, end_year + 1):
+                print(f"  Year {year} ...", flush=True)
+                for month in range(1, 13):  # 1-12
+                    # Determine days in month
+                    if month in [1, 3, 5, 7, 8, 10, 12]:
+                        days_in_month = 31
+                    elif month in [4, 6, 9, 11]:
+                        days_in_month = 30
+                    else:  # February
+                        if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
+                            days_in_month = 29
+                        else:
+                            days_in_month = 28
+                    print(f"    Month {month:02d} with {days_in_month} days", flush=True)
+
+                    # Parallelize per-day processing for this month
+                    def _process_day(day: int):
+                        # Build all variable patches for a single day
+                        day_key = (year, month, day)
+                        day_dict = {}
+                        # Light logging at day granularity
+                        if day == 1 or day == days_in_month or day % 5 == 0:
+                            print(f"      Day {day:02d} ...", flush=True)
+                        for var_name in var_list:
+                            try:
+                                patch = self.extract_features_at_location(var_name, year, month, day, lat, lon)
+                                day_dict[var_name] = patch
+                            except Exception as e:
+                                print(
+                                    f"        Failed {var_name} at {year}-{month:02d}-{day:02d}: {e}",
+                                    flush=True,
+                                )
+                        return day_key, day_dict
+
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = [executor.submit(_process_day, d) for d in range(1, days_in_month + 1)]
+                        completed = 0
+                        for fut in as_completed(futures):
+                            day_key, day_dict = fut.result()
+                            station_feats[day_key] = day_dict
+                            completed += 1
+                            if completed % 10 == 0 or completed == days_in_month:
+                                print(
+                                    f"        Completed {completed}/{days_in_month} days for {year}-{month:02d}",
+                                    flush=True,
+                                )
+            
+            # Store all features for this station
+            all_features[station_name] = station_feats
+            elapsed = time.time() - station_start
+            made_now = len(station_feats) - total_keys_before
+            print(f"[Station {si}] Completed with {made_now} day-entries in {elapsed:.1f}s", flush=True)
+        
+        print(f"Daily build complete for {len(all_features)} stations.", flush=True)
+        return all_features
+
     def export_all_features_npz(self, all_features, out_dir, filename="reanalysis_features_all.npz"):
         """
-        Export all station-year-month patches into a single compressed NPZ file.
+        Export all station-time patches into a single compressed NPZ file.
+        
+        Handles both monthly (year, month) and daily (year, month, day) data.
+        
         Stores:
           - patches: float32 array shaped (N, V, H, W)
           - stations: object array of station names (N,)
           - years: int array (N,)
           - months: int array (N,)
+          - days: int array (N,) - only for daily data
           - variables: object array (V,)
         """
         os.makedirs(out_dir, exist_ok=True)
         var_order = list(self.variable_configs.keys())
         entries = []
         meta = []
+        is_daily = False
+        
         for station_name, station_feats in all_features.items():
-            for (year, month), time_features in station_feats.items():
+            for time_key, time_features in station_feats.items():
                 patches = []
                 for v in var_order:
                     patches.append(np.asarray(time_features[v]))
                 arr = np.stack(patches, axis=0)  # (V,H,W)
                 entries.append(arr[np.newaxis, ...])
-                meta.append((station_name, year, month))
+                
+                # Handle both (year, month) and (year, month, day) keys
+                if len(time_key) == 3:  # Daily data: (year, month, day)
+                    is_daily = True
+                    meta.append((station_name, time_key[0], time_key[1], time_key[2]))
+                else:  # Monthly data: (year, month)
+                    meta.append((station_name, time_key[0], time_key[1], 0))  # Use 0 as placeholder for day
+                    
         if len(entries) == 0:
             print("No features to export.")
             return None
+            
         big = np.concatenate(entries, axis=0).astype(np.float32)
         stations = np.array([m[0] for m in meta], dtype=object)
         years = np.array([m[1] for m in meta], dtype=np.int32)
         months = np.array([m[2] for m in meta], dtype=np.int32)
+        days = np.array([m[3] for m in meta], dtype=np.int32)
+        
         save_path = os.path.join(out_dir, filename)
-        np.savez_compressed(
-            save_path,
-            patches=big,
-            stations=stations,
-            years=years,
-            months=months,
-            variables=np.array(var_order, dtype=object),
-            patch_size=np.array(self.patch_size)
-        )
+        save_dict = {
+            'patches': big,
+            'stations': stations,
+            'years': years,
+            'months': months,
+            'variables': np.array(var_order, dtype=object),
+            'patch_size': np.array(self.patch_size)
+        }
+        
+        # Only include days array for daily data
+        if is_daily:
+            save_dict['days'] = days
+            
+        np.savez_compressed(save_path, **save_dict)
         return save_path
 
 
-def main(time_interval="monthly"):
+def main(time_interval="monthly", use_subset=True):
     """
     Main function to demonstrate the usage of the ReanalysisFeatureBuilder class.
     
@@ -698,26 +912,45 @@ def main(time_interval="monthly"):
     ----------
     time_interval : str
         Time interval for processing ("monthly" or "daily")
+    use_subset : bool
+        Whether to use the American Samoa subset data if available
     """
     # Load station metadata via unified helper
     station_metadata = get_station_metadata(config.STATION_METADATA_PATH)
     
+    # Set reanalysis directory based on parameters
+    reanalysis_dir = None
+    if use_subset and time_interval == "daily":
+        subset_dir = "raw_data/climate_variables_daily_processed_as_subset"
+        if os.path.exists(subset_dir):
+            reanalysis_dir = subset_dir
+            print(f"Using American Samoa subset data from {subset_dir}")
+    
     # Create a feature builder and process variables
-    feature_builder = ReanalysisFeatureBuilder(time_interval=time_interval)
+    feature_builder = ReanalysisFeatureBuilder(reanalysis_dir=reanalysis_dir, time_interval=time_interval)
     print(f"Processing climate variables at {time_interval} scale...")
     print(f"Using data directory: {feature_builder.reanalysis_dir}")
     success = feature_builder.process_all_variables()
     if not success:
         print("Warning: Some variables could not be processed.")
 
-    # Discover available months per station from rainfall CSVs
-    print("Discovering available station months from rainfall CSVs...")
-    station_months_map = discover_station_months(station_metadata)
+    if time_interval == "daily":
+        # For daily data, build features for all days in the available range
+        print("Building daily features for all stations...")
+        all_features = feature_builder.build_daily_features_for_all_stations(
+            station_metadata, start_year=1980, end_year=1984, max_workers=getattr(args, "workers", None)
+        )
+        total_pairs = sum(len(v) for v in all_features.values())
+        print(f"Built daily features for {len(all_features)} stations across {total_pairs} station-day pairs...")
+    else:
+        # Discover available months per station from rainfall CSVs
+        print("Discovering available station months from rainfall CSVs...")
+        station_months_map = discover_station_months(station_metadata)
 
-    # Build features only for those station-year-month combinations
-    total_pairs = sum(len(v) for v in station_months_map.values())
-    print(f"Building features for {len(station_months_map)} stations across {total_pairs} station-month pairs...")
-    all_features = feature_builder.build_features_for_all_stations_with_map(station_metadata, station_months_map)
+        # Build features only for those station-year-month combinations
+        total_pairs = sum(len(v) for v in station_months_map.values())
+        print(f"Building features for {len(station_months_map)} stations across {total_pairs} station-month pairs...")
+        all_features = feature_builder.build_features_for_all_stations_with_map(station_metadata, station_months_map)
 
     # Compute variable statistics and standardize
     print("Computing variable statistics...")
@@ -737,14 +970,27 @@ def main(time_interval="monthly"):
     sample_tuple = None
     for st, feats in standardized_features.items():
         if len(feats) > 0:
-            # pick the first (year, month)
-            year, month = sorted(feats.keys())[0]
-            sample_tuple = (st, year, month)
+            # pick the first time key
+            first_key = sorted(feats.keys())[0]
+            if len(first_key) == 3:  # Daily data: (year, month, day)
+                year, month, day = first_key
+                sample_tuple = (st, year, month, day)
+            else:  # Monthly data: (year, month)
+                year, month = first_key
+                sample_tuple = (st, year, month)
             break
     if sample_tuple:
-        st, y, m = sample_tuple
-        print(f"Saving sample visualization for {st} {y}-{m:02d}")
-        feature_builder.visualize_features(standardized_features, st, y, m, output_dir=viz_dir)
+        if len(sample_tuple) == 4:  # Daily data
+            st, y, m, d = sample_tuple
+            print(f"Saving sample visualization for {st} {y}-{m:02d}-{d:02d}")
+            # For visualization, we can use the existing function by treating it as monthly
+            # and accessing the daily features directly
+            daily_features = {st: {(y, m): standardized_features[st][(y, m, d)]}}
+            feature_builder.visualize_features(daily_features, st, y, m, output_dir=viz_dir)
+        else:  # Monthly data
+            st, y, m = sample_tuple
+            print(f"Saving sample visualization for {st} {y}-{m:02d}")
+            feature_builder.visualize_features(standardized_features, st, y, m, output_dir=viz_dir)
     else:
         print("No available features found for sample visualization.")
     
@@ -753,14 +999,22 @@ def main(time_interval="monthly"):
 
 if __name__ == "__main__":
     import sys
+    import argparse
     
-    # Allow command line argument to specify time interval
-    time_interval = "monthly"  # default
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ["daily", "monthly"]:
-            time_interval = sys.argv[1]
-        else:
-            print("Usage: python build_reanalysis_features.py [daily|monthly]")
-            sys.exit(1)
+    parser = argparse.ArgumentParser(description="Build reanalysis features for rainfall stations")
+    parser.add_argument("--time-interval", choices=["daily", "monthly"], default="monthly",
+                        help="Time interval for processing (default: monthly)")
+    parser.add_argument("--use-subset", action="store_true", default=True,
+                        help="Use American Samoa subset data if available (default: True)")
+    parser.add_argument("--use-full", action="store_true",
+                        help="Use full global data instead of subset")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Max parallel workers for daily processing (default: use CPU count)")
     
-    main(time_interval)
+    args = parser.parse_args()
+    
+    # If --use-full is specified, override --use-subset
+    if args.use_full:
+        args.use_subset = False
+    
+    main(args.time_interval, args.use_subset)
