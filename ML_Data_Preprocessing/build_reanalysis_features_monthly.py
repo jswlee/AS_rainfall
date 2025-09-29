@@ -12,7 +12,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 
 import ML_Data_Preprocessing.config as config
-from ML_Data_Preprocessing.utils import find_nearest_point, discover_station_months, discover_station_days, visualize_grid
+from ML_Data_Preprocessing.utils import find_nearest_point, discover_station_months, visualize_grid
 from ML_Data_Preprocessing.extract_station_metadata import get_station_metadata
 
 
@@ -29,28 +29,22 @@ class ReanalysisFeatureBuilder:
     Implementation aligns with the climate processor approach from Create_ML_Data.
     """
     
-    def __init__(self, time_interval='monthly', lon_slice=None, lat_slice=None, time_slice=None):
+    def __init__(self, reanalysis_dir=None, lon_slice=None, lat_slice=None, time_slice=None):
         """
         Initialize the ReanalysisFeatureBuilder.
         
         Parameters
         ----------
-        time_interval : str, optional
-            The time interval for data processing, either 'monthly' or 'daily'.
+        reanalysis_dir : str, optional
+            Directory containing climate data files. If None, uses the path from config.
         lon_slice : slice, optional
-            Longitude slice for data selection.
+            Longitude slice for data selection
         lat_slice : slice, optional
-            Latitude slice for data selection.
+            Latitude slice for data selection
         time_slice : slice, optional
-            Time slice for data selection.
+            Time slice for data selection
         """
-        self.time_interval = time_interval
-        if self.time_interval == 'monthly':
-            self.reanalysis_dir = config.REANALYSIS_DIR_MONTHLY
-        elif self.time_interval == 'daily':
-            self.reanalysis_dir = config.REANALYSIS_DIR_DAILY
-        else:
-            raise ValueError(f"Unsupported time interval: {self.time_interval}")
+        self.reanalysis_dir = reanalysis_dir if reanalysis_dir is not None else config.REANALYSIS_DIR
         self.lon_slice = lon_slice
         self.lat_slice = lat_slice
         self.time_slice = time_slice
@@ -94,13 +88,9 @@ class ReanalysisFeatureBuilder:
         """
         if variable not in self.variable_mapping:
             raise ValueError(f"Unknown variable: {variable}")
-
-        # Special handling for precipitable water, which is always monthly
-        if variable == "Precipitable Water":
-            time_interval = 'monthly'
         
-        # Use the instance's time_interval if not specified
-        time_interval = time_interval or self.time_interval
+        # Use defaults if not specified
+        time_interval = time_interval or self.default_time_interval
         statistic = statistic or self.default_statistic
         
         if time_interval not in self.time_interval_mapping:
@@ -173,10 +163,7 @@ class ReanalysisFeatureBuilder:
         
         # Handle custom file path if specified
         if "custom_file" in config:
-            custom_file = config.get("custom_file_daily") if self.time_interval == "daily" else config.get("custom_file")
-            if custom_file is None:
-                custom_file = config.get("custom_file")
-            file_path = os.path.join(self.reanalysis_dir, custom_file)
+            file_path = os.path.join(self.reanalysis_dir, config["custom_file"])
         else:
             # Construct file path based on variable configuration
             try:
@@ -208,21 +195,63 @@ class ReanalysisFeatureBuilder:
             print(f"No variables found in dataset for {var_name}")
             return False
         
-        # We'll defer all processing to extraction time to preserve time dimensions
-        # Just validate that dependencies exist if needed
-        if "operation" in config and config["operation"] == "multiply":
+        # Process based on operation type
+        result = None
+        
+        if "operation" in config and config["operation"] == "diff":
+            # Handle difference between two levels
+            level1, level2 = config["levels"]
+            try:
+                data1 = ds.sel(level=level1)
+                data2 = ds.sel(level=level2)
+                if self.lon_slice and self.lat_slice:
+                    data1 = data1.sel(lon=self.lon_slice, lat=self.lat_slice)
+                    data2 = data2.sel(lon=self.lon_slice, lat=self.lat_slice)
+                result = data1[var_key] - data2[var_key]
+            except Exception as e:
+                print(f"Error computing difference for {var_name}: {e}")
+                return False
+            
+        elif "operation" in config and config["operation"] == "multiply":
+            # Handle multiplication with another variable
             multiply_with = config["multiply_with"]
             if multiply_with not in self.climate_data:
                 print(f"Multiplication variable {multiply_with} not found")
                 return False
+            
+            try:
+                # Select data based on level if specified
+                if "level" in config:
+                    data = ds.sel(level=config["level"])
+                else:
+                    data = ds
+                
+                if self.lon_slice and self.lat_slice:
+                    data = data.sel(lon=self.lon_slice, lat=self.lat_slice)
+                
+                result = data[var_key] * self.climate_data[multiply_with]
+            except Exception as e:
+                print(f"Error computing product for {var_name}: {e}")
+                return False
+            
+        else:
+            # Handle simple selection
+            try:
+                if "level" in config:
+                    data = ds.sel(level=config["level"])
+                else:
+                    data = ds
+                
+                if self.lon_slice and self.lat_slice:
+                    data = data.sel(lon=self.lon_slice, lat=self.lat_slice)
+                
+                result = data[var_key]
+            except Exception as e:
+                print(f"Error selecting data for {var_name}: {e}")
+                return False
         
-        # Store the raw dataset with time dimension intact for later time-specific extraction
-        # We'll store both the dataset and the processing config for later use
-        self.climate_data[var_name] = {
-            'dataset': ds,
-            'config': config,
-            'var_key': var_key
-        }
+        # Store result
+        self.climate_data[var_name] = result
         return True
     
     def process_all_variables(self):
@@ -241,7 +270,7 @@ class ReanalysisFeatureBuilder:
                 success = False
         return success
     
-    def extract_features_at_location(self, var_name, year, month, lat, lon, day=None):
+    def extract_features_at_location(self, var_name, year, month, lat, lon):
         """
         Extract a patch of reanalysis data for a specific climate variable centered around a rainfall station location.
         
@@ -261,8 +290,6 @@ class ReanalysisFeatureBuilder:
             Latitude of the rainfall station location
         lon : float
             Longitude of the rainfall station location
-        day : int, optional
-            Day of the data to extract (1-31). Required for daily data.
             
         Returns
         -------
@@ -275,73 +302,19 @@ class ReanalysisFeatureBuilder:
             return np.zeros((self.patch_size, self.patch_size))
         
         try:
-            # Get the stored dataset and config
-            data_info = self.climate_data[var_name]
-            ds = data_info['dataset']
-            config = data_info['config']
-            var_key = data_info['var_key']
+            # Get the data array for the variable
+            da = self.climate_data[var_name]
             
-            # Select the specific time first
-            if 'time' in ds.dims or 'valid_time' in ds.dims:
-                time_dim = 'valid_time' if 'valid_time' in ds.dims else 'time'
-                if self.time_interval == 'daily':
-                    target_date = np.datetime64(f"{year}-{month:02d}-{day:02d}")
-                else:  # monthly
-                    target_date = np.datetime64(f"{year}-{month:02d}")
+            # Check if the dataset has time dimension
+            if 'time' in da.dims:
+                # Convert year and month to datetime
+                target_date = np.datetime64(f"{year}-{month:02d}")
                 
-                # Select the time slice
-                ds_time = ds.sel({time_dim: target_date}, method='nearest')
-            else:
-                ds_time = ds
-            
-            # Now process the data for this specific time
-            level_dim = 'pressure_level' if 'pressure_level' in ds_time.dims else 'level'
-            
-            if "operation" in config and config["operation"] == "diff":
-                level1, level2 = config["levels"]
-                data1 = ds_time.sel({level_dim: level1}, method="nearest")
-                data2 = ds_time.sel({level_dim: level2}, method="nearest")
-                if self.lon_slice and self.lat_slice:
-                    data1 = data1.sel(lon=self.lon_slice, lat=self.lat_slice)
-                    data2 = data2.sel(lon=self.lon_slice, lat=self.lat_slice)
-                da = data1[var_key] - data2[var_key]
+                # Find the nearest time index
+                time_idx = np.abs(da.time.values - target_date).argmin()
                 
-            elif "operation" in config and config["operation"] == "multiply":
-                multiply_with = config["multiply_with"]
-                if multiply_with not in self.climate_data:
-                    print(f"Multiplication variable {multiply_with} not found")
-                    return np.zeros((self.patch_size, self.patch_size))
-                
-                if "level" in config:
-                    data = ds_time.sel({level_dim: config["level"]}, method="nearest")
-                else:
-                    data = ds_time
-                
-                if self.lon_slice and self.lat_slice:
-                    data = data.sel(lon=self.lon_slice, lat=self.lat_slice)
-                
-                # Get the multiplication variable for the same time
-                mult_data_info = self.climate_data[multiply_with]
-                mult_ds = mult_data_info['dataset']
-                mult_var_key = mult_data_info['var_key']
-                if 'time' in mult_ds.dims or 'valid_time' in mult_ds.dims:
-                    mult_time_dim = 'valid_time' if 'valid_time' in mult_ds.dims else 'time'
-                    mult_ds_time = mult_ds.sel({mult_time_dim: target_date}, method='nearest')
-                else:
-                    mult_ds_time = mult_ds
-                
-                da = data[var_key] * mult_ds_time[mult_var_key]
-                
-            else:
-                if "level" in config:
-                    data = ds_time.sel({level_dim: config["level"]}, method="nearest")
-                else:
-                    data = ds_time
-                
-                if self.lon_slice and self.lat_slice:
-                    data = data.sel(lon=self.lon_slice, lat=self.lat_slice)
-                
-                da = data[var_key]
+                # Select the data for the specific time
+                da = da.isel(time=time_idx)
             
             # Get latitude and longitude arrays
             if 'latitude' in da.dims:
@@ -605,57 +578,62 @@ class ReanalysisFeatureBuilder:
                 samples.append((st, y, m))
         return samples
 
-    def build_features_for_all_stations_with_map(self, station_metadata, station_data_map):
+    def build_features_for_all_stations_with_map(self, station_metadata, station_months_map):
         """
-        Build reanalysis feature patches for all rainfall stations using a precomputed mapping of available dates.
-
+        Build reanalysis feature patches for all rainfall stations using a precomputed mapping of available (year, month) pairs.
+        
         This method extracts climate variable patches centered on each rainfall station's coordinates for each
-        available date with rainfall data. These reanalysis patches complement the DEM patches by providing
+        available month with rainfall data. These reanalysis patches complement the DEM patches by providing
         atmospheric context around each station, while the DEM patches provide topographic context.
-
+        
         The resulting features are organized in a nested dictionary structure:
-        {station_name: {(year, month, day?): {variable_name: patch_array, ...}, ...}, ...}
-
+        {station_name: {(year, month): {variable_name: patch_array, ...}, ...}, ...}
+        
         Parameters
         ----------
         station_metadata : dict
-            Dictionary mapping station names to metadata including latitude and longitude coordinates.
-        station_data_map : dict
-            Dictionary mapping station names to lists of date tuples (e.g., (year, month) or (year, month, day)).
-
+            Dictionary mapping station names to metadata including latitude and longitude coordinates
+            Format: {station_name: {'latitude': float, 'longitude': float, ...}, ...}
+        station_months_map : dict
+            Dictionary mapping station names to lists of (year, month) tuples with available rainfall data
+            Format: {station_name: [(year, month), ...], ...}
+            
         Returns
         -------
         dict
-            Nested dictionary of reanalysis features for each station, date, and variable.
+            Nested dictionary of reanalysis features for each station, year, month, and variable
         """
         # Initialize dictionary to store features for all stations
         all_features = {}
-
+        
         # Process each rainfall station using its coordinates
         for station_name, metadata in station_metadata.items():
-            if station_name not in station_data_map:
+            # Skip stations with no available rainfall data months
+            if station_name not in station_months_map:
                 continue
-
+                
             print(f"Building features for station {station_name}...")
-            date_tuples = station_data_map[station_name]
-
+            pairs = station_months_map[station_name]  # List of (year, month) tuples with rainfall data
+            
             # Get the station's geographic coordinates
             lat = metadata['latitude']   # Latitude of the rainfall station
             lon = metadata['longitude']  # Longitude of the rainfall station
-
+            
             # Initialize dictionary to store features for this station
             station_feats = {}
-            for date_tuple in date_tuples:
-                station_feats[date_tuple] = {}
+            
+            # Process each year-month combination with rainfall data
+            for (year, month) in pairs:
+                key = (year, month)
+                station_feats[key] = {}
+                
+                # Extract patches for each climate variable centered on the station's coordinates
+                # These patches complement the DEM patches by providing atmospheric context
                 for var_name in self.variable_configs.keys():
-                    if self.time_interval == 'daily':
-                        year, month, day = date_tuple
-                        patch = self.extract_features_at_location(var_name, year, month, lat, lon, day=day)
-                    else:  # monthly
-                        year, month = date_tuple
-                        patch = self.extract_features_at_location(var_name, year, month, lat, lon)
-                    station_feats[date_tuple][var_name] = patch
-
+                    # Extract a patch centered on the station's coordinates
+                    patch = self.extract_features_at_location(var_name, year, month, lat, lon)
+                    station_feats[key][var_name] = patch
+                    
             # Store all features for this station
             all_features[station_name] = station_feats
         return all_features
@@ -675,68 +653,55 @@ class ReanalysisFeatureBuilder:
         entries = []
         meta = []
         for station_name, station_feats in all_features.items():
-            for date_tuple, time_features in station_feats.items():
+            for (year, month), time_features in station_feats.items():
                 patches = []
                 for v in var_order:
                     patches.append(np.asarray(time_features[v]))
                 arr = np.stack(patches, axis=0)  # (V,H,W)
                 entries.append(arr[np.newaxis, ...])
-                meta.append((station_name, *date_tuple))
-
-        if not entries:
+                meta.append((station_name, year, month))
+        if len(entries) == 0:
             print("No features to export.")
             return None
-
         big = np.concatenate(entries, axis=0).astype(np.float32)
         stations = np.array([m[0] for m in meta], dtype=object)
         years = np.array([m[1] for m in meta], dtype=np.int32)
         months = np.array([m[2] for m in meta], dtype=np.int32)
-
         save_path = os.path.join(out_dir, filename)
-        data_to_save = {
-            'patches': big,
-            'stations': stations,
-            'years': years,
-            'months': months,
-            'variables': np.array(var_order, dtype=object),
-            'patch_size': np.array(self.patch_size)
-        }
-
-        if self.time_interval == 'daily':
-            days = np.array([m[3] for m in meta], dtype=np.int32)
-            data_to_save['days'] = days
-
-        np.savez_compressed(save_path, **data_to_save)
+        np.savez_compressed(
+            save_path,
+            patches=big,
+            stations=stations,
+            years=years,
+            months=months,
+            variables=np.array(var_order, dtype=object),
+            patch_size=np.array(self.patch_size)
+        )
         return save_path
 
 
-def main(time_interval='monthly'):
+def main():
     """
     Main function to demonstrate the usage of the ReanalysisFeatureBuilder class.
     """
+    # Load station metadata via unified helper
     station_metadata = get_station_metadata(config.STATION_METADATA_PATH)
-    feature_builder = ReanalysisFeatureBuilder(time_interval=time_interval)
-
-    print(f"Processing {time_interval} climate variables...")
+    
+    # Create a feature builder and process variables
+    feature_builder = ReanalysisFeatureBuilder()
+    print("Processing climate variables...")
     success = feature_builder.process_all_variables()
     if not success:
         print("Warning: Some variables could not be processed.")
-        return
 
-    if time_interval == 'monthly':
-        print("Discovering available station months from rainfall CSVs...")
-        station_data_map = discover_station_months(station_metadata)
-    else:  # daily
-        print("Discovering available station days from rainfall CSVs...")
-        station_data_map = discover_station_days(
-            station_metadata, 
-            start_date='1980-01-01', 
-            end_date='1984-12-31'
-        )
+    # Discover available months per station from rainfall CSVs
+    print("Discovering available station months from rainfall CSVs...")
+    station_months_map = discover_station_months(station_metadata)
 
-    total_pairs = sum(len(v) for v in station_data_map.values())
-    print(f"Building features for {len(station_data_map)} stations across {total_pairs} station-date pairs...")
-    all_features = feature_builder.build_features_for_all_stations_with_map(station_metadata, station_data_map)
+    # Build features only for those station-year-month combinations
+    total_pairs = sum(len(v) for v in station_months_map.values())
+    print(f"Building features for {len(station_months_map)} stations across {total_pairs} station-month pairs...")
+    all_features = feature_builder.build_features_for_all_stations_with_map(station_metadata, station_months_map)
 
     # Compute variable statistics and standardize
     print("Computing variable statistics...")
@@ -770,11 +735,4 @@ def main(time_interval='monthly'):
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Build reanalysis features for monthly or daily data.')
-    parser.add_argument('time_interval', type=str, nargs='?', default='monthly', choices=['monthly', 'daily'],
-                        help='The time interval to process (monthly or daily).')
-    args = parser.parse_args()
-
-    main(time_interval=args.time_interval)
+    main()

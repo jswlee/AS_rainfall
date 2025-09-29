@@ -10,7 +10,7 @@ import os
 STATION_METADATA_PATH = "raw_data/station_locations.csv"
 DEM_PATH = "raw_data/DEM/DEM_Tut1.tif"
 REANALYSIS_DIR_MONTHLY = "raw_data/climate_variables_monthly"
-REANALYSIS_DIR_DAILY = "raw_data/climate_variables_daily_processed"
+REANALYSIS_DIR_DAILY = "raw_data/climate_variables_daily_concatenated"
 RAINFALL_DATA_DIR = "Process_Raw_Rainfall_Data/output/monthly_rainfall"
 
 # Backward compatibility - defaults to monthly
@@ -112,7 +112,8 @@ REANALYSIS_VARIABLE_CONFIGS = {
     "pr_wtr": {
         "description": "Precipitable water",
         "variable": "Precipitable Water",
-        "custom_file": "pr_wtr.eatm.mon.mean.nc"
+        "custom_file": "pr_wtr.eatm.mon.mean.nc",
+        "custom_file_daily": "pr_wtr.eatm.day.mean.nc"
     },
     "shum_700": {
         "description": "Specific humidity at 700 mb",

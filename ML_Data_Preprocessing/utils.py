@@ -194,3 +194,51 @@ def discover_station_months(station_metadata):
         except Exception as e:
             print(f"Warning: Failed to parse rainfall CSV for {station_name}: {e}")
     return station_months
+
+def discover_station_days(station_metadata, start_date=None, end_date=None):
+    """
+    Discover available (year, month, day) combos per station from daily rainfall CSVs.
+    Only includes rows where the rainfall value is present and non-negative.
+    
+    Args:
+        station_metadata (dict): Mapping of station names to metadata.
+        start_date (str, optional): The start date for the time filter (e.g., '1980-01-01').
+        end_date (str, optional): The end date for the time filter (e.g., '1984-12-31').
+
+    Returns:
+        dict: station_name -> list[(year, month, day)]
+    """
+    station_days = {}
+    daily_rainfall_dir = Path("raw_data/rainfall_corrected")
+
+    for station_name in station_metadata.keys():
+        csv_path = daily_rainfall_dir / f"{station_name}.csv"
+        if not csv_path.exists():
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+            df["datetime"] = pd.to_datetime(df["datetime"])
+
+            # Filter the DataFrame to the specified date range if provided
+            if start_date and end_date:
+                mask = (df["datetime"] >= start_date) & (df["datetime"] <= end_date)
+                df = df[mask]
+                if df.empty:
+                    # Print a diagnostic message if no data remains after filtering
+                    print(f"  - No rainfall data for {station_name} within {start_date} to {end_date}")
+                    continue
+
+            # Filter for valid rainfall data
+            if "precip_in" in df.columns:
+                mask = df["precip_in"].notna() & (df["precip_in"] >= 0)
+                df = df[mask]
+
+            if not df.empty:
+                pairs = [
+                    (d.year, d.month, d.day)
+                    for d in df["datetime"].tolist()
+                ]
+                station_days[station_name] = sorted(list(set(pairs)))
+        except Exception as e:
+            print(f"Warning: Failed to parse daily rainfall CSV for {station_name}: {e}")
+    return station_days
