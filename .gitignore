@@ -8,3 +8,4 @@ data/climate_variables/
 ipynb_checkpoints
 mlruns/
 venv/
+archived/

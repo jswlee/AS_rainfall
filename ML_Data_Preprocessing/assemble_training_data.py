@@ -9,12 +9,10 @@ import os
 import numpy as np
 import pandas as pd
 import glob
-from pathlib import Path
 import matplotlib.pyplot as plt
 
 from . import config
 from .utils import filter_outliers
-# Removed external one-hot helper; define a simple encoder below.
 
 def month_one_hot(month: int) -> np.ndarray:
     """Return a 12-dim one-hot vector for month in [1..12]."""
@@ -529,10 +527,8 @@ class TrainingDataAssembler:
         print(f"Assembled {len(df)} training examples")
         print(f"DataFrame shape: {df.shape}")
         print(f"DataFrame columns: {len(df.columns)}")
-        
-        return df
-        
-        # Save metadata about the dataset
+
+       # Save metadata about the dataset
         metadata_path = os.path.join(os.path.dirname(output_path), 'dataset_metadata.txt')
         with open(metadata_path, 'w') as f:
             f.write(f"Dataset created on: {pd.Timestamp.now()}\n")
@@ -542,6 +538,9 @@ class TrainingDataAssembler:
             f.write(f"Columns: {', '.join(df.columns)}\n")
         
         print(f"Dataset metadata saved to {metadata_path}")
+        
+        return df
+        
     
     def visualize_dataset(self, df, output_dir=None):
         """
@@ -608,7 +607,6 @@ class TrainingDataAssembler:
 
 
 def main():
-    """Simplified main: build month one-hot + rainfall aligned to precomputed features."""
     print("Assembling training data...")
     assembler = TrainingDataAssembler()
     out_path = assembler.assemble_from_precomputed()
