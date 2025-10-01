@@ -43,7 +43,8 @@ dependencies = [
     "tqdm>=4.62.0",
     "plotly>=6.3.0",
     "mlflow>=3.0.0",
-    "dask>=2025.9.1"
+    "dask>=2025.9.1",
+    "optuna>=4.5.0",
 ]
 
 [project.optional-dependencies]
