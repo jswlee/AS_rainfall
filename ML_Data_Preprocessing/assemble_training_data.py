@@ -34,31 +34,33 @@ class TrainingDataAssembler:
     4. Saving the assembled dataset
     """
     
-    def __init__(self, rainfall_dir=None, output_dir=None):
+    def __init__(self, time_interval='monthly', rainfall_dir=None, output_dir=None):
         """
         Initialize the training data assembler.
         
         Args:
+            time_interval (str): 'monthly' or 'daily'
             rainfall_dir (str, optional): Directory containing station rainfall CSV files.
-                If None, uses the path from the config.
             output_dir (str, optional): Directory to save the assembled dataset.
-                If None, uses the path from the config.
         """
+        self.time_interval = time_interval
+        
         if rainfall_dir is None:
-            rainfall_dir = config.RAINFALL_DATA_DIR
+            if time_interval == 'monthly':
+                rainfall_dir = config.MONTHLY_RAINFALL_DATA_DIR
+            elif time_interval == 'daily':
+                rainfall_dir = config.DAILY_RAINFALL_DATA_DIR
+            else:
+                raise ValueError(f"Unsupported time_interval: {time_interval}")
+        
         if output_dir is None:
             output_dir = config.OUTPUT_DIR
         
         self.rainfall_dir = rainfall_dir
         self.output_dir = output_dir
-        
-        # Create output directory if it doesn't exist
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # Dictionary to store station rainfall data
         self.rainfall_data = {}
-        
-        # Statistics for rainfall normalization
         self.rainfall_mean = None
         self.rainfall_std = None
     
@@ -92,43 +94,97 @@ class TrainingDataAssembler:
             print(f"Error loading rainfall data for station {station_name}: {e}")
             return None
 
-    def _build_rainfall_lookup(self):
-        """Build a mapping (station, year, month) -> rainfall_inches from monthly CSVs.
-
-        Supports two schemas:
-          - New: columns ['year_month', 'monthly_total_precip_in']
-          - Legacy: columns ['Year','Month','Rainfall'] (inches)
+    def _build_rainfall_lookup(self, time_interval=None):
         """
+        Builds a unified rainfall lookup from daily and monthly CSVs.
+
+        The key format is determined by the data's granularity:
+        - Daily:   (station, year, month, day) -> rainfall_inches
+        - Monthly: (station, year, month) -> rainfall_inches
+
+        It supports two CSV schemas by checking column headers:
+        1. Daily:   ['datetime', 'precip_in']
+        2. Monthly: ['year_month', 'monthly_total_precip_in']
+        """
+        if time_interval is None:
+            time_interval = self.time_interval
+        
         lookup = {}
-        # Discover CSVs like <station>_monthly.csv
-        for csv_path in glob.glob(os.path.join(str(self.rainfall_dir), '*_monthly.csv')):
+        files_processed = 0
+        
+        # A single glob finds all potential candidate files.
+        for csv_path in glob.glob(os.path.join(str(self.rainfall_dir), '*.csv')):
             try:
-                df = pd.read_csv(csv_path)
-                station = os.path.basename(csv_path).replace('_monthly.csv', '')
-                if 'year_month' in df.columns:
-                    # Filter out missing rainfall
-                    if 'monthly_total_precip_in' in df.columns:
-                        mask = (~df['monthly_total_precip_in'].isna()) & (df['monthly_total_precip_in'] != '')
-                        df = df[mask]
-                    ym = df['year_month'].astype(str).str.split('-', expand=True)
+                basename = os.path.basename(csv_path)
+                # Read CSV - daily has unnamed index, monthly has year_month as first column
+                df = pd.read_csv(csv_path, na_values=['', 'NA'], keep_default_na=True)
+                
+                # Handle unnamed index column for daily files
+                if df.columns[0].startswith('Unnamed:'):
+                    df = df.set_index(df.columns[0])
+                
+                cols = set(df.columns)
+
+                # --- Schema 1: Daily ---
+                if time_interval == 'daily':
+                    if 'datetime' not in cols or 'precip_in' not in cols:
+                        continue
+                    
+                    station = basename.replace('.csv', '')
+                    df_valid = df.dropna(subset=['datetime', 'precip_in']).copy()
+                    
+                    if len(df_valid) == 0:
+                        continue
+                    
+                    df_valid['datetime'] = pd.to_datetime(df_valid['datetime'], format='%m/%d/%Y')
+                    
+                    # Use vectorized operations instead of iterrows() for performance
+                    keys = zip(
+                        [station] * len(df_valid),
+                        df_valid['datetime'].dt.year,
+                        df_valid['datetime'].dt.month,
+                        df_valid['datetime'].dt.day
+                    )
+                    values = df_valid['precip_in'].astype(float)
+                    lookup.update(dict(zip(keys, values)))
+                    files_processed += 1
+
+                # --- Schema 2: Monthly ---
+                elif time_interval == 'monthly':
+                    if 'year_month' not in cols or 'monthly_total_precip_in' not in cols:
+                        continue
+                    
+                    station = basename.replace('_monthly.csv', '')
+                    df_valid = df.dropna(subset=['year_month', 'monthly_total_precip_in']).copy()
+                    
+                    if len(df_valid) == 0:
+                        continue
+                    
+                    ym = df_valid['year_month'].astype(str).str.split('-', expand=True)
+                    
+                    # Ensure the split operation resulted in at least two columns
                     if ym.shape[1] >= 2:
-                        years = ym[0].astype(int).tolist()
-                        months = ym[1].astype(int).tolist()
-                        rains = df['monthly_total_precip_in'].astype(float).tolist()
-                        for y, m, r in zip(years, months, rains):
-                            lookup[(station, int(y), int(m))] = float(r)
-                elif {'Year','Month','Rainfall'}.issubset(set(df.columns)):
-                    for _, row in df.iterrows():
-                        lookup[(station, int(row['Year']), int(row['Month']))] = float(row['Rainfall'])
+                        keys = zip(
+                            [station] * len(df_valid),
+                            ym[0].astype(int),
+                            ym[1].astype(int)
+                        )
+                        values = df_valid['monthly_total_precip_in'].astype(float)
+                        lookup.update(dict(zip(keys, values)))
+                        files_processed += 1
+
             except Exception as e:
+                # A single, consistent error handler
                 print(f"Warning: failed to parse rainfall CSV {csv_path}: {e}")
+        
+        print(f"Loaded rainfall data from {files_processed} CSV files, {len(lookup)} total records")
         return lookup
 
     def assemble_from_precomputed(self,
                                   dem_npz_path: str = None,
                                   reanalysis_npz_path: str = None,
                                   out_dir: str = None,
-                                  out_filename: str = 'full_training_data.npz'):
+                                  out_filename: str = None):
         """
         Assemble a single, ready-to-train NPZ file by combining DEM patches (extracted around rainfall station coordinates),
         reanalysis features, and rainfall data for machine learning.
@@ -175,9 +231,12 @@ class TrainingDataAssembler:
         if dem_npz_path is None:
             dem_npz_path = os.path.join(str(config.OUTPUT_DIR), 'dem_npz', 'dem_patches_all_standardized.npz')
         if reanalysis_npz_path is None:
-            reanalysis_npz_path = os.path.join(str(config.OUTPUT_DIR), 'reanalysis_npz', 'reanalysis_features_all_standardized.npz')
+            reanalysis_npz_path = os.path.join(str(config.OUTPUT_DIR), 'reanalysis_npz', 
+                                               f'reanalysis_features_all_standardized_{self.time_interval}.npz')
         if out_dir is None:
             out_dir = os.path.join(str(config.OUTPUT_DIR), 'assembled_npz')
+        if out_filename is None:
+            out_filename = f'full_training_data_{self.time_interval}.npz'
         os.makedirs(out_dir, exist_ok=True)
 
         if not os.path.exists(reanalysis_npz_path):
@@ -194,24 +253,38 @@ class TrainingDataAssembler:
         re_stations = re_npz['stations']
         re_years = re_npz['years']
         re_months = re_npz['months']
+        re_days = re_npz.get('days', None)
 
         dem_stations = dem_npz['stations']
         dem_years = dem_npz['years']
         dem_months = dem_npz['months']
 
-        # Build index sets for sanity check
-        re_keys = [(str(s), int(y), int(m)) for s, y, m in zip(re_stations.tolist(), re_years.tolist(), re_months.tolist())]
-        dem_keys = {(str(s), int(y), int(m)) for s, y, m in zip(dem_stations.tolist(), dem_years.tolist(), dem_months.tolist())}
+        # Build index sets
+        if self.time_interval == 'daily' and re_days is not None:
+            re_keys = [(str(s), int(y), int(m), int(d)) for s, y, m, d in 
+                      zip(re_stations.tolist(), re_years.tolist(), re_months.tolist(), re_days.tolist())]
+            dem_keys = {(str(s), int(y), int(m)) for s, y, m in 
+                       zip(dem_stations.tolist(), dem_years.tolist(), dem_months.tolist())}
+        else:
+            re_keys = [(str(s), int(y), int(m)) for s, y, m in 
+                      zip(re_stations.tolist(), re_years.tolist(), re_months.tolist())]
+            dem_keys = {(str(s), int(y), int(m)) for s, y, m in 
+                       zip(dem_stations.tolist(), dem_years.tolist(), dem_months.tolist())}
 
-        missing_in_dem = [k for k in re_keys if k not in dem_keys]
+        # Check for missing DEM data
+        if self.time_interval == 'daily':
+            missing_in_dem = [k for k in re_keys if (k[0], k[1], k[2]) not in dem_keys]
+        else:
+            missing_in_dem = [k for k in re_keys if k not in dem_keys]
         if missing_in_dem:
-            print(f"Warning: {len(missing_in_dem)} reanalysis tuples missing in DEM NPZ. Proceeding with available indices.")
+            print(f"Warning: {len(missing_in_dem)} reanalysis tuples missing in DEM NPZ.")
 
         # Month one-hot
         month_onehot = np.stack([month_one_hot(int(m)) for m in re_months.tolist()], axis=0).astype(np.float32)
 
         # Rainfall mapping from CSVs
         rainfall_lookup = self._build_rainfall_lookup()
+        
         rainfall_in = []
         missing_rain = 0
         for k in re_keys:
@@ -221,7 +294,7 @@ class TrainingDataAssembler:
                 rainfall_in.append(np.nan)
                 missing_rain += 1
         if missing_rain > 0:
-            print(f"Warning: rainfall missing for {missing_rain} of {len(re_keys)} tuples. Filled with NaN.")
+            print(f"Warning: rainfall missing for {missing_rain} of {len(re_keys)} tuples.")
         rainfall_in = np.asarray(rainfall_in, dtype=np.float32)
         # Convert inches -> millimeters (raw), then compute both min–max and divstd variants
         rainfall_mm_raw = rainfall_in * 25.4
@@ -252,32 +325,30 @@ class TrainingDataAssembler:
         regional_list = []        # For regional min-max normalized patches
         local_divstd_list = []    # For local std-normalized patches
         regional_divstd_list = []  # For regional std-normalized patches
-        # For each station-year-month combination in the reanalysis data,
-        # find the corresponding DEM patches (which were extracted around rainfall station locations)
-        for key in re_keys:  # Each key is a (station_name, year, month) tuple
-            if key in dem_keys:  # If we have DEM data for this station-year-month
-                # Find the index of this station-year-month in the DEM data
-                di = {(str(s), int(y), int(m)): i for i, (s, y, m) in enumerate(zip(dem_stations.tolist(), dem_years.tolist(), dem_months.tolist()))}[key]
+        # Build DEM index mapping
+        dem_idx_map = {(str(s), int(y), int(m)): i for i, (s, y, m) in 
+                      enumerate(zip(dem_stations.tolist(), dem_years.tolist(), dem_months.tolist()))}
+        
+        for key in re_keys:
+            # For daily data, DEM uses (station, year, month) key (excluding day)
+            # because topography doesn't change day-to-day - we reuse the same
+            # monthly DEM patch for all days within that month
+            dem_key = (key[0], key[1], key[2]) if self.time_interval == 'daily' else key
+            
+            if dem_key in dem_idx_map:
+                di = dem_idx_map[dem_key]
+                local_list.append(dem_local_npz[di])
+                regional_list.append(dem_regional_npz[di])
                 
-                # Get the DEM patches for this station-year-month
-                local_list.append(dem_local_npz[di])      # Local patch (finer detail)
-                regional_list.append(dem_regional_npz[di])  # Regional patch (broader context)
-                
-                # Also get std-normalized patches if available
                 if dem_local_divstd_npz is not None and dem_regional_divstd_npz is not None:
                     local_divstd_list.append(dem_local_divstd_npz[di])
                     regional_divstd_list.append(dem_regional_divstd_npz[di])
             else:
-                # For stations without DEM data, fill with NaNs to maintain alignment
-                # This ensures all arrays have the same length as the reanalysis data
-                lshape = dem_local_npz[0].shape   # Shape of local DEM patches
-                rshape = dem_regional_npz[0].shape  # Shape of regional DEM patches
-                
-                # Create NaN arrays with the same shape as the DEM patches
+                lshape = dem_local_npz[0].shape
+                rshape = dem_regional_npz[0].shape
                 local_list.append(np.full(lshape, np.nan, dtype=np.float32))
                 regional_list.append(np.full(rshape, np.nan, dtype=np.float32))
                 
-                # Also create NaN arrays for std-normalized patches if needed
                 if dem_local_divstd_npz is not None and dem_regional_divstd_npz is not None:
                     local_divstd_list.append(np.full(dem_local_divstd_npz[0].shape, np.nan, dtype=np.float32))
                     regional_divstd_list.append(np.full(dem_regional_divstd_npz[0].shape, np.nan, dtype=np.float32))
@@ -314,41 +385,34 @@ class TrainingDataAssembler:
         # 5. Reanalysis features
         # 6. Global statistics for denormalization
         out_path = os.path.join(out_dir, out_filename)
-        np.savez_compressed(
-            out_path,
-            # Metadata arrays for indexing
-            stations=re_stations,
-            years=re_years,
-            months=re_months,
-            
-            # Month one-hot encodings (12 dimensions)
-            month_onehot=month_onehot,
-            
-            # Rainfall data (labels for ML model)
-            rainfall_mm=rainfall_mm,                              # Min-max normalized rainfall
-            rainfall_mm_divstd=rainfall_mm_divstd,                # Std-normalized rainfall
-            rainfall_mm_std=np.array(rstd, dtype=np.float32),     # Global std for denormalization
-            rainfall_mm_min=np.array(rmin, dtype=np.float32),     # Global min for denormalization
-            rainfall_mm_max=np.array(rmax, dtype=np.float32),     # Global max for denormalization
-            
-            # DEM patches extracted around rainfall station coordinates (features for ML model)
-            dem_local_minmax=dem_local_minmax,                    # Local patches (min-max normalized)
-            dem_regional_minmax=dem_regional_minmax,              # Regional patches (min-max normalized)
-            dem_local_divstd=dem_local_divstd if dem_local_divstd is not None else np.array([]),      # Local patches (std-normalized)
-            dem_regional_divstd=dem_regional_divstd if dem_regional_divstd is not None else np.array([]),  # Regional patches (std-normalized)
-            
-            # Global statistics for DEM patches (for denormalization)
-            dem_local_min=np.array(l_min, dtype=np.float32),      # Global min for local patches
-            dem_local_max=np.array(l_max, dtype=np.float32),      # Global max for local patches
-            dem_regional_min=np.array(r_min, dtype=np.float32),   # Global min for regional patches
-            dem_regional_max=np.array(r_max, dtype=np.float32),   # Global max for regional patches
-            dem_local_std=np.array(l_std, dtype=np.float32),      # Global std for local patches
-            dem_regional_std=np.array(r_std, dtype=np.float32),   # Global std for regional patches
-            
-            # Reanalysis features (additional features for ML model)
-            reanalysis_patches=re_features if re_features is not None else np.array([]),
-            variables=re_variables if re_variables is not None else np.array([]),
-        )
+        save_data = {
+            'stations': re_stations,
+            'years': re_years,
+            'months': re_months,
+            'month_onehot': month_onehot,
+            'rainfall_mm': rainfall_mm,
+            'rainfall_mm_divstd': rainfall_mm_divstd,
+            'rainfall_mm_std': np.array(rstd, dtype=np.float32),
+            'rainfall_mm_min': np.array(rmin, dtype=np.float32),
+            'rainfall_mm_max': np.array(rmax, dtype=np.float32),
+            'dem_local_minmax': dem_local_minmax,
+            'dem_regional_minmax': dem_regional_minmax,
+            'dem_local_divstd': dem_local_divstd if dem_local_divstd is not None else np.array([]),
+            'dem_regional_divstd': dem_regional_divstd if dem_regional_divstd is not None else np.array([]),
+            'dem_local_min': np.array(l_min, dtype=np.float32),
+            'dem_local_max': np.array(l_max, dtype=np.float32),
+            'dem_regional_min': np.array(r_min, dtype=np.float32),
+            'dem_regional_max': np.array(r_max, dtype=np.float32),
+            'dem_local_std': np.array(l_std, dtype=np.float32),
+            'dem_regional_std': np.array(r_std, dtype=np.float32),
+            'reanalysis_patches': re_features if re_features is not None else np.array([]),
+            'variables': re_variables if re_variables is not None else np.array([]),
+        }
+        
+        if self.time_interval == 'daily' and re_days is not None:
+            save_data['days'] = re_days
+        
+        np.savez_compressed(out_path, **save_data)
         print(f"Saved full training NPZ to {out_path}")
         return out_path
     
@@ -606,12 +670,17 @@ class TrainingDataAssembler:
         print(f"Dataset visualizations saved to {output_dir}")
 
 
-def main():
-    print("Assembling training data...")
-    assembler = TrainingDataAssembler()
+def main(time_interval='monthly'):
+    print(f"Assembling {time_interval} training data...")
+    assembler = TrainingDataAssembler(time_interval=time_interval)
     out_path = assembler.assemble_from_precomputed()
     return out_path
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description='Assemble training data.')
+    parser.add_argument('time_interval', type=str, nargs='?', default='monthly',
+                       choices=['monthly', 'daily'], help='Time interval to process')
+    args = parser.parse_args()
+    main(time_interval=args.time_interval)

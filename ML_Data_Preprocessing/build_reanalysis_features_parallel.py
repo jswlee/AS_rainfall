@@ -405,10 +405,11 @@ def standardize_features(all_features, variable_stats):
                 if var_name in variable_stats:
                     mean = variable_stats[var_name]['mean']
                     std = variable_stats[var_name]['std']
-                    if std > 0:
+                    try:
                         standardized_patch = (patch - mean) / std
-                    else:
-                        standardized_patch = patch - mean
+                    except ZeroDivisionError:
+                        print(f"Warning: Zero standard deviation for variable {var_name}")
+                        return False
                     standardized_time[var_name] = standardized_patch
                 else:
                     standardized_time[var_name] = patch

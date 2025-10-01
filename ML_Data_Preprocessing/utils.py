@@ -175,7 +175,7 @@ def discover_station_months(station_metadata):
     """
     station_months = {}
     for station_name in station_metadata.keys():
-        csv_path = os.path.join(str(config.RAINFALL_DATA_DIR), f"{station_name}_monthly.csv")
+        csv_path = os.path.join(str(config.MONTHLY_RAINFALL_DATA_DIR), f"{station_name}_monthly.csv")
         if not os.path.exists(csv_path):
             continue
         try:
@@ -209,11 +209,11 @@ def discover_station_days(station_metadata, start_date=None, end_date=None):
         dict: station_name -> list[(year, month, day)]
     """
     station_days = {}
-    daily_rainfall_dir = Path("raw_data/rainfall_corrected")
+    daily_rainfall_dir = config.DAILY_RAINFALL_DATA_DIR
 
     for station_name in station_metadata.keys():
-        csv_path = daily_rainfall_dir / f"{station_name}.csv"
-        if not csv_path.exists():
+        csv_path = daily_rainfall_dir + f"/{station_name}.csv"
+        if not os.path.exists(csv_path):
             continue
         try:
             df = pd.read_csv(csv_path)
