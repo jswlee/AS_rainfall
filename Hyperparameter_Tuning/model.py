@@ -87,27 +87,35 @@ class LANDModel(nn.Module):
         # ----------------------------------------------------------------
         # Support both flatten and conv2d processing options
         if climate_processing == 'conv2d':
-            # Conv2D with groups=16 for channel-wise processing as shown in diagram
+            # Depthwise-style Conv2D: one group per input channel (variable)
+            in_ch = climate_shape[0]
+            groups = in_ch
+            # Ensure out_channels is divisible by groups as required by PyTorch
+            out_ch = climate_units
+            if out_ch % groups != 0:
+                out_ch = ((out_ch + groups - 1) // groups) * groups
             self.climate_conv = nn.Conv2d(
-                in_channels=climate_shape[0], 
-                out_channels=climate_units, 
-                kernel_size=(3, 3), 
+                in_channels=in_ch,
+                out_channels=out_ch,
+                kernel_size=(3, 3),
                 stride=1,
                 padding=0,   # No padding since input is exactly 3x3
                 dilation=1,
-                groups=16,  # Each climate variable processed separately
+                groups=groups,  # Channel-wise processing
                 bias=True,
                 padding_mode='zeros'
             )
-            self.climate_bn = nn.BatchNorm1d(num_features=climate_units)
+            self.climate_bn = nn.BatchNorm1d(num_features=out_ch)
+            self._climate_units_out = out_ch
         else:  # 'flatten' option
             # Simple flatten and dense layer processing
             climate_input_size = climate_shape[0] * climate_shape[1] * climate_shape[2]
             self.climate_fc = nn.Linear(in_features=climate_input_size, out_features=climate_units)
             self.climate_bn = nn.BatchNorm1d(num_features=climate_units)
+            self._climate_units_out = climate_units
         # Second dense stage for climate branch (applied after BN+activation of the first stage)
-        self.climate_fc2 = nn.Linear(in_features=climate_units, out_features=climate_units)
-        self.climate_bn2 = nn.BatchNorm1d(num_features=climate_units)
+        self.climate_fc2 = nn.Linear(in_features=self._climate_units_out, out_features=self._climate_units_out)
+        self.climate_bn2 = nn.BatchNorm1d(num_features=self._climate_units_out)
         
         # ----------------------------------------------------------------
         # Local DEM Branch Architecture
@@ -138,7 +146,7 @@ class LANDModel(nn.Module):
         # ----------------------------------------------------------------
         # Combined Feature Processing (Dense Head)
         # ----------------------------------------------------------------
-        combined_size = climate_units + local_dem_units + regional_dem_units + month_units
+        combined_size = self._climate_units_out + local_dem_units + regional_dem_units + month_units
         self.fc1 = nn.Linear(in_features=combined_size, out_features=na)
         self.bn1 = nn.BatchNorm1d(num_features=na)
         self.dropout1 = nn.Dropout(p=dropout_rate)

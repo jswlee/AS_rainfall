@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-PyTorch training script for the best LAND model using optimized hyperparameters.
+Simplified PyTorch training script for the best LAND model using optimized hyperparameters.
+
+This script has been updated to use the simplified data utilities from the Hyperparameter_Tuning directory:
+- DataManager for streamlined data loading and splitting
+- RainfallDataset for memory-efficient tensor indexing
+- Simplified hyperparameter loading from JSON
+- Consistent cross-validation approach with hp_tuning_simplified.py
 """
 
 import os
@@ -10,26 +16,27 @@ import torch
 import numpy as np
 import random
 import argparse
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import r2_score
 import matplotlib.pyplot as plt
 import pandas as pd
-import optuna
 
-# Import PyTorch utilities
+# Ensure Hyperparameter_Tuning is in path for imports
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Hyperparameter_Tuning'))
+if os.path.join(os.path.dirname(__file__), '..', 'Hyperparameter_Tuning') not in sys.path:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Hyperparameter_Tuning'))
 
-# Import robust MLflow utilities for experiment tracking
-from Hyperparameter_Tuning.mlflow_utils import (
-    create_mlflow_logger, log_hyperparameters, log_model_summary,
-    log_evaluation_results, start_pretraining_preview_run, MLFLOW_AVAILABLE
-)
+# Ensure deterministic cuBLAS behavior on CUDA when deterministic algorithms are enabled
+# Must be set before first CUDA matmul; safe to set here near the top of the script
+if torch.cuda.is_available():
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
-from Hyperparameter_Tuning.data_utils import load_assembled_npz_data_pytorch, create_pytorch_dataloaders
+# Import robust MLflow utilities for experiment tracking (simplified API)
+from Hyperparameter_Tuning.mlflow_utils_simplified import MLflowLogger, MLFLOW_AVAILABLE
+
+from Hyperparameter_Tuning.data_utils_simplified import DataManager, create_pytorch_dataloaders, RainfallDataset
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
 from Hyperparameter_Tuning.model_training import train_model, evaluate_model, plot_training_history, save_predictions
-from Hyperparameter_Tuning.hp_tuning import load_best_hyperparameters_pytorch
 
 
 def create_scatter_plot(y_true, y_pred, title, save_path, rainfall_std=None):
@@ -183,6 +190,7 @@ def train_best_model_pytorch(
     loss_params: dict | None = None,
     n_folds: int = 5,
     seed: int = 42,
+    patience: int = 60,
     # MLflow experiment tracking options
     enable_mlflow: bool = False,
     mlflow_experiment: str = "AS_Rainfall_Production_Training", 
@@ -249,59 +257,50 @@ def train_best_model_pytorch(
     # Data Loading and Preprocessing
     # ================================================================
     print(f"Loading data from {npz_path}...")
-    data = load_assembled_npz_data_pytorch(
+    # Use DataManager for simplified data loading (deterministic given random_state)
+    data_manager = DataManager(
         npz_path=npz_path,
         test_indices_path=test_indices_path,
         random_state=seed
     )
+    # Note: If test_indices_path does not exist, DataManager will generate and save it deterministically
+    # using the provided random_state. This matches the tuner behavior.
+    
+    # Get datasets and metadata
+    datasets = data_manager.get_datasets()
+    metadata = data_manager.metadata
+    
+    # Package into data dict for backward compatibility
+    data = {
+        'datasets': datasets,
+        'metadata': metadata
+    }
     
     # ================================================================
     # Hyperparameter Loading and Configuration
     # ================================================================
     print(f"Loading hyperparameters from {hyperparams_dir}...")
-    # Prefer loading directly from the Optuna SQLite database
-    # Load hyperparameters from JSON first (includes trial metadata), fallback to Optuna DB
-    hyperparams_data = None
+    hyperparams = None
     trial_number = None
     
-    try:
-        hyperparams_data = load_best_hyperparameters_pytorch(hyperparams_dir)
-        if 'hyperparameters' in hyperparams_data:
-            hyperparams = hyperparams_data['hyperparameters']
-            trial_number = hyperparams_data.get('trial_number')
-            print("Loaded hyperparameters from JSON:")
-            for k, v in hyperparams.items():
-                print(f"  {k}: {v}")
-            if trial_number is not None:
-                print(f"  Source trial: {trial_number}")
-        else:
-            hyperparams = hyperparams_data
-            print("Loaded hyperparameters from JSON (legacy format)")
-    except FileNotFoundError:
-        # Fallback to Optuna DB
-        db_path = os.path.join(hyperparams_dir, 'land_model_tuning.db')
-        if os.path.exists(db_path):
-            try:
-                storage = f"sqlite:///{db_path}"
-                study = optuna.load_study(study_name="land_model_tuning", storage=storage)
-                hyperparams = dict(study.best_trial.params)
-                trial_number = study.best_trial.number
-                print("Loaded hyperparameters from Optuna DB:")
-                for k, v in hyperparams.items():
-                    print(f"  {k}: {v}")
-                print(f"  Source trial: {trial_number}")
-            except Exception as e:
-                print(f"Warning: Failed to load hyperparameters from DB: {e}")
-                hyperparams = None
-        else:
-            hyperparams = None
+    # Try loading from JSON first
+    json_path = os.path.join(hyperparams_dir, 'best_hyperparameters.json')
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            hp_data = json.load(f)
+            hyperparams = hp_data.get('best_params', hp_data)
+            print("Loaded hyperparameters from JSON")
     
-    # Require at least one of the above to succeed
+    # Require hyperparameters to be found
     if hyperparams is None:
         raise RuntimeError(
-            "No hyperparameters found in Optuna DB. Please run hyperparameter tuning first "
-            "(run_complete_pytorch_pipeline.py --only-tuning) so that Hyperparameter_Tuning/output/land_model_tuning.db exists."
+            f"No hyperparameters found at {json_path}. "
+            "Please run hyperparameter tuning first."
         )
+    
+    print("Hyperparameters:")
+    for k, v in hyperparams.items():
+        print(f"  {k}: {v}")
     
     # ================================================================
     # Extract Loss Parameters from Hyperparameter Tuning Results
@@ -348,11 +347,11 @@ def train_best_model_pytorch(
                 "training_mode": "cross_validation",
                 "model_type": "LAND_rainfall_prediction",
             }
-            _ = start_pretraining_preview_run(
+            # Start a short preview run so the experiment appears in the UI
+            MLflowLogger.log_preview(
                 experiment_name=mlflow_experiment,
                 run_name=mlflow_run_name or f"pre_training_{int(time.time())}",
-                hyperparams=hyperparams,
-                training_config_preview=training_config_preview,
+                params={**hyperparams, **training_config_preview},
                 enabled=True,
             )
         except Exception as _e:
@@ -372,36 +371,33 @@ def train_best_model_pytorch(
     # Cross-Validation Training Path
     # ----------------------------------------------------------------
     print(f"\nRunning cross-validation with {n_folds} folds on train+val...")
-    # Combine train and val like the tuner
-    train_dataset = data['datasets']['train']
-    val_dataset = data['datasets']['val']
-    cv_climate = torch.cat([train_dataset.climate_data, val_dataset.climate_data])
-    cv_local_dem = torch.cat([train_dataset.local_dem_data, val_dataset.local_dem_data])
-    cv_regional_dem = torch.cat([train_dataset.regional_dem_data, val_dataset.regional_dem_data])
-    cv_month = torch.cat([train_dataset.month_data, val_dataset.month_data])
-    cv_targets = torch.cat([train_dataset.targets, val_dataset.targets])
-
+    
+    # Get CV tensors and indices from DataManager
+    cv_tensors, cv_indices = data_manager.get_cv_tensors()
+    
     # ----------------------------------------------------------------
     # Stratified Cross-Validation Setup
     # ----------------------------------------------------------------
     # Create stratification bins (same approach as tuner)
-    y = cv_targets.numpy().ravel()
+    y = cv_tensors['targets'][cv_indices].cpu().numpy().ravel()
     n_bins = 5
     try:
-        q = np.linspace(0.0, 1.0, n_bins + 1)
-        edges = np.quantile(y, q)
-        uniq = np.unique(edges)
-        if uniq.size < edges.size:
-            edges = np.linspace(y.min(), y.max(), n_bins + 1)
-        y_bins = np.digitize(y, edges[1:-1], right=True)
+        edges = np.quantile(y[y > 0], np.linspace(0, 1, n_bins + 1))
+        edges = np.unique(edges)
+        if len(edges) < 2:
+            raise ValueError("Not enough unique quantile edges.")
+        y_bins = np.digitize(y, edges[1:-1])
     except Exception as e:
         print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
         y_bins = np.zeros_like(y, dtype=int)
 
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-    splits = list(skf.split(np.zeros_like(y_bins), y_bins))
-
-    from Hyperparameter_Tuning.data_utils import RainfallDataset
+    # Pre-compute splits - skf.split gives indices relative to cv_indices
+    cv_splits = []
+    for train_fold_idx, val_fold_idx in skf.split(np.zeros_like(y_bins), y_bins):
+        train_original_indices = cv_indices[train_fold_idx]
+        val_original_indices = cv_indices[val_fold_idx]
+        cv_splits.append((train_original_indices, val_original_indices))
 
     # ----------------------------------------------------------------
     # Cross-Validation Execution Loop
@@ -412,38 +408,28 @@ def train_best_model_pytorch(
     fold_models = []
 
     start_time = time.time()
-    for fold_idx, (tr_idx, va_idx) in enumerate(splits):
-        print(f"Fold {fold_idx+1}/{n_folds}: train={len(tr_idx)} val={len(va_idx)}")
+    for fold_idx, (train_idx, val_idx) in enumerate(cv_splits):
+        print(f"Fold {fold_idx+1}/{n_folds}: train={len(train_idx)} val={len(val_idx)}")
 
-        fold_train_ds = RainfallDataset(
-            cv_climate[tr_idx].numpy(),
-            cv_local_dem[tr_idx].numpy(),
-            cv_regional_dem[tr_idx].numpy(),
-            cv_month[tr_idx].numpy(),
-            cv_targets[tr_idx].numpy(),
-        )
-        fold_val_ds = RainfallDataset(
-            cv_climate[va_idx].numpy(),
-            cv_local_dem[va_idx].numpy(),
-            cv_regional_dem[va_idx].numpy(),
-            cv_month[va_idx].numpy(),
-            cv_targets[va_idx].numpy(),
-        )
+        # Create datasets using the shared tensors and indices
+        fold_train_ds = RainfallDataset(cv_tensors, train_idx)
+        fold_val_ds = RainfallDataset(cv_tensors, val_idx)
 
         fold_loaders = create_pytorch_dataloaders(
             {'train': fold_train_ds, 'val': fold_val_ds},
             batch_size=batch_size,
             num_workers=0,
+            pin_memory=False,
         )
 
-        model = create_model_from_hyperparams(hyperparams, data['metadata'])
+        model = create_model_from_hyperparams(hyperparams, metadata)
         hist = train_model(
             model=model,
             dataloaders=fold_loaders,
             epochs=epochs,
             learning_rate=hyperparams.get('learning_rate', 0.001),
             weight_decay=hyperparams.get('weight_decay', 0.001),
-            patience=30,
+            patience=patience,
             save_path=None,
             verbose=True,
             loss_name=loss_name,
@@ -455,7 +441,7 @@ def train_best_model_pytorch(
         fold_val_losses.append(best_val)
         fold_histories.append(hist)
         # Evaluate on the fold's validation set for R² and other metrics
-        rainfall_std = data['metadata'].get('rainfall_mm_std', None)
+        rainfall_std = metadata.get('rainfall_mm_std', None)
         val_metrics = evaluate_model(model, fold_loaders['val'], rainfall_std=rainfall_std)
         fold_val_metrics.append(val_metrics)
         fold_models.append(model)
@@ -504,12 +490,13 @@ def train_best_model_pytorch(
     # Final Model Evaluation on Test Set
     # ================================================================
     print(f"\nEvaluating on test set...")
-    rainfall_std = data['metadata'].get('rainfall_mm_std', None)
+    rainfall_std = metadata.get('rainfall_mm_std', None)
     # Build a test loader
     test_loaders = create_pytorch_dataloaders(
-        {'test': data['datasets']['test']},
+        {'test': datasets['test']},
         batch_size=batch_size,
         num_workers=0,
+        pin_memory=False,
     )
     test_loader = test_loaders['test']
 
@@ -616,7 +603,7 @@ def train_best_model_pytorch(
     
     if enable_mlflow and MLFLOW_AVAILABLE:
         # Create MLflow logger with comprehensive error handling
-        mlflow_logger = create_mlflow_logger(
+        mlflow_logger = MLflowLogger(
             experiment_name=mlflow_experiment,
             run_name=mlflow_run_name or f"best_model_training_{int(time.time())}",
             enabled=True
@@ -626,7 +613,8 @@ def train_best_model_pytorch(
         with mlflow_logger.start_run():
             ### 1. Log Configuration and Hyperparameters
 
-            log_hyperparameters(mlflow_logger, hyperparams, prefix="hp")
+            # Log hyperparameters with a clean prefix
+            mlflow_logger.log_params({f"hp_{k}": v for k, v in hyperparams.items()})
             
             # Log training configuration
             training_config = {
@@ -640,13 +628,11 @@ def train_best_model_pytorch(
                 "model_saved": save_model,
                 "training_mode": "cross_validation" if n_folds and n_folds > 1 else "single_split"
             }
-            
             mlflow_logger.log_params(training_config)
             
             # Log loss function parameters if provided
             if loss_params:
-                loss_config = {f"loss_{k}": v for k, v in loss_params.items()}
-                mlflow_logger.log_params(loss_config)
+                mlflow_logger.log_params({f"loss_{k}": v for k, v in loss_params.items()})
             else:
                 mlflow_logger.log_params({"loss_name": "unweighted_mse"})
             # Set descriptive tags for easy filtering and organization
@@ -660,19 +646,14 @@ def train_best_model_pytorch(
             ### 2. Log Model Architecture
 
             # Create and log detailed model summary
-            if n_folds and n_folds > 1:
-                # For CV, use the selected best model
-                log_model_summary(mlflow_logger, model, "best_fold_model_architecture.txt")
-            else:
-                # For single training, log the trained model
-                log_model_summary(mlflow_logger, model, "trained_model_architecture.txt")
+            mlflow_logger.log_model_summary(model, "model_architecture.txt")
             
             ### 3. Log Training Curves and Progress
 
             # Log detailed training history for analysis and debugging
             mlflow_logger.log_training_curves(history, start_epoch=1)
             
-            # Log training summary metrics
+            # Log training summary metrics with prefix
             training_summary = {
                 "final_train_loss": float(history['train_loss'][-1]),
                 "final_val_loss": float(history['val_loss'][-1]),
@@ -681,17 +662,13 @@ def train_best_model_pytorch(
                 "total_epochs_trained": len(history['train_loss']),
                 "training_time_seconds": training_time
             }
-            
-            # Add unweighted MSE metrics if available
             if 'val_mse_unweighted' in history:
                 best_epoch_idx = int(np.argmin(history['val_loss']))
                 training_summary.update({
                     "best_val_mse_unweighted": float(history['val_mse_unweighted'][best_epoch_idx]),
                     "final_val_mse_unweighted": float(history['val_mse_unweighted'][-1])
                 })
-            
-            # Use standardized logging with training prefix
-            log_evaluation_results(mlflow_logger, training_summary, prefix="training")
+            mlflow_logger.log_metrics({f"training_{k}": v for k, v in training_summary.items()})
             
             ### 4. Log Cross-Validation Results (if applicable)
             if cv_results is not None:
@@ -702,30 +679,25 @@ def train_best_model_pytorch(
                     "std_val_r2": cv_results['std_val_r2'],
                     "best_fold": cv_results['best_fold_index'] + 1
                 }
-                
-                if cv_results['avg_val_mse_unweighted'] != float('nan'):
+                if not np.isnan(cv_results.get('avg_val_mse_unweighted', np.nan)):
                     cv_metrics.update({
                         "avg_val_mse_unweighted": cv_results['avg_val_mse_unweighted'],
                         "std_val_mse_unweighted": cv_results['std_val_mse_unweighted']
                     })
-                
-                # Use standardized logging with cv prefix
-                log_evaluation_results(mlflow_logger, cv_metrics, prefix="cv")
+                mlflow_logger.log_metrics({f"cv_{k}": v for k, v in cv_metrics.items()})
                 mlflow_logger.set_tag("cv_enabled", "true")
             else:
                 mlflow_logger.set_tag("cv_enabled", "false")
             
             ### 5. Log Test Set Evaluation Results
 
-            # Log comprehensive test metrics using standardized function
+            # Log comprehensive test metrics with unit-specific tags
             test_metrics_base = {
                 "r2": test_metrics["r2"],
                 "mse": test_metrics["mse"],
                 "rmse": test_metrics["rmse"],
                 "mae": test_metrics["mae"]
             }
-            
-            # Add unit-specific metrics (mm or inches)
             if rainfall_std is not None and rainfall_std > 0:
                 test_metrics_base.update({
                     "rmse_mm": test_metrics.get("denorm_rmse_mm", 0.0),
@@ -738,9 +710,7 @@ def train_best_model_pytorch(
                     "mae_inches": test_metrics["mae"] * 100.0
                 })
                 mlflow_logger.set_tag("units", "inches")
-            
-            # Use standardized logging with test prefix
-            log_evaluation_results(mlflow_logger, test_metrics_base, prefix="test")
+            mlflow_logger.log_metrics({f"test_{k}": v for k, v in test_metrics_base.items()})
             
             ### 6. Log Artifacts (Files, Plots, Models)
   
@@ -776,12 +746,10 @@ def train_best_model_pytorch(
                 # Log model state dict as artifact
                 mlflow_logger.log_artifact(model_save_path)
                 
-                # Also log as MLflow model for easy deployment
-                # Note: We use the model object directly, not the state dict file
-                mlflow_logger.log_model(
+                # Also log as MLflow PyTorch model for easy deployment
+                mlflow_logger.log_pytorch_model(
                     model,
-                    artifact_path="trained_model",
-                    # Additional metadata for model serving
+                    name="trained_model",
                 )
                 
                 mlflow_logger.set_tag("model_saved", "true")
@@ -824,12 +792,13 @@ def train_best_model_pytorch(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
-    parser.add_argument("--npz-path", default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data.npz"), help="Path to assembled NPZ data file")
-    parser.add_argument("--hyperparams-dir", default=os.path.join("Hyperparameter_Tuning", "output_highRainfall"), help="Directory containing best_hyperparameters.json or Optuna DB")
-    parser.add_argument("--output-dir", default=os.path.join("Train_Best_Model", "output_highRainfall"), help="Directory to write training outputs")
-    parser.add_argument("--test-indices-path", default=os.path.join("Hyperparameter_Tuning", "output_highRainfall", "test_indices.pkl"), help="Path to test indices file for reproducibility")
+    parser.add_argument("--npz-path", default=os.path.join("ML_Data_Preprocessing", "output", "assembled_npz", "full_training_data_monthly.npz"), help="Path to assembled NPZ data file")
+    parser.add_argument("--hyperparams-dir", default=os.path.join("output", "test3"), help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", default=os.path.join("Train_Best_Model", "output_bigbatchsize_10folds"), help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", default=os.path.join("output", "test3", "test_indices.pkl"), help="Path to test indices file for reproducibility")
 
     parser.add_argument("--epochs", type=int, default=300, help="Maximum training epochs")
+    parser.add_argument("--patience", type=int, default=60, help="Patience for early stopping")
     parser.add_argument("--save-model", action="store_true", help="Save trained model state_dict to output dir")
     parser.add_argument("--no-save-model", dest="save_model", action="store_false", help="Do not save model")
     parser.set_defaults(save_model=True)
@@ -860,6 +829,7 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         test_indices_path=args.test_indices_path,
         epochs=args.epochs,
+        patience=args.patience,
         save_model=args.save_model,
         loss_name=args.loss_name,
         loss_params=loss_params,

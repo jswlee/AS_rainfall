@@ -1,5 +1,11 @@
 # hp_tuning_final.py
 
+# For daily data:
+# python -m Hyperparameter_Tuning.hp_tuning_simplified --npz-path "ML_Data_Preprocessing\output\assembled_npz\full_training_data_daily.npz" --output-dir "output/daily_data_200trials" --n-trials 20 --time-interval "daily" --study-name "land_model_tuning_daily"
+
+# For monthly data:
+# python -m Hyperparameter_Tuning.hp_tuning_simplified --npz-path "ML_Data_Preprocessing\output\assembled_npz\full_training_data_monthly.npz" --output-dir "output/monthly_data_200trials" --n-trials 20 --time-interval "monthly" --study-name "land_model_tuning_monthly"
+
 import os
 import json
 import numpy as np
@@ -37,10 +43,25 @@ class OptunaTuner:
         os.makedirs(self.config['output_dir'], exist_ok=True)
         
         # Setup device
-        if torch.cuda.is_available(): self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available(): self.device = torch.device('mps')
-        else: self.device = torch.device('cpu')
-        print(f"Using device: {self.device}")
+        is_cuda_available = torch.cuda.is_available()
+        print(f"Is CUDA Available: {is_cuda_available}")
+
+        if is_cuda_available:
+            self.device = torch.device('cuda')
+            print(f"CUDA Version: {torch.version.cuda}")
+            print(f"Number of GPUs: {torch.cuda.device_count()}")
+            print(f"Current Device Name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+        else:
+            # Provide detailed error information if CUDA is not available
+            self.device = torch.device('cpu')
+            print("WARNING: CUDA is not available. Falling back to CPU.")
+            try:
+                # This function provides a detailed error message if CUDA fails to initialize
+                torch.cuda.init()
+            except Exception as e:
+                print(f"CUDA Initialization Error: {e}")
+
+            print(f"--- Using device: {self.device} ---")
 
         # MLflow setup
         self.enable_mlflow = bool(self.config.get('enable_mlflow') and MLFLOW_AVAILABLE)
@@ -51,7 +72,21 @@ class OptunaTuner:
         )
         
         # Instantiate the DataManager to handle all data logic
-        data_manager = DataManager(**self.config)
+        data_manager = DataManager(device=self.device, **self.config)
+        
+        # Persist the exact test indices used by the tuner for reproducibility
+        # If the caller did not provide a path, default to <output_dir>/test_indices.pkl
+        import pickle
+        ti_path = self.config.get('test_indices_path')
+        if not ti_path:
+            ti_path = os.path.join(self.config['output_dir'], 'test_indices.pkl')
+        try:
+            os.makedirs(os.path.dirname(ti_path), exist_ok=True)
+            with open(ti_path, 'wb') as f:
+                pickle.dump(data_manager.indices['test'], f)
+            print(f"Saved tuner test indices to {ti_path}")
+        except Exception as e:
+            print(f"Warning: Could not save test indices to {ti_path}: {e}")
         
         # Get the metadata and the specific tensors needed for cross-validation
         self.metadata = data_manager.metadata
@@ -62,7 +97,7 @@ class OptunaTuner:
     def _prepare_cv_splits(self):
         """Pre-computes Stratified K-Fold splits based on target quantiles."""
         n_bins = 5
-        y = self.cv_tensors['targets'][self.cv_indices].numpy().ravel()
+        y = self.cv_tensors['targets'][self.cv_indices].cpu().numpy().ravel()
         try:
             edges = np.quantile(y[y > 0], np.linspace(0, 1, n_bins + 1))
             edges = np.unique(edges)
@@ -72,7 +107,8 @@ class OptunaTuner:
             print(f"Warning: Stratified binning failed ({e}). Falling back to non-stratified CV.")
             y_bins = np.zeros_like(y, dtype=int)
             
-        skf = StratifiedKFold(n_splits=self.config['n_folds'], shuffle=True, random_state=self.config.get('random_state', 42))
+        cv_seed = self.config.get('random_state', 42)
+        skf = StratifiedKFold(n_splits=self.config['n_folds'], shuffle=True, random_state=cv_seed)
         # skf.split gives indices *relative to the input array* (self.cv_indices).
         # We need to map them back to the original tensor indices.
         self._cv_splits = []
@@ -85,32 +121,61 @@ class OptunaTuner:
 
     def suggest_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Defines the hyperparameter search space for Optuna."""
-        return {
-            # Climate variables
-            'climate_units': trial.suggest_int(name='climate_units', low=64, high=512, step=32),
-            'local_dem_units': trial.suggest_int(name='local_dem_units', low=16, high=256, step=16),
-            'regional_dem_units': trial.suggest_int(name='regional_dem_units', low=32, high=128, step=16),
-            'month_units': trial.suggest_int(name='month_units', low=16, high=64, step=8),
-            
-            # Neural network architecture
-            'na': trial.suggest_int(name='na', low=128, high=512, step=64),
-            'nb': trial.suggest_int(name='nb', low=64, high=1024, step=64),
-            
-            # Regularization parameters
-            'dropout_rate': trial.suggest_float(name='dropout_rate', low=0.0, high=0.5, step=0.05),
-            'l2_reg': trial.suggest_float(name='l2_reg', low=1e-5, high=1e-3, log=True),
-            
-            # Training parameters
-            'learning_rate': trial.suggest_float(name='learning_rate', low=1e-4, high=1e-2, log=True),
-            'weight_decay': trial.suggest_float(name='weight_decay', low=1e-6, high=1e-3, log=True),
-            'batch_size': trial.suggest_categorical(name='batch_size', choices=[16, 32, 64, 128, 256]),
-            
-            # Model architecture choices
-            'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
-            'climate_activation': trial.suggest_categorical(name='climate_activation', choices=['relu', 'none']),
-            'output_activation': trial.suggest_categorical(name='output_activation', choices=['relu', 'softplus']),
-            'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d'])
-        }
+        time_interval = self.config.get('time_interval', 'daily')
+        if time_interval == 'daily':
+            return {
+                # Climate variables (daily: allow larger widths)
+                'climate_units': trial.suggest_int('climate_units', 600, 1500, step=15),
+                'local_dem_units': trial.suggest_int('local_dem_units', 128, 2048, step=64),
+                'regional_dem_units': trial.suggest_int('regional_dem_units', 128, 2048, step=64),
+                'month_units': trial.suggest_int('month_units', 32, 256, step=16),
+
+                # Neural network architecture (head capacity)
+                'na': trial.suggest_int('na', 1408, 2304, step=128),
+                'nb': trial.suggest_int('nb', 768, 2048, step=128),
+
+                # Regularization parameters (wider for bigger models)
+                'dropout_rate': trial.suggest_float('dropout_rate', 0.25, 0.45, step=0.05),
+                'l2_reg': trial.suggest_float('l2_reg', 1e-6, 1e-3, log=True),
+
+                # Optimization
+                'learning_rate': trial.suggest_float('learning_rate', 3e-5, 3e-3, log=True),
+                'weight_decay': trial.suggest_float('weight_decay', 7e-4, 2e-3, log=True),
+                'batch_size': trial.suggest_categorical('batch_size', [1024, 2048, 4096]),
+
+                # Model architecture choices
+                'use_residual': trial.suggest_categorical('use_residual', [True]),
+                'climate_activation': trial.suggest_categorical('climate_activation', ['relu', 'none']),
+                'output_activation': trial.suggest_categorical('output_activation', ['softplus']),
+                'climate_processing': trial.suggest_categorical('climate_processing', ['conv2d'])
+            }
+        else:
+            return {
+                # Climate variables
+                'climate_units': trial.suggest_int(name='climate_units', low=64, high=512, step=32),
+                'local_dem_units': trial.suggest_int(name='local_dem_units', low=16, high=1024, step=16),
+                'regional_dem_units': trial.suggest_int(name='regional_dem_units', low=32, high=512, step=16),
+                'month_units': trial.suggest_int(name='month_units', low=16, high=64, step=8),
+                
+                # Neural network architecture
+                'na': trial.suggest_int(name='na', low=128, high=512, step=64),
+                'nb': trial.suggest_int(name='nb', low=32, high=512, step=32),
+                
+                # Regularization parameters
+                'dropout_rate': trial.suggest_float(name='dropout_rate', low=0.0, high=0.5, step=0.05),
+                'l2_reg': trial.suggest_float(name='l2_reg', low=1e-5, high=1e-4, log=True),
+                
+                # Training parameters
+                'learning_rate': trial.suggest_float(name='learning_rate', low=1e-5, high=1e-2, log=True),
+                'weight_decay': trial.suggest_float(name='weight_decay', low=1e-6, high=1e-3, log=True),
+                'batch_size': trial.suggest_categorical(name='batch_size', choices=[256, 512, 1024, 2048]),
+                
+                # Model architecture choices
+                'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
+                'climate_activation': trial.suggest_categorical(name='climate_activation', choices=['relu', 'none']),
+                'output_activation': trial.suggest_categorical(name='output_activation', choices=['relu', 'softplus']),
+                'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d'])
+            }
 
     def objective(self, trial: optuna.Trial) -> float:
         """Objective function for one Optuna trial, performing cross-validation."""
@@ -128,14 +193,15 @@ class OptunaTuner:
 
             fold_losses, fold_models = [], []
             for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
-                print(f"  Fold {fold_idx+1}/{self.config['n_folds']}: Training...")
-                
                 # Create datasets by passing the shared tensors and the specific indices for this fold
                 train_ds = RainfallDataset(self.cv_tensors, train_idx)
                 val_ds = RainfallDataset(self.cv_tensors, val_idx)
                 
                 # Dataloader creation now pass dataloader-specific params from config
                 dataloader_params = {k: v for k, v in self.config.items() if k in ['num_workers', 'pin_memory']}
+                # Set GPU-optimized defaults if not specified
+                dataloader_params.setdefault('pin_memory', False)
+                dataloader_params.setdefault('num_workers', 0)  # Windows: 2-4 workers max
                 dataloaders = create_pytorch_dataloaders(
                     {'train': train_ds, 'val': val_ds}, 
                     batch_size=hyperparams['batch_size'], 
@@ -188,24 +254,54 @@ class OptunaTuner:
             return avg_loss
 
     def run_tuning(self):
-        """Orchestrates the Optuna hyperparameter tuning study."""
+        """Orchestrates a robust Optuna study."""
+
         study_name = self.config['study_name']
-        storage_path = os.path.join(self.config['output_dir'], f"{study_name}.db")
-        
+        # Choose a separate Optuna DB per interval. Allow explicit override via config['db_url'].
+        db_url = self.config.get('db_url')
+        if not db_url:
+            interval = self.config.get('time_interval')
+            if not interval:
+                npz_path = str(self.config.get('npz_path', '')).lower()
+                interval = 'daily' if 'daily' in npz_path else 'monthly'
+            db_name = f"optuna_{interval}"
+            db_url = f"postgresql://postgres:mysecretpassword@localhost:5432/{db_name}"
+        storage = db_url
+        print(f"Using Optuna storage: {storage}")
+
         study = optuna.create_study(
-            study_name=study_name, storage=f"sqlite:///{storage_path}", direction='minimize',
+            study_name=study_name,
+            storage=storage,
+            direction='minimize',
             sampler=TPESampler(seed=self.config.get('random_state', 42)),
             pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=10),
-            load_if_exists=self.config['resume']
+            load_if_exists=True
         )
-        
-        print(f"Starting/Resuming study '{study_name}' with {self.config['n_trials']} trials...")
-        study.optimize(self.objective, n_trials=self.config['n_trials'], show_progress_bar=True)
 
-        print(f"Tuning completed. Best trial: {study.best_trial.number} with value {study.best_trial.value:.6f}")
-        self.save_results(study)
-        self.register_best_model(study, "land_rainfall_model")
-        return study
+        # Check how many trials have already been completed by other workers.
+        completed_trials = len([t for t in study.trials if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)])
+        total_target_trials = self.config['n_trials']
+        remaining_trials = total_target_trials - completed_trials
+
+        if remaining_trials <= 0:
+            print(f"Study '{study_name}' already has {len(study.trials)} trials. Target of {total_target_trials} met. This worker will exit.")
+            return study
+
+        print(f"Worker starting. Target: {total_target_trials}, Completed: {completed_trials}. This worker will run up to {remaining_trials} trials.")
+
+        # Let Optuna manage the optimization loop. This is much more robust.
+        study.optimize(self.objective, n_trials=remaining_trials, show_progress_bar=True)
+
+        # --- Finalization ---
+        # Reload the study to ensure we have the absolute latest state before saving.
+        final_study = optuna.load_study(study_name=study_name, storage=storage)
+
+        print(f"\nTuning completed. Final study has {len(final_study.trials)} trials.")
+        print(f"Best trial: {final_study.best_trial.number} with value {final_study.best_trial.value:.6f}")
+
+        self.save_results(final_study)
+        self.register_best_model(final_study, "land_rainfall_model")
+        return final_study
 
     def register_best_model(self, study: optuna.Study, model_name: str):
         """Registers the best model from the study to the MLflow Model Registry."""
@@ -232,7 +328,7 @@ class OptunaTuner:
 
     def save_results(self, study: optuna.Study):
         """Saves tuning results, including hyperparameters and plots."""
-        results_dir = self.output_dir
+        results_dir = self.config['output_dir']
         best_trial = study.best_trial
         
         # Save best hyperparameters to JSON
@@ -255,7 +351,6 @@ class OptunaTuner:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
-    # Add all arguments as before...
     parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_monthly.npz", help="Path to data")
     parser.add_argument("--output-dir", default="output/tuning", help="Directory for outputs")
     parser.add_argument("--n-trials", type=int, default=50, help="Number of Optuna trials")
@@ -268,6 +363,10 @@ if __name__ == "__main__":
     parser.add_argument("--enable-mlflow", action="store_true")
     parser.add_argument("--mlflow-experiment", type=str, default=None)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--test-indices-path", type=str, default=None, help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
+    parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducible splits and CV")
+    parser.add_argument("--db-url", type=str, default=None, help="Optuna database URL")
+    parser.add_argument("--time-interval", type=str, default=None, help="Time interval for the study")
 
     args = parser.parse_args()
 

@@ -262,17 +262,17 @@ DAILY_REANALYSIS_VARIABLE_CONFIGS = {
 }
 
 DAILY_FOLDER_TO_VARIABLE = {
-    'gh_1980-1984': 'Geopotential Height',
-    'mslp_1980-1984': 'Sea Level Pressure',
-    't2m_1980-1984': 'Air 2m',
-    'temp_1980-1984': 'Air',
-    'omg1980-1984': 'Omega',
-    'pwat_1980-1984': 'Precipitable Water',
-    'shum_1980-1984': 'Specific Humidity',
-    'uwnd_1980-1984': 'Zonal Wind',
-    'vwnd_1980-1984': 'Meridional Wind',
-    'tskn_1980-1984': 'Skin Temperature',
-    'ptmp_1980-1984': 'Potential Temperature',
+    'gh_1980-1989': 'Geopotential Height',
+    'mslp_1980-1989': 'Sea Level Pressure',
+    't2m_1980-1989': 'Air 2m',
+    'temp_1980-1989': 'Air',
+    'omg_1980-1989': 'Omega',
+    'pwat_1980-1989': 'Precipitable Water',
+    'shum_1980-1989': 'Specific Humidity',
+    'uwnd_1980-1989': 'Zonal Wind',
+    'vwnd_1980-1989': 'Meridional Wind',
+    'tskn_1980-1989': 'Skin Temperature',
+    'ptmp_1980-1989': 'Potential Temperature',
 }
 
 # List of reanalysis variables to use in the ML pipeline

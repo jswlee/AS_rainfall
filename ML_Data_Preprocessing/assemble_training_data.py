@@ -229,7 +229,9 @@ class TrainingDataAssembler:
           - Each station-year-month combination has corresponding DEM patches, reanalysis features, and rainfall values.
         """
         if dem_npz_path is None:
-            dem_npz_path = os.path.join(str(config.OUTPUT_DIR), 'dem_npz', 'dem_patches_all_standardized.npz')
+            # Select DEM NPZ filename based on granularity to match build_dem_patches.py outputs
+            dem_fname = 'dem_patches_all_standardized_monthly.npz' if self.time_interval == 'monthly' else 'dem_patches_all_standardized_daily.npz'
+            dem_npz_path = os.path.join(str(config.OUTPUT_DIR), 'dem_npz', dem_fname)
         if reanalysis_npz_path is None:
             reanalysis_npz_path = os.path.join(str(config.OUTPUT_DIR), 'reanalysis_npz', 
                                                f'reanalysis_features_all_standardized_{self.time_interval}.npz')

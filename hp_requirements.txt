@@ -1,0 +1,7 @@
+numpy
+scikit-learn
+optuna
+# Optional, but recommended for Optuna's MLflow integration and visualizations
+mlflow
+plotly
+kaleido

@@ -54,11 +54,12 @@ class DataManager:
     and creating PyTorch Datasets and DataLoaders.
     """
     def __init__(self, npz_path: str, test_size: float = 0.1, val_size: float = 0.1, 
-                 random_state: int = 42, test_indices_path: str = None, **kwargs):
+                 random_state: int = 42, test_indices_path: str = None, device: torch.device = None, **kwargs):
         """
         Initializes the DataManager by loading and splitting the data.
         """
         self.random_state = random_state
+        self.device = device if device is not None else torch.device('cpu') # Store the device
         self._load_npz(npz_path)
         self._split_data(test_size, val_size, test_indices_path)
         self._extract_metadata()
@@ -80,7 +81,8 @@ class DataManager:
             for key, npz_key in key_map.items():
                 if npz_key not in z.files:
                     raise KeyError(f"Required key '{npz_key}' not found in NPZ file.")
-                self.tensors[key] = torch.from_numpy(z[npz_key].astype(np.float32))
+                # Create tensor and immediately move it to the target device
+                self.tensors[key] = torch.from_numpy(z[npz_key].astype(np.float32)).to(self.device)
             
             # Store original std for denormalization later if needed
             self.rainfall_mm_std = float(z.get('rainfall_mm_std', 1.0))

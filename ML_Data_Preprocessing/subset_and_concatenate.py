@@ -1,4 +1,3 @@
-"""Subset and concatenate daily climate NetCDF files."""
 import xarray as xr
 import argparse
 from pathlib import Path
@@ -10,6 +9,13 @@ def process_variable(folder_name, variable_name, input_dir, subset_dir, output_d
     temp_dir = subset_dir / folder_name
     temp_dir.mkdir(parents=True, exist_ok=True)
     
+    # Determine final output path up front; if present, skip entire variable
+    short_name = config.VARIABLE_MAPPING.get(variable_name, folder_name)
+    final_out = output_dir / f"{short_name}.day.mean.nc"
+    if final_out.exists():
+        print(f"Skipping {variable_name}: final output already exists -> {final_out}")
+        return True
+    
     # Subset files
     nc_files = sorted(source_dir.glob("*.nc"))
     if not nc_files:
@@ -19,15 +25,20 @@ def process_variable(folder_name, variable_name, input_dir, subset_dir, output_d
     print(f"Subsetting {len(nc_files)} files for {variable_name}...")
     for input_file in nc_files:
         output_file = temp_dir / f"{input_file.stem}_subset.nc"
+        # Skip per-file work if subset already exists
+        if output_file.exists():
+            continue
         with xr.open_dataset(input_file) as ds:
             subset = ds.sel(latitude=lat_slice, longitude=lon_slice)
             subset.to_netcdf(output_file)
     
     # Concatenate
     subset_files = sorted(temp_dir.glob("*_subset.nc"))
-    short_name = config.VARIABLE_MAPPING.get(variable_name, folder_name)
-    output_file = output_dir / f"{short_name}.day.mean.nc"
+    output_file = final_out
     output_file.parent.mkdir(parents=True, exist_ok=True)
+    if not subset_files:
+        print(f"No subset files found for {variable_name}; skipping concatenation.")
+        return False
     
     print(f"Concatenating to {output_file.name}...")
     with xr.open_mfdataset(subset_files, combine='by_coords') as ds:
@@ -37,7 +48,7 @@ def process_variable(folder_name, variable_name, input_dir, subset_dir, output_d
 
 def main():
     parser = argparse.ArgumentParser(description="Subset and concatenate climate data.")
-    parser.add_argument('--input_dir', type=Path, default='raw_data/climate_variables_daily_raw')
+    parser.add_argument('--input_dir', type=Path, default='raw_data/climate_variables_daily')
     parser.add_argument('--subset_dir', type=Path, default=Path('./tmp_subsets_daily'))
     parser.add_argument('--output_dir', type=Path, default=Path('./raw_data/climate_variables_daily_processed'))
     parser.add_argument('--min_lat', type=float, default=-10.0)

@@ -1,0 +1,20 @@
+{
+    "best_value": 0.6253817478815714,
+    "best_params": {
+        "climate_units": 832,
+        "local_dem_units": 128,
+        "regional_dem_units": 128,
+        "month_units": 32,
+        "na": 1920,
+        "nb": 1024,
+        "dropout_rate": 0.35,
+        "l2_reg": 1.115095086043184e-05,
+        "learning_rate": 0.0011734223466330696,
+        "weight_decay": 7.908331121489367e-05,
+        "batch_size": 1024,
+        "use_residual": true,
+        "climate_activation": "none",
+        "output_activation": "softplus",
+        "climate_processing": "conv2d"
+    }
+}

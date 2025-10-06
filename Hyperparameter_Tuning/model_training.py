@@ -92,7 +92,7 @@ class CosineAnnealingWarmup:
 # ================================================================
 
 def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optimizer, 
-                criterion: nn.Module, device: torch.device) -> Tuple[float, float, float]:
+                criterion: nn.Module, device: torch.device, scaler=None) -> Tuple[float, float, float]:
     """
     Train the model for one epoch.
     
@@ -102,6 +102,7 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         optimizer: Optimizer
         criterion: Loss function
         device: Device to run on
+        scaler: GradScaler for mixed precision training (optional)
         
     Returns:
         Tuple of (average_loss, average_mae, average_unweighted_mse)
@@ -111,22 +112,30 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
     total_mae = 0.0
     total_mse_unweighted = 0.0
     num_batches = 0
+    use_amp = scaler is not None
     
     for features, targets in dataloader:
         # Move data to device
-        features = {k: v.to(device=device) for k, v in features.items()}
-        targets = targets.to(device=device).unsqueeze(dim=1)  # Add dimension for output
+        features = {k: v.to(device=device, non_blocking=True) for k, v in features.items()}
+        targets = targets.to(device=device, non_blocking=True).unsqueeze(dim=1)  # Add dimension for output
         
         # Zero gradients
         optimizer.zero_grad()
         
-        # Forward pass
-        outputs = model(features)
-        loss = criterion(outputs, targets)
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
+        # Forward pass with optional mixed precision
+        if use_amp:
+            with torch.amp.autocast(device_type=device.type):
+                outputs = model(features)
+                loss = criterion(outputs, targets)
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(features)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
         
         # Accumulate metrics
         total_loss += loss.item()
@@ -217,7 +226,7 @@ class WeightedMSELoss(nn.Module):
 
 
 def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, 
-                  device: torch.device) -> Tuple[float, float, float]:
+                  device: torch.device, use_amp: bool = False) -> Tuple[float, float, float]:
     """
     Validate the model for one epoch.
     
@@ -226,6 +235,7 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
         dataloader: Validation data loader
         criterion: Loss function
         device: Device to run on
+        use_amp: Whether to use mixed precision for inference
         
     Returns:
         Tuple of (average_loss, average_mae)
@@ -242,9 +252,14 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
             features = {k: v.to(device=device) for k, v in features.items()}
             targets = targets.to(device=device).unsqueeze(dim=1)
             
-            # Forward pass
-            outputs = model(features)
-            loss = criterion(outputs, targets)
+            # Forward pass with optional mixed precision
+            if use_amp:
+                with torch.amp.autocast(device_type=device.type):
+                    outputs = model(features)
+                    loss = criterion(outputs, targets)
+            else:
+                outputs = model(features)
+                loss = criterion(outputs, targets)
             
             # Accumulate metrics
             total_loss += loss.item()
@@ -269,7 +284,8 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
                 save_path: Optional[str] = None,
                 verbose: bool = True,
                 loss_name: str = 'mse',
-                loss_params: Optional[Dict[str, Any]] = None) -> Dict[str, List[float]]:
+                loss_params: Optional[Dict[str, Any]] = None,
+                use_amp: bool = True) -> Dict[str, List[float]]:
     """
     Train a PyTorch model with early stopping and learning rate scheduling.
     
@@ -299,6 +315,13 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
     # ================================================================
     # Setup optimizer and loss function
     optimizer = optim.AdamW(params=model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    
+    # Mixed precision training (AMP) for faster GPU training
+    scaler = None
+    if use_amp and device.type == 'cuda':
+        scaler = torch.amp.GradScaler(device.type)
+        if verbose:
+            print("Using mixed precision (AMP) training")
 
     if loss_name == 'weighted_mse':
         params = (loss_params or {}).copy()
@@ -361,13 +384,13 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
         history['lr'].append(current_lr)
         
         # Train for one epoch
-        train_loss, train_mae, train_mse_unw = train_epoch(model, dataloaders['train'], optimizer, criterion, device)
+        train_loss, train_mae, train_mse_unw = train_epoch(model, dataloaders['train'], optimizer, criterion, device, scaler)
         history['train_loss'].append(train_loss)
         history['train_mae'].append(train_mae)
         history['train_mse_unweighted'].append(train_mse_unw)
         
         # Validate
-        val_loss, val_mae, val_mse_unw = validate_epoch(model, dataloaders['val'], criterion, device)
+        val_loss, val_mae, val_mse_unw = validate_epoch(model, dataloaders['val'], criterion, device, use_amp=(scaler is not None))
         history['val_loss'].append(val_loss)
         history['val_mae'].append(val_mae)
         history['val_mse_unweighted'].append(val_mse_unw)

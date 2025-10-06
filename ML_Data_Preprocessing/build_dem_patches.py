@@ -12,7 +12,7 @@ from rasterio.transform import rowcol, xy
 from scipy.ndimage import zoom
 
 from . import config
-from .utils import haversine, visualize_patches, discover_station_months, visualize_grid
+from .utils import haversine, visualize_patches, discover_station_months, discover_station_days, visualize_grid
 from .extract_station_metadata import get_station_metadata
 
 
@@ -359,8 +359,9 @@ class DEMPatchBuilder:
         
         return dem_patches
 
-    def export_all_dem_npz_standardized(self, dem_patches, station_months_map, out_dir,
-                                        filename: str = "dem_patches_all_standardized.npz"):
+    def export_all_dem_npz_standardized(self, dem_patches, station_time_map, out_dir,
+                                        filename: str = "dem_patches_all_standardized_monthly.npz",
+                                        time_interval: str = "monthly"):
         """
         Export Digital Elevation Model (DEM) patches aligned to all rainfall station-year-month combinations.
         
@@ -430,16 +431,17 @@ class DEMPatchBuilder:
         # Build arrays by replicating standardized DEM patches for each station-year-month combination
         # Since topography is static, we create one standardized patch per station and replicate it
         # for each time period (year, month) where that station has rainfall data
-        entries_local = []           # Will hold min-max normalized local patches
-        entries_regional = []        # Will hold min-max normalized regional patches
-        entries_local_divstd = []    # Will hold std-normalized local patches
-        entries_regional_divstd = [] # Will hold std-normalized regional patches
-        stations = []                # Will hold corresponding station names
-        years = []                   # Will hold corresponding years
-        months = []                  # Will hold corresponding months
+        entries_local = []            # Will hold min-max normalized local patches
+        entries_regional = []         # Will hold min-max normalized regional patches
+        entries_local_divstd = []     # Will hold std-normalized local patches
+        entries_regional_divstd = []  # Will hold std-normalized regional patches
+        stations = []                 # Will hold corresponding station names
+        years = []                    # Will hold corresponding years
+        months = []                   # Will hold corresponding months
+        days = []                     # Will hold corresponding days (only for daily)
         
         # Process each rainfall station
-        for station_name, pairs in station_months_map.items():
+        for station_name, pairs in station_time_map.items():
             # Skip stations that don't have DEM patches
             if station_name not in dem_patches:
                 continue
@@ -456,19 +458,26 @@ class DEMPatchBuilder:
             loc_divstd = raw_local / lstd_safe  # value / global_std
             reg_divstd = raw_reg / rstd_safe    # value / global_std
             
-            # Replicate this station's DEM patches for each year-month combination
-            # where this station has rainfall data
-            for (y, m) in pairs:  # Each (year, month) pair for this station
-                # Add a batch dimension and append to our lists
-                entries_local.append(loc_scaled[np.newaxis, ...])  # Add batch dimension
-                entries_regional.append(reg_scaled[np.newaxis, ...])  # Add batch dimension
-                entries_local_divstd.append(loc_divstd[np.newaxis, ...])  # Add batch dimension
-                entries_regional_divstd.append(reg_divstd[np.newaxis, ...])  # Add batch dimension
-                
-                # Store corresponding metadata
-                stations.append(station_name)
-                years.append(int(y))
-                months.append(int(m))
+            # Replicate this station's DEM patches for each time combination present
+            if time_interval == "daily":
+                for (y, m, d) in pairs:
+                    entries_local.append(loc_scaled[np.newaxis, ...])
+                    entries_regional.append(reg_scaled[np.newaxis, ...])
+                    entries_local_divstd.append(loc_divstd[np.newaxis, ...])
+                    entries_regional_divstd.append(reg_divstd[np.newaxis, ...])
+                    stations.append(station_name)
+                    years.append(int(y))
+                    months.append(int(m))
+                    days.append(int(d))
+            else:
+                for (y, m) in pairs:
+                    entries_local.append(loc_scaled[np.newaxis, ...])
+                    entries_regional.append(reg_scaled[np.newaxis, ...])
+                    entries_local_divstd.append(loc_divstd[np.newaxis, ...])
+                    entries_regional_divstd.append(reg_divstd[np.newaxis, ...])
+                    stations.append(station_name)
+                    years.append(int(y))
+                    months.append(int(m))
 
         # Check if we have any data to export
         if len(entries_local) == 0:
@@ -483,9 +492,11 @@ class DEMPatchBuilder:
         regional_arr_divstd = np.concatenate(entries_regional_divstd, axis=0).astype(np.float32)  # Std-normalized regional patches
         
         # Convert metadata lists to numpy arrays
-        stations_arr = np.array(stations, dtype=object)  # Station names corresponding to each patch
-        years_arr = np.array(years, dtype=np.int32)      # Years corresponding to each patch
-        months_arr = np.array(months, dtype=np.int32)    # Months corresponding to each patch
+        stations_arr = np.array(stations, dtype=object)   # Station names corresponding to each patch
+        years_arr = np.array(years, dtype=np.int32)       # Years corresponding to each patch
+        months_arr = np.array(months, dtype=np.int32)     # Months corresponding to each patch
+        if time_interval == "daily":
+            days_arr = np.array(days, dtype=np.int32)     # Days corresponding to each patch
 
         # Create the output file path
         save_path = os.path.join(out_dir, filename)
@@ -504,6 +515,7 @@ class DEMPatchBuilder:
             stations=stations_arr,  # Station names
             years=years_arr,        # Years
             months=months_arr,      # Months
+            **({"days": days_arr} if time_interval == "daily" else {}),
             
             # Global statistics used for standardization (useful for inverse transforms)
             dem_local_min=np.array(lmin, dtype=np.float32),      # Global minimum for local patches
@@ -559,7 +571,7 @@ class DEMPatchBuilder:
         visualize_grid(patches, titles=titles, cmap='terrain', suptitle=None, save_path=save_path)
 
 
-def main():
+def main(time_interval: str = "monthly"):
     """
     Main function to demonstrate the module's functionality for extracting DEM patches
     around rainfall station locations.
@@ -585,19 +597,23 @@ def main():
         print("No DEM patches built. Exiting.")
         return
 
-    # Discover which station-month combinations have available rainfall data
-    # This ensures we only create DEM patches for time periods where we have rainfall labels
-    station_months_map = discover_station_months(station_metadata)
+    # Discover station-time combinations with available rainfall data
+    # Monthly: (year, month) pairs; Daily: (year, month, day) tuples
+    if time_interval == "daily":
+        station_time_map = discover_station_days(station_metadata)
+        out_filename = "dem_patches_all_standardized_daily.npz"
+    else:
+        station_time_map = discover_station_months(station_metadata)
+        out_filename = "dem_patches_all_standardized_monthly.npz"
 
-    # Export standardized DEM patches for each station-month combination
-    # This creates a single NPZ file with all patches standardized using global statistics
-    # The resulting file will be used as input features for the machine learning model
+    # Export standardized DEM patches for each station-time combination
     out_dir = os.path.join(str(config.OUTPUT_DIR), "dem_npz")
     save_path = dem_builder.export_all_dem_npz_standardized(
-        dem_patches,                           # DEM patches for all stations
-        station_months_map,                    # Map of station to (year, month) pairs
-        out_dir,                              # Output directory
-        filename="dem_patches_all_standardized.npz"  # Output filename
+        dem_patches,
+        station_time_map,
+        out_dir,
+        filename=out_filename,
+        time_interval=time_interval,
     )
     if save_path:
         print(f"Saved standardized DEM patches for all rainfall stations to {save_path}")
@@ -637,4 +653,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Build standardized DEM patches (monthly or daily)")
+    parser.add_argument('time_interval', type=str, nargs='?', default='monthly', choices=['monthly', 'daily'])
+    args = parser.parse_args()
+    main(time_interval=args.time_interval)

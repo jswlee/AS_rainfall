@@ -311,7 +311,7 @@ def build_features_parallel(station_metadata, station_data_map, climate_data,
     return all_features
 
 
-def main(time_interval='monthly', n_workers=None):
+def main(time_interval='monthly', start_date='1980-01-01', end_date='1988-07-31', n_workers=None):
     """
     Main function with optimizations.
     """
@@ -336,8 +336,8 @@ def main(time_interval='monthly', n_workers=None):
         print("Discovering available station days...")
         station_data_map = discover_station_days(
             station_metadata, 
-            start_date='1980-01-01', 
-            end_date='1984-12-31'
+            start_date=start_date, 
+            end_date=end_date
         )
     
     total_pairs = sum(len(v) for v in station_data_map.values())
@@ -475,6 +475,10 @@ if __name__ == "__main__":
                        choices=['monthly', 'daily'], help='Time interval to process')
     parser.add_argument('--workers', type=int, default=None, 
                        help='Number of parallel workers')
+    parser.add_argument('--start_date', type=str, default='1980-01-01', 
+                       help='Start date for station data discovery')
+    parser.add_argument('--end_date', type=str, default='1988-07-31', 
+                       help='End date for station data discovery')
     
     args = parser.parse_args()
-    main(time_interval=args.time_interval, n_workers=args.workers)
+    main(time_interval=args.time_interval, start_date=args.start_date, end_date=args.end_date, n_workers=args.workers)
