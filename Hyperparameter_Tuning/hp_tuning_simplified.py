@@ -125,27 +125,38 @@ class OptunaTuner:
         if time_interval == 'daily':
             return {
                 # Climate variables (daily: allow larger widths)
-                'climate_units': trial.suggest_int('climate_units', 600, 1500, step=15),
-                'local_dem_units': trial.suggest_int('local_dem_units', 128, 2048, step=64),
-                'regional_dem_units': trial.suggest_int('regional_dem_units', 128, 2048, step=64),
-                'month_units': trial.suggest_int('month_units', 32, 256, step=16),
+                # Shifted upward based on top trials clustering near upper edge
+                'climate_units': trial.suggest_int('climate_units', 1400, 1760, step=15),
+                # Keep DEM local small band; best was very small and importances low
+                'local_dem_units': trial.suggest_categorical('local_dem_units', [8, 16, 24, 32, 64]),
+                # Focused set around observed bests (32–64) with light exploration
+                'regional_dem_units': trial.suggest_categorical('regional_dem_units', [24, 32, 48, 64, 96]),
+                # Month small band
+                'month_units': trial.suggest_categorical('month_units', [8, 16, 24, 32]),
 
                 # Neural network architecture (head capacity)
-                'na': trial.suggest_int('na', 1408, 2304, step=128),
-                'nb': trial.suggest_int('nb', 768, 2048, step=128),
+                # Keep na wide (low importance); nb narrowed around best=768
+                'na': trial.suggest_int('na', 1920, 6016, step=256),
+                'nb': trial.suggest_categorical('nb', [640, 768, 896, 1024, 1152]),
 
                 # Regularization parameters (wider for bigger models)
-                'dropout_rate': trial.suggest_float('dropout_rate', 0.25, 0.45, step=0.05),
-                'l2_reg': trial.suggest_float('l2_reg', 1e-6, 1e-3, log=True),
+                # Focus upper band per top trials
+                'dropout_rate': trial.suggest_float('dropout_rate', 0.35, 0.50, step=0.05),
+                # Small L2 range centered near lower edge; widened slightly downward/upward
+                'l2_reg': trial.suggest_float('l2_reg', 1e-7, 4e-6, log=True),
 
-                # Optimization
-                'learning_rate': trial.suggest_float('learning_rate', 3e-5, 3e-3, log=True),
-                'weight_decay': trial.suggest_float('weight_decay', 7e-4, 2e-3, log=True),
-                'batch_size': trial.suggest_categorical('batch_size', [1024, 2048, 4096]),
+                # Optimization - NARROWED learning rate based on importance analysis
+                # Previous best: 2.2e-4, importance: 0.80 (dominates!)
+                # Keep focused; widen slightly lower for small-batch optima
+                'learning_rate': trial.suggest_float('learning_rate', 3e-5, 5e-4, log=True),
+                # Weight decay has high importance (~0.22): narrow around observed bests (~7e-4–1.0e-3)
+                'weight_decay': trial.suggest_float('weight_decay', 5e-4, 1.5e-3, log=True),
+                # Favor larger, more stable batches
+                'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64, 128, 256]),
 
                 # Model architecture choices
                 'use_residual': trial.suggest_categorical('use_residual', [True]),
-                'climate_activation': trial.suggest_categorical('climate_activation', ['relu', 'none']),
+                'climate_activation': trial.suggest_categorical('climate_activation', ['relu']),
                 'output_activation': trial.suggest_categorical('output_activation', ['softplus']),
                 'climate_processing': trial.suggest_categorical('climate_processing', ['conv2d'])
             }
@@ -214,15 +225,36 @@ class OptunaTuner:
                     trial_logger.log_model_summary(model, "model_architecture.txt")
 
                 try:
+                    # --- Simple LR scaling heuristic ---
+                    # Scale LR with batch size relative to a reference using alpha=0.5 (sqrt scaling)
+                    batch_ref = 1024
+                    alpha = 0.5
+                    base_lr = float(hyperparams['learning_rate'])
+                    bs = int(hyperparams['batch_size'])
+                    lr_scale = (bs / batch_ref) ** alpha
+                    scaled_lr = base_lr * lr_scale
+
+                    # Log base and scaled LR (once per fold for traceability)
+                    trial.set_user_attr("base_learning_rate", base_lr)
+                    trial.set_user_attr("scaled_learning_rate", scaled_lr)
+                    if trial_logger.enabled and fold_idx == 0:
+                        trial_logger.log_params({
+                            "hp_base_learning_rate": base_lr,
+                            "hp_scaled_learning_rate": scaled_lr,
+                            "hp_lr_scale": lr_scale,
+                            "hp_lr_alpha": alpha,
+                            "hp_lr_batch_ref": batch_ref,
+                        })
+
                     history = train_model(
                         model=model, dataloaders=dataloaders, device=self.device,
                         epochs=self.config['max_epochs'], patience=self.config['patience'],
-                        learning_rate=hyperparams['learning_rate'], weight_decay=hyperparams['weight_decay'],
+                        learning_rate=scaled_lr, weight_decay=hyperparams['weight_decay'],
                         loss_name=self.config['loss_name'], loss_params=self.config['loss_params'],
                         verbose=5
                     )
                 except Exception as e:
-                    print(f"    ERROR in Fold {fold_idx+1}: {e}")
+                    print(f"    ERROR in Fold {fold_idx+1}: {e}") 
                     if trial_logger.enabled: trial_logger.set_tag("status", "failed")
                     return float('inf')
 

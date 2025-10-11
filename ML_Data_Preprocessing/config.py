@@ -24,12 +24,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # DEM patch configuration
 DEM_PATCH_CONFIG = {
     'local': {
-        'patch_size': 3,  # 3x3 grid
-        'km_per_cell': 2  # 2km per cell (6km total; or 3 x 2km)
+        'patch_size': 5,  # 3x3 grid
+        'km_per_cell': 1  # 2km per cell (6km total; or 3 x 2km)
     },
     'regional': {
-        'patch_size': 3,  # 3x3 grid
-        'km_per_cell': 8  # 8km per cell (24km total; or 3 x 8km)
+        'patch_size': 5,  # 3x3 grid
+        'km_per_cell': 4  # 8km per cell (24km total; or 3 x 8km)
     }
 }
 

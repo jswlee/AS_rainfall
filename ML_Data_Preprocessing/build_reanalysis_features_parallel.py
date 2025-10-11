@@ -1,8 +1,7 @@
 """
 Optimized version of build_reanalysis_features.py with:
-1. Simplified code structure
-2. Dynamic variable naming based on actual pressure levels
-3. Parallelized feature extraction
+1. Dynamic variable naming based on actual pressure levels
+2. Parallelized feature extraction
 """
 
 import os
@@ -477,7 +476,7 @@ if __name__ == "__main__":
                        help='Number of parallel workers')
     parser.add_argument('--start_date', type=str, default='1980-01-01', 
                        help='Start date for station data discovery')
-    parser.add_argument('--end_date', type=str, default='1988-07-31', 
+    parser.add_argument('--end_date', type=str, default='1989-12-31', 
                        help='End date for station data discovery')
     
     args = parser.parse_args()
