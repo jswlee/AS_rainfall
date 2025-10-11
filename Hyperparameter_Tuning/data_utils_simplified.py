@@ -70,11 +70,13 @@ class DataManager:
         print(f"Loading and converting data from {npz_path}...")
         with np.load(npz_path) as z:
             # Define the mapping from expected keys to NPZ file keys
+            # Prefer cyclical daily encoding if present; otherwise use month one-hot
+            temporal_key = 'day_cyc' if 'day_cyc' in z.files else 'month_onehot'
             key_map = {
                 'climate': 'reanalysis_patches',
                 'local_dem': 'dem_local_divstd',
                 'regional_dem': 'dem_regional_divstd',
-                'month': 'month_onehot',
+                'temporal': temporal_key,
                 'targets': 'rainfall_mm_divstd'
             }
             self.tensors = {}
@@ -124,7 +126,7 @@ class DataManager:
         """Extracts metadata required by the model."""
         self.metadata = {
             'num_climate_vars': self.tensors['climate'].shape[1],
-            'num_month_encodings': self.tensors['month'].shape[1],
+            'num_temporal_encodings': self.tensors['temporal'].shape[1],
             'local_dem_shape': tuple(self.tensors['local_dem'].shape[1:]),
             'regional_dem_shape': tuple(self.tensors['regional_dem'].shape[1:]),
             'climate_shape': tuple(self.tensors['climate'].shape[1:]),

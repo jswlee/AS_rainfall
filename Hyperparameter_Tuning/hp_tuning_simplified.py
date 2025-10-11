@@ -131,8 +131,8 @@ class OptunaTuner:
                 'local_dem_units': trial.suggest_categorical('local_dem_units', [8, 16, 24, 32, 64]),
                 # Focused set around observed bests (32–64) with light exploration
                 'regional_dem_units': trial.suggest_categorical('regional_dem_units', [24, 32, 48, 64, 96]),
-                # Month small band
-                'month_units': trial.suggest_categorical('month_units', [8, 16, 24, 32]),
+                # Temporal branch (month one-hot or day_cyc); hidden size
+                'temporal_units': trial.suggest_categorical('temporal_units', [8, 16, 24, 32]),
 
                 # Neural network architecture (head capacity)
                 # Keep na wide (low importance); nb narrowed around best=768
@@ -152,7 +152,7 @@ class OptunaTuner:
                 # Weight decay has high importance (~0.22): narrow around observed bests (~7e-4–1.0e-3)
                 'weight_decay': trial.suggest_float('weight_decay', 5e-4, 1.5e-3, log=True),
                 # Favor larger, more stable batches
-                'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64, 128, 256]),
+                'batch_size': trial.suggest_categorical('batch_size', [512, 1024, 2048, 4096]),
 
                 # Model architecture choices
                 'use_residual': trial.suggest_categorical('use_residual', [True]),
@@ -166,7 +166,7 @@ class OptunaTuner:
                 'climate_units': trial.suggest_int(name='climate_units', low=64, high=512, step=32),
                 'local_dem_units': trial.suggest_int(name='local_dem_units', low=16, high=1024, step=16),
                 'regional_dem_units': trial.suggest_int(name='regional_dem_units', low=32, high=512, step=16),
-                'month_units': trial.suggest_int(name='month_units', low=16, high=64, step=8),
+                'temporal_units': trial.suggest_int(name='temporal_units', low=16, high=64, step=8),
                 
                 # Neural network architecture
                 'na': trial.suggest_int(name='na', low=128, high=512, step=64),

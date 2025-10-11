@@ -284,6 +284,28 @@ class TrainingDataAssembler:
         # Month one-hot
         month_onehot = np.stack([month_one_hot(int(m)) for m in re_months.tolist()], axis=0).astype(np.float32)
 
+        # For daily data, also compute cyclical day-of-year encoding (sin, cos)
+        day_cyc = None
+        if self.time_interval == 'daily' and re_days is not None:
+            # Compute day-of-year for each (year, month, day)
+            try:
+                doy = pd.to_datetime({
+                    'year': re_years.astype(int),
+                    'month': re_months.astype(int),
+                    'day': re_days.astype(int)
+                }).dayofyear.values
+            except Exception:
+                # Fallback via constructing strings if needed
+                date_strs = pd.Series(re_years.astype(int)).astype(str) + '-' + \
+                            pd.Series(re_months.astype(int)).astype(str) + '-' + \
+                            pd.Series(re_days.astype(int)).astype(str)
+                doy = pd.to_datetime(date_strs).dt.dayofyear.values
+
+            angle = 2.0 * np.pi * (doy / 365.25)
+            day_sin = np.sin(angle).astype(np.float32)
+            day_cos = np.cos(angle).astype(np.float32)
+            day_cyc = np.stack([day_sin, day_cos], axis=1)  # [N, 2]
+
         # Rainfall mapping from CSVs
         rainfall_lookup = self._build_rainfall_lookup()
         
@@ -413,6 +435,8 @@ class TrainingDataAssembler:
         
         if self.time_interval == 'daily' and re_days is not None:
             save_data['days'] = re_days
+            if day_cyc is not None:
+                save_data['day_cyc'] = day_cyc.astype(np.float32)
         
         np.savez_compressed(out_path, **save_data)
         print(f"Saved full training NPZ to {out_path}")

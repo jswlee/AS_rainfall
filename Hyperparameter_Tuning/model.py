@@ -27,14 +27,14 @@ class LANDModel(nn.Module):
     - Climate/reanalysis patches (16 variables on 3x3 grid)
     - Local DEM patches (topographic context around station)
     - Regional DEM patches (broader topographic context)
-    - Month one-hot encodings (seasonal information)
+    - Temporal one-hot encodings (seasonal information)
     """
     
     def __init__(self, 
                  climate_units: int,
                  local_dem_units: int,
                  regional_dem_units: int,
-                 month_units: int,
+                 temporal_units: int,
                  na: int,
                  nb: int,
                  dropout_rate: float,
@@ -46,7 +46,7 @@ class LANDModel(nn.Module):
                  climate_shape: tuple = (16, 3, 3),
                  local_dem_shape: tuple = (3, 3),
                  regional_dem_shape: tuple = (3, 3),
-                 num_month_encodings: int = 12):
+                 num_temporal_encodings: int = 12):
         """
         Initialize the LAND model.
         
@@ -55,7 +55,7 @@ class LANDModel(nn.Module):
             climate_units: Hidden units for climate processing
             local_dem_units: Hidden units for local DEM processing
             regional_dem_units: Hidden units for regional DEM processing
-            month_units: Hidden units for month processing
+            temporal_units: Hidden units for temporal processing
             na: Hidden units for first dense layer
             nb: Hidden units for second dense layer
             dropout_rate: Dropout rate
@@ -67,14 +67,14 @@ class LANDModel(nn.Module):
             climate_shape: Shape of climate/reanalysis patches (channels, height, width)
             local_dem_shape: Shape of local DEM patches (height, width)
             regional_dem_shape: Shape of regional DEM patches (height, width)
-            num_month_encodings: Number of month one-hot encodings (12)
+            num_temporal_encodings: Number of temporal one-hot encodings (2 for day_cyc, 12 for month_onehot)
         """
         super(LANDModel, self).__init__()
         
         self.climate_shape = climate_shape
         self.local_dem_shape = local_dem_shape
         self.regional_dem_shape = regional_dem_shape
-        self.num_month_encodings = num_month_encodings
+        self.num_temporal_encodings = num_temporal_encodings
         self.use_residual = use_residual and (na == nb)  # Only use residual if dimensions match
         self.output_activation = output_activation
         self.climate_processing = climate_processing
@@ -140,13 +140,13 @@ class LANDModel(nn.Module):
         # ----------------------------------------------------------------
         # Month/Temporal Branch Architecture
         # ----------------------------------------------------------------
-        self.month_fc = nn.Linear(in_features=num_month_encodings, out_features=month_units)
-        self.month_bn = nn.BatchNorm1d(num_features=month_units)
+        self.month_fc = nn.Linear(in_features=num_temporal_encodings, out_features=temporal_units)
+        self.month_bn = nn.BatchNorm1d(num_features=temporal_units)
         
         # ----------------------------------------------------------------
         # Combined Feature Processing (Dense Head)
         # ----------------------------------------------------------------
-        combined_size = self._climate_units_out + local_dem_units + regional_dem_units + month_units
+        combined_size = self._climate_units_out + local_dem_units + regional_dem_units + temporal_units
         self.fc1 = nn.Linear(in_features=combined_size, out_features=na)
         self.bn1 = nn.BatchNorm1d(num_features=na)
         self.dropout1 = nn.Dropout(p=dropout_rate)
@@ -251,10 +251,10 @@ class LANDModel(nn.Module):
         regional_dem_out = F.relu(regional_dem_out)
         
         # ----------------------------------------------------------------
-        # Month/Temporal Branch Processing
+        # Temporal Branch Processing
         # ----------------------------------------------------------------
-        month = features['month']
-        month_out = self.month_fc(month)
+        temporal = features['temporal']
+        month_out = self.month_fc(temporal)
         month_out = self.month_bn(month_out)
         month_out = F.relu(month_out)
         
@@ -320,7 +320,7 @@ def create_model_from_hyperparams(hyperparams: Dict, metadata: Dict) -> LANDMode
     """
     # Validate required hyperparameters are present
     required_keys = [
-        'climate_units', 'local_dem_units', 'regional_dem_units', 'month_units',
+        'climate_units', 'local_dem_units', 'regional_dem_units',
         'na', 'nb', 'dropout_rate', 'l2_reg', 'use_residual',
         'output_activation', 'climate_processing'
         # 'climate_activation' is optional; defaults to 'relu'
@@ -329,11 +329,16 @@ def create_model_from_hyperparams(hyperparams: Dict, metadata: Dict) -> LANDMode
     if missing:
         raise ValueError(f"Missing required hyperparameters: {missing}")
 
+    # Backward compatibility: allow either 'temporal_units' or legacy 'month_units'
+    temporal_units = hyperparams.get('temporal_units', hyperparams.get('month_units'))
+    if temporal_units is None:
+        raise ValueError("Missing required hyperparameter: 'temporal_units' (or legacy 'month_units')")
+
     model = LANDModel(
         climate_units=hyperparams['climate_units'],
         local_dem_units=hyperparams['local_dem_units'],
         regional_dem_units=hyperparams['regional_dem_units'],
-        month_units=hyperparams['month_units'],
+        temporal_units=temporal_units,
         na=hyperparams['na'],
         nb=hyperparams['nb'],
         dropout_rate=hyperparams['dropout_rate'],
@@ -345,7 +350,7 @@ def create_model_from_hyperparams(hyperparams: Dict, metadata: Dict) -> LANDMode
         climate_shape=metadata['climate_shape'],
         local_dem_shape=metadata['local_dem_shape'],
         regional_dem_shape=metadata['regional_dem_shape'],
-        num_month_encodings=metadata['num_month_encodings'],
+        num_temporal_encodings=metadata['num_temporal_encodings'],
     )
     
     return model
