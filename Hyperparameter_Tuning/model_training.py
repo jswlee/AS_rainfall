@@ -116,8 +116,8 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
     
     for features, targets in dataloader:
         # Move data to device
-        features = {k: v.to(device=device, non_blocking=True) for k, v in features.items()}
-        targets = targets.to(device=device, non_blocking=True).unsqueeze(dim=1)  # Add dimension for output
+        features = {k: torch.nan_to_num(v.to(device=device, non_blocking=True)) for k, v in features.items()}
+        targets = torch.nan_to_num(targets.to(device=device, non_blocking=True)).unsqueeze(dim=1)
         
         # Zero gradients
         optimizer.zero_grad()
@@ -127,14 +127,26 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
             with torch.amp.autocast(device_type=device.type):
                 outputs = model(features)
                 loss = criterion(outputs, targets)
+            # Skip non-finite batches
+            if not torch.isfinite(loss) or not torch.isfinite(outputs).all():
+                # Do not update optimizer; continue to next batch
+                continue
             # Backward pass with gradient scaling
             scaler.scale(loss).backward()
+            # Unscale before clipping, then clip gradients to avoid explosion
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
             outputs = model(features)
             loss = criterion(outputs, targets)
+            # Skip non-finite batches
+            if not torch.isfinite(loss) or not torch.isfinite(outputs).all():
+                continue
             loss.backward()
+            # Clip gradients to stabilize updates
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
         
         # Accumulate metrics
@@ -148,10 +160,11 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, optimizer: optim.Optim
         
         num_batches += 1
     
-    avg_loss = total_loss / max(1, num_batches)
-    avg_mae = total_mae / max(1, num_batches)
-    avg_mse_unweighted = total_mse_unweighted / max(1, num_batches)
-    
+    if num_batches == 0:
+        return float('inf'), float('inf'), float('inf')
+    avg_loss = total_loss / num_batches
+    avg_mae = total_mae / num_batches
+    avg_mse_unweighted = total_mse_unweighted / num_batches
     return avg_loss, avg_mae, avg_mse_unweighted
 
 
@@ -249,8 +262,8 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
     with torch.no_grad():
         for features, targets in dataloader:
             # Move data to device
-            features = {k: v.to(device=device) for k, v in features.items()}
-            targets = targets.to(device=device).unsqueeze(dim=1)
+            features = {k: torch.nan_to_num(v.to(device=device)) for k, v in features.items()}
+            targets = torch.nan_to_num(targets.to(device=device)).unsqueeze(dim=1)
             
             # Forward pass with optional mixed precision
             if use_amp:
@@ -260,6 +273,9 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
             else:
                 outputs = model(features)
                 loss = criterion(outputs, targets)
+            # Skip non-finite batches to avoid poisoning the epoch metrics
+            if (not torch.isfinite(loss)) or (not torch.isfinite(outputs).all()) or (not torch.isfinite(targets).all()):
+                continue
             
             # Accumulate metrics
             total_loss += loss.item()
@@ -270,9 +286,9 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
             total_mse_unweighted += mse_unweighted
             num_batches += 1
     
-    avg_loss = total_loss / num_batches
-    avg_mae = total_mae / num_batches
-    avg_mse_unweighted = total_mse_unweighted / num_batches
+    avg_loss = total_loss / max(1, num_batches)
+    avg_mae = total_mae / max(1, num_batches)
+    avg_mse_unweighted = total_mse_unweighted / max(1, num_batches)
     
     return avg_loss, avg_mae, avg_mse_unweighted
 

@@ -7,10 +7,17 @@ This package provides:
 - MLflow experiment tracking and artifact logging
 - Model evaluation and visualization utilities
 - Integration with hyperparameter tuning results
+PyTorch training utilities for the best LAND model.
+- Simplified training entrypoints and helpers
+- Integration with hyperparameter tuning results
 """
 
-from .train_land_model import train_best_model_pytorch
+__all__ = ['train_best_model_pytorch']
 
-__all__ = [
-    'train_best_model_pytorch'
-]
+def __getattr__(name):
+    # Lazy import to avoid importing submodule during package import,
+    # which triggers a RuntimeWarning when running `-m Train_Best_Model.train`.
+    if name == 'train_best_model_pytorch':
+        from .train import train_best_model_pytorch
+        return train_best_model_pytorch
+    raise AttributeError(f"module {__name__} has no attribute {name}")

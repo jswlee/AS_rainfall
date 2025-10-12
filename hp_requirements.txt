@@ -5,3 +5,5 @@ optuna
 mlflow
 plotly
 kaleido
+sqlalchemy
+psycopg2
