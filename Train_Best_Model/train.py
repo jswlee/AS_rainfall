@@ -31,9 +31,6 @@ if os.path.join(os.path.dirname(__file__), '..', 'Hyperparameter_Tuning') not in
 if torch.cuda.is_available():
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
-# Import robust MLflow utilities for experiment tracking (simplified API)
-from Hyperparameter_Tuning.mlflow_utils_simplified import MLflowLogger, MLFLOW_AVAILABLE
-
 from Hyperparameter_Tuning.data_utils_simplified import DataManager, create_pytorch_dataloaders, RainfallDataset
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
 from Hyperparameter_Tuning.model_training import train_model, evaluate_model, plot_training_history, save_predictions
@@ -191,10 +188,6 @@ def train_best_model_pytorch(
     n_folds: int = 5,
     seed: int = 42,
     patience: int = 60,
-    # MLflow experiment tracking options
-    enable_mlflow: bool = False,
-    mlflow_experiment: str = "AS_Rainfall_Production_Training", 
-    mlflow_run_name: str | None = None,
 ):
     """
     Train the best LAND model using PyTorch with cross-validation.
@@ -210,9 +203,6 @@ def train_best_model_pytorch(
         loss_params: Parameters for the loss function
         n_folds: Number of cross-validation folds (minimum 2)
         seed: Random seed for reproducibility
-        enable_mlflow: Whether to enable MLflow experiment tracking
-        mlflow_experiment: MLflow experiment name
-        mlflow_run_name: Optional MLflow run name
     """
     # ================================================================
     # Input Validation and Setup
@@ -330,32 +320,6 @@ def train_best_model_pytorch(
             print("Warning: Using weighted_mse but no loss parameters provided and none found in tuning results")
             print("Consider providing --loss-params or re-running hyperparameter tuning with loss parameter optimization")
     
-    # ------------------------------------------------------------------
-    # Kick off a short pre-training MLflow run so the experiment appears
-    # immediately in the UI (useful for long trainings/CV). Main logging later.
-    # ------------------------------------------------------------------
-    if enable_mlflow and MLFLOW_AVAILABLE:
-        try:
-            training_config_preview = {
-                "loss_criterion": loss_name,
-                "loss_params": loss_params,
-                "epochs_requested": epochs,
-                "n_folds": n_folds,
-                "device": str(torch.device('cuda' if torch.cuda.is_available()
-                                         else 'mps' if torch.backends.mps.is_available()
-                                         else 'cpu')),
-                "training_mode": "cross_validation",
-                "model_type": "LAND_rainfall_prediction",
-            }
-            # Start a short preview run so the experiment appears in the UI
-            MLflowLogger.log_preview(
-                experiment_name=mlflow_experiment,
-                run_name=mlflow_run_name or f"pre_training_{int(time.time())}",
-                params={**hyperparams, **training_config_preview},
-                enabled=True,
-            )
-        except Exception as _e:
-            print(f"Warning: Pre-training MLflow kick-off failed: {_e}")
     # ------------------------------------------------------------------
     # Main training loop
     # ------------------------------------------------------------------
@@ -563,7 +527,7 @@ def train_best_model_pytorch(
     # ----------------------------------------------------------------
     # Generate Prediction Visualizations
     # ----------------------------------------------------------------
-    # Create scatter plots (we also log this image as an artifact when MLflow is enabled)
+    # Create scatter plots of predictions vs actual values
     model.eval()
     with torch.no_grad():
         test_predictions = []
@@ -588,7 +552,7 @@ def train_best_model_pytorch(
         scatter_path, rainfall_std
     )
     
-    # Save predictions (JSON makes it easy to inspect later; we'll also log it to MLflow when enabled)
+    # Save predictions (JSON makes it easy to inspect later)
     pred_path = os.path.join(output_dir, 'test_predictions.json')
     save_predictions(model, test_loader, pred_path, rainfall_std=rainfall_std)
     
@@ -597,180 +561,6 @@ def train_best_model_pytorch(
         output_dir, hyperparams, history, test_metrics, training_time, rainfall_std, loss_name=loss_name
     )
 
-    # ============================================================================
-    # MLflow Experiment Tracking - Production Model Training
-    # ============================================================================
-    
-    if enable_mlflow and MLFLOW_AVAILABLE:
-        # Create MLflow logger with comprehensive error handling
-        mlflow_logger = MLflowLogger(
-            experiment_name=mlflow_experiment,
-            run_name=mlflow_run_name or f"best_model_training_{int(time.time())}",
-            enabled=True
-        )
-        
-        # Use context manager for automatic run lifecycle management
-        with mlflow_logger.start_run():
-            ### 1. Log Configuration and Hyperparameters
-
-            # Log hyperparameters with a clean prefix
-            mlflow_logger.log_params({f"hp_{k}": v for k, v in hyperparams.items()})
-            
-            # Log training configuration
-            training_config = {
-                "epochs_requested": epochs,
-                "loss_name": loss_name,
-                "n_folds": n_folds if n_folds and n_folds > 1 else 1,
-                "device": str(torch.device('cuda' if torch.cuda.is_available() 
-                                         else 'mps' if torch.backends.mps.is_available() 
-                                         else 'cpu')),
-                "source_trial_number": trial_number,
-                "model_saved": save_model,
-                "training_mode": "cross_validation" if n_folds and n_folds > 1 else "single_split"
-            }
-            mlflow_logger.log_params(training_config)
-            
-            # Log loss function parameters if provided
-            if loss_params:
-                mlflow_logger.log_params({f"loss_{k}": v for k, v in loss_params.items()})
-            else:
-                mlflow_logger.log_params({"loss_name": "unweighted_mse"})
-            # Set descriptive tags for easy filtering and organization
-            mlflow_logger.set_tags({
-                "model_type": "LAND_rainfall_prediction",
-                "experiment_phase": "production_training",
-                "data_version": "full_training_data",
-                "framework": "pytorch"
-            })
-            
-            ### 2. Log Model Architecture
-
-            # Create and log detailed model summary
-            mlflow_logger.log_model_summary(model, "model_architecture.txt")
-            
-            ### 3. Log Training Curves and Progress
-
-            # Log detailed training history for analysis and debugging
-            mlflow_logger.log_training_curves(history, start_epoch=1)
-            
-            # Log training summary metrics with prefix
-            training_summary = {
-                "final_train_loss": float(history['train_loss'][-1]),
-                "final_val_loss": float(history['val_loss'][-1]),
-                "best_val_loss": float(min(history['val_loss'])),
-                "best_epoch": int(np.argmin(history['val_loss'])) + 1,
-                "total_epochs_trained": len(history['train_loss']),
-                "training_time_seconds": training_time
-            }
-            if 'val_mse_unweighted' in history:
-                best_epoch_idx = int(np.argmin(history['val_loss']))
-                training_summary.update({
-                    "best_val_mse_unweighted": float(history['val_mse_unweighted'][best_epoch_idx]),
-                    "final_val_mse_unweighted": float(history['val_mse_unweighted'][-1])
-                })
-            mlflow_logger.log_metrics({f"training_{k}": v for k, v in training_summary.items()})
-            
-            ### 4. Log Cross-Validation Results (if applicable)
-            if cv_results is not None:
-                cv_metrics = {
-                    "avg_val_loss": cv_results['avg_val_loss'],
-                    "std_val_loss": cv_results['std_val_loss'],
-                    "avg_val_r2": cv_results['avg_val_r2'],
-                    "std_val_r2": cv_results['std_val_r2'],
-                    "best_fold": cv_results['best_fold_index'] + 1
-                }
-                if not np.isnan(cv_results.get('avg_val_mse_unweighted', np.nan)):
-                    cv_metrics.update({
-                        "avg_val_mse_unweighted": cv_results['avg_val_mse_unweighted'],
-                        "std_val_mse_unweighted": cv_results['std_val_mse_unweighted']
-                    })
-                mlflow_logger.log_metrics({f"cv_{k}": v for k, v in cv_metrics.items()})
-                mlflow_logger.set_tag("cv_enabled", "true")
-            else:
-                mlflow_logger.set_tag("cv_enabled", "false")
-            
-            ### 5. Log Test Set Evaluation Results
-
-            # Log comprehensive test metrics with unit-specific tags
-            test_metrics_base = {
-                "r2": test_metrics["r2"],
-                "mse": test_metrics["mse"],
-                "rmse": test_metrics["rmse"],
-                "mae": test_metrics["mae"]
-            }
-            if rainfall_std is not None and rainfall_std > 0:
-                test_metrics_base.update({
-                    "rmse_mm": test_metrics.get("denorm_rmse_mm", 0.0),
-                    "mae_mm": test_metrics.get("denorm_mae_mm", 0.0)
-                })
-                mlflow_logger.set_tag("units", "mm")
-            else:
-                test_metrics_base.update({
-                    "rmse_inches": test_metrics["rmse"] * 100.0,
-                    "mae_inches": test_metrics["mae"] * 100.0
-                })
-                mlflow_logger.set_tag("units", "inches")
-            mlflow_logger.log_metrics({f"test_{k}": v for k, v in test_metrics_base.items()})
-            
-            ### 6. Log Artifacts (Files, Plots, Models)
-  
-            # Training and evaluation artifacts
-            artifact_paths = {
-                "training_history_plot": plot_path,
-                "evaluation_metrics_csv": metrics_path,
-                "test_predictions_scatter": scatter_path,
-                "test_predictions_json": pred_path,
-                "training_summary_txt": summary_path
-            }
-            
-            # Log each artifact with descriptive names
-            for artifact_name, path in artifact_paths.items():
-                if os.path.exists(path):
-                    mlflow_logger.log_artifact(path)
-                    mlflow_logger.set_tag(f"has_{artifact_name}", "true")
-            
-            # Log cross-validation artifacts if available
-            if cv_results is not None:
-                cv_summary_path = os.path.join(output_dir, 'cv_summary.txt')
-                cv_metrics_path = os.path.join(output_dir, 'cv_metrics.csv')
-                
-                if os.path.exists(cv_summary_path):
-                    mlflow_logger.log_artifact(cv_summary_path)
-                if os.path.exists(cv_metrics_path):
-                    mlflow_logger.log_artifact(cv_metrics_path)
-            
-            ### 7. Log Trained Model for Deployment
-
-            # Log the final trained model for deployment and inference
-            if save_model and model_save_path and os.path.exists(model_save_path):
-                # Log model state dict as artifact
-                mlflow_logger.log_artifact(model_save_path)
-                
-                # Also log as MLflow PyTorch model for easy deployment
-                mlflow_logger.log_pytorch_model(
-                    model,
-                    name="trained_model",
-                )
-                
-                mlflow_logger.set_tag("model_saved", "true")
-                mlflow_logger.set_tag("model_format", "pytorch")
-            
-            ### 8. Log Success Status and Summary
-
-            mlflow_logger.set_tag("training_status", "completed")
-            mlflow_logger.set_tag("final_test_r2", f"{test_metrics['r2']:.4f}")
-            
-            print(f"\n✓ MLflow tracking completed successfully!")
-            print(f"  Experiment: {mlflow_experiment}")
-            print(f"  Run ID: {mlflow_logger.get_run_id()}")
-            print(f"  View results: mlflow ui")
-    
-    elif enable_mlflow and not MLFLOW_AVAILABLE:
-        print("\nMLflow logging requested but MLflow is not available.")
-        print("   Install MLflow with: pip install mlflow")
-    
-    else:
-        print("\nMLflow logging disabled. Enable with enable_mlflow=True for experiment tracking.")
 
     print(f"\nResults saved:")
     print(f"  Training history plot: {plot_path}")
@@ -792,26 +582,23 @@ def train_best_model_pytorch(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
-    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_monthly.npz", help="Path to assembled NPZ data file")
-    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/monthly", help="Directory containing best_hyperparameters.json or Optuna DB")
-    parser.add_argument("--output-dir", default="Train_Best_Model/output/monthly", help="Directory to write training outputs")
-    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/monthly/test_indices.pkl", help="Path to test indices file for reproducibility")
+    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz", help="Path to assembled NPZ data file")
+    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km", help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_2", help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km/test_indices.pkl", help="Path to test indices file for reproducibility")
 
-    parser.add_argument("--epochs", type=int, default=200, help="Maximum training epochs")
-    parser.add_argument("--patience", type=int, default=40, help="Patience for early stopping")
+    parser.add_argument("--epochs", type=int, default=150, help="Maximum training epochs")
+    parser.add_argument("--patience", type=int, default=15, help="Patience for early stopping")
     parser.add_argument("--save-model", action="store_true", help="Save trained model state_dict to output dir")
     parser.add_argument("--no-save-model", dest="save_model", action="store_false", help="Do not save model")
     parser.set_defaults(save_model=True)
 
     parser.add_argument("--loss-name", type=str, default="mse", choices=["mse", "weighted_mse"], help="Training loss name")
-    parser.add_argument("--loss-params", type=str, default=None, help="JSON string of loss params, e.g. '{\"alpha\": 5, \"power\": 4, \"percentile\": 0.9}'")
+    parser.add_argument("--loss-params", type=str, default=None)
+    # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.90}', help="JSON string of loss params, e.g. '{\"alpha\": 5, \"power\": 4, \"percentile\": 0.9}'")
 
     parser.add_argument("--n-folds", type=int, default=10, help="If >1, perform CV on train+val and select best fold")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-
-    parser.add_argument("--enable-mlflow", action="store_true", help="Enable MLflow experiment tracking")
-    parser.add_argument("--mlflow-experiment", type=str, default="AS_Rainfall_Production_Training", help="MLflow experiment name")
-    parser.add_argument("--mlflow-run-name", type=str, default=None, help="Optional MLflow run name")
 
     args = parser.parse_args()
 
@@ -835,9 +622,6 @@ if __name__ == "__main__":
         loss_params=loss_params,
         n_folds=args.n_folds,
         seed=args.seed,
-        enable_mlflow=args.enable_mlflow,
-        mlflow_experiment=args.mlflow_experiment,
-        mlflow_run_name=args.mlflow_run_name,
     )
 
     print("\nTraining completed successfully!")

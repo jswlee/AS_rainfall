@@ -17,27 +17,13 @@ from optuna.pruners import MedianPruner
 from sklearn.model_selection import StratifiedKFold
 from typing import Dict, Any
 
-# Import the simplified, robust MLflow logger
-from Hyperparameter_Tuning.mlflow_utils_simplified import MLflowLogger, MLFLOW_AVAILABLE
-
-# Direct MLflow imports for model registration and callbacks
-try:
-    from optuna.integration import MLflowCallback
-except ImportError:
-    MLflowCallback = None
-try:
-    import mlflow
-except ImportError:
-    mlflow = None
-
 from Hyperparameter_Tuning.data_utils_simplified import DataManager, create_pytorch_dataloaders, RainfallDataset
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
 from Hyperparameter_Tuning.model_training import train_model
 
 class OptunaTuner:
-    """Optuna-based hyperparameter tuner with simplified, robust MLflow integration."""
+    """Optuna-based hyperparameter tuner."""
     def __init__(self, **kwargs):
-        # Store all configuration parameters in a dictionary for easy access
         self.config = kwargs
         
         os.makedirs(self.config['output_dir'], exist_ok=True)
@@ -67,14 +53,6 @@ class OptunaTuner:
 
                 print(f"--- Using device: {self.device} ---")
 
-        # MLflow setup
-        self.enable_mlflow = bool(self.config.get('enable_mlflow') and MLFLOW_AVAILABLE)
-        mlflow_experiment = self.config.get('mlflow_experiment') or "AS_Rainfall_Hyperparameter_Tuning"
-        self.mlflow_logger = MLflowLogger(
-            experiment_name=mlflow_experiment,
-            enabled=self.enable_mlflow
-        )
-        
         # Instantiate the DataManager to handle all data logic
         data_manager = DataManager(device=self.device, **self.config)
         
@@ -113,7 +91,7 @@ class OptunaTuner:
             
         cv_seed = self.config.get('random_state', 42)
         skf = StratifiedKFold(n_splits=self.config['n_folds'], shuffle=True, random_state=cv_seed)
-        # skf.split gives indices *relative to the input array* (self.cv_indices).
+        # skf.split gives indices *relative to the input array* (self.cv_indices). 
         # We need to map them back to the original tensor indices.
         self._cv_splits = []
         for train_fold_idx, val_fold_idx in skf.split(np.zeros_like(y_bins), y_bins):
@@ -128,37 +106,21 @@ class OptunaTuner:
         time_interval = self.config.get('time_interval', 'daily')
         if time_interval == 'daily':
             return {
-                # Climate variables (daily: allow larger widths)
-                # Shifted upward based on top trials clustering near upper edge
-                'climate_units': trial.suggest_int('climate_units', 1400, 1760, step=15),
-                # Keep DEM local small band; best was very small and importances low
-                'local_dem_units': trial.suggest_categorical('local_dem_units', [8, 16, 24, 32, 64, 128]),
-                # Focused set around observed bests (32–64) with light exploration
-                'regional_dem_units': trial.suggest_categorical('regional_dem_units', [24, 32, 48, 64, 96]),
-                # Temporal branch (month one-hot or day_cyc); hidden size
+                'climate_units': trial.suggest_int('climate_units', 1110, 1290, step=15),
+                'local_dem_units': trial.suggest_categorical('local_dem_units', [24, 32, 64]),
+                'regional_dem_units': trial.suggest_categorical('regional_dem_units', [4, 8, 16]),
                 'temporal_units': trial.suggest_categorical('temporal_units', [8, 16, 24, 32]),
 
-                # Neural network architecture (head capacity)
-                # Keep na wide (low importance); nb narrowed around best=768
-                'na': trial.suggest_int('na', 1920, 6016, step=256),
-                'nb': trial.suggest_categorical('nb', [640, 768, 896, 1024, 1152]),
+                'na': trial.suggest_int('na', 3584, 4224, step=128),
+                'nb': trial.suggest_int('nb', 600, 696, step=16),
 
-                # Regularization parameters (wider for bigger models)
-                # Focus upper band per top trials
                 'dropout_rate': trial.suggest_float('dropout_rate', 0.35, 0.50, step=0.05),
-                # Small L2 range centered near lower edge; widened slightly downward/upward
-                'l2_reg': trial.suggest_float('l2_reg', 1e-7, 4e-6, log=True),
+                'l2_reg': trial.suggest_float('l2_reg', 1e-7, 2e-7, log=True),
 
-                # Optimization - NARROWED learning rate based on importance analysis
-                # Previous best: 2.2e-4, importance: 0.80 (dominates!)
-                # Keep focused; widen slightly lower for small-batch optima
-                'learning_rate': trial.suggest_float('learning_rate', 3e-5, 5e-4, log=True),
-                # Weight decay has high importance (~0.22): narrow around observed bests (~7e-4–1.0e-3)
+                'learning_rate': trial.suggest_float('learning_rate', 5e-6, 7e-5, log=True),
                 'weight_decay': trial.suggest_float('weight_decay', 5e-4, 1.5e-3, log=True),
-                # Favor larger, more stable batches
-                'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256, 512]),
+                'batch_size': trial.suggest_categorical('batch_size', [512, 1024, 2048]),
 
-                # Model architecture choices
                 'use_residual': trial.suggest_categorical('use_residual', [True]),
                 'climate_activation': trial.suggest_categorical('climate_activation', ['relu']),
                 'output_activation': trial.suggest_categorical('output_activation', ['softplus']),
@@ -197,97 +159,60 @@ class OptunaTuner:
         hyperparams = self.suggest_hyperparameters(trial)
         print(f"\nTrial {trial.number}: Starting with params: {hyperparams}")
 
-        with self.mlflow_logger.start_run(run_name=f"trial_{trial.number}") as trial_logger:
-            if trial_logger.enabled:
-                # Log hyperparameters with a clean prefix
-                params_to_log = {f"hp_{k}": v for k, v in hyperparams.items()}
-                params_to_log["trial_number"] = trial.number
-                trial_logger.log_params(params_to_log)
-                trial_logger.set_tags({"optuna_trial_number": trial.number, "status": "running"})
-                trial.set_user_attr("mlflow_run_id", trial_logger.get_run_id())
-
-            fold_losses, fold_models = [], []
-            for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
-                # Create datasets by passing the shared tensors and the specific indices for this fold
-                train_ds = RainfallDataset(self.cv_tensors, train_idx)
-                val_ds = RainfallDataset(self.cv_tensors, val_idx)
-                
-                # Dataloader creation now pass dataloader-specific params from config
-                dataloader_params = {k: v for k, v in self.config.items() if k in ['num_workers', 'pin_memory']}
-                # Set GPU-optimized defaults if not specified
-                dataloader_params.setdefault('pin_memory', False)
-                dataloader_params.setdefault('num_workers', 0)  # Windows: 2-4 workers max
-                dataloaders = create_pytorch_dataloaders(
-                    {'train': train_ds, 'val': val_ds}, 
-                    batch_size=hyperparams['batch_size'], 
-                    **dataloader_params
-                )
-
-                model = create_model_from_hyperparams(hyperparams, self.metadata).to(self.device)
-                
-                if trial_logger.enabled and fold_idx == 0:
-                    trial_logger.log_model_summary(model, "model_architecture.txt")
-
-                try:
-                    # --- Simple LR scaling heuristic ---
-                    # Scale LR with batch size relative to a reference using alpha=0.5 (sqrt scaling)
-                    batch_ref = 1024
-                    alpha = 0.5
-                    base_lr = float(hyperparams['learning_rate'])
-                    bs = int(hyperparams['batch_size'])
-                    lr_scale = (bs / batch_ref) ** alpha
-                    scaled_lr = base_lr * lr_scale
-
-                    # Log base and scaled LR (once per fold for traceability)
-                    trial.set_user_attr("base_learning_rate", base_lr)
-                    trial.set_user_attr("scaled_learning_rate", scaled_lr)
-                    if trial_logger.enabled and fold_idx == 0:
-                        trial_logger.log_params({
-                            "hp_base_learning_rate": base_lr,
-                            "hp_scaled_learning_rate": scaled_lr,
-                            "hp_lr_scale": lr_scale,
-                            "hp_lr_alpha": alpha,
-                            "hp_lr_batch_ref": batch_ref,
-                        })
-
-                    history = train_model(
-                        model=model, dataloaders=dataloaders, device=self.device,
-                        epochs=self.config['max_epochs'], patience=self.config['patience'],
-                        learning_rate=scaled_lr, weight_decay=hyperparams['weight_decay'],
-                        loss_name=self.config['loss_name'], loss_params=self.config['loss_params'],
-                        verbose=5
-                    )
-                except Exception as e:
-                    print(f"    ERROR in Fold {fold_idx+1}: {e}") 
-                    if trial_logger.enabled: trial_logger.set_tag("status", "failed")
-                    return float('inf')
-
-                best_val_loss = min(history['val_loss'])
-                fold_losses.append(best_val_loss)
-                fold_models.append(model.cpu()) # Move to CPU to save GPU memory
-                
-                trial.report(best_val_loss, fold_idx)
-                if trial.should_prune():
-                    if trial_logger.enabled: trial_logger.set_tag("status", "pruned")
-                    raise optuna.TrialPruned()
-
-            avg_loss = float(np.mean(fold_losses))
-            if trial_logger.enabled:
-                trial_logger.log_metrics({
-                    "final_avg_val_loss": avg_loss,
-                    "final_std_val_loss": float(np.std(fold_losses)),
-                })
-                trial_logger.set_tag("status", "completed")
-                
-                best_fold_idx = np.argmin(fold_losses)
-                best_model = fold_models[best_fold_idx]
-                trial.set_user_attr("best_fold", best_fold_idx + 1)
-
-                # Use the new, safe logger method to log the model
-                example_input = tuple(t[0].unsqueeze(0) for t in val_ds.tensors if t.shape)
-                trial_logger.log_pytorch_model(best_model, name="best_model_in_trial", input_example=example_input[0])
+        fold_losses, fold_models = [], []
+        for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
+            # Create datasets by passing the shared tensors and the specific indices for this fold
+            train_ds = RainfallDataset(self.cv_tensors, train_idx)
+            val_ds = RainfallDataset(self.cv_tensors, val_idx)
             
-            return avg_loss
+            # Dataloader creation now pass dataloader-specific params from config
+            dataloader_params = {k: v for k, v in self.config.items() if k in ['num_workers', 'pin_memory']}
+            # Set GPU-optimized defaults if not specified
+            dataloader_params.setdefault('pin_memory', False)
+            dataloader_params.setdefault('num_workers', 0)  # Windows: 2-4 workers max
+            dataloaders = create_pytorch_dataloaders(
+                {'train': train_ds, 'val': val_ds}, 
+                batch_size=hyperparams['batch_size'], 
+                **dataloader_params
+            )
+
+            model = create_model_from_hyperparams(hyperparams, self.metadata).to(self.device)
+
+            try:
+                # --- Simple LR scaling heuristic ---
+                # Scale LR with batch size relative to a reference using alpha=0.5 (sqrt scaling)
+                batch_ref = 1024
+                alpha = 0.5
+                base_lr = float(hyperparams['learning_rate'])
+                bs = int(hyperparams['batch_size'])
+                lr_scale = (bs / batch_ref) ** alpha
+                scaled_lr = base_lr * lr_scale
+
+                # Log base and scaled LR (once per fold for traceability)
+                trial.set_user_attr("base_learning_rate", base_lr)
+                trial.set_user_attr("scaled_learning_rate", scaled_lr)
+
+                history = train_model(
+                    model=model, dataloaders=dataloaders, device=self.device,
+                    epochs=self.config['max_epochs'], patience=self.config['patience'],
+                    learning_rate=scaled_lr, weight_decay=hyperparams['weight_decay'],
+                    loss_name=self.config['loss_name'], loss_params=self.config['loss_params'],
+                    verbose=5
+                )
+            except Exception as e:
+                print(f"    ERROR in Fold {fold_idx+1}: {e}") 
+                return float('inf')
+
+            best_val_loss = min(history['val_loss'])
+            fold_losses.append(best_val_loss)
+            fold_models.append(model.cpu()) # Move to CPU to save GPU memory
+            
+            trial.report(best_val_loss, fold_idx)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+
+        avg_loss = float(np.mean(fold_losses))
+        return avg_loss
 
     def run_tuning(self):
         """Orchestrates a robust Optuna study."""
@@ -302,9 +227,9 @@ class OptunaTuner:
                 interval = 'daily' if 'daily' in npz_path else 'monthly'
             db_name = f"optuna_{interval}"
             # For PC
-            # db_url = f"postgresql://postgres:mysecretpassword@localhost:5432/{db_name}"
-            # Use explicit psycopg2 driver and 127.0.0.1 to match Docker in setup_db.sh
-            db_url = f"postgresql+psycopg2://postgres:mysecretpassword@127.0.0.1:5432/{db_name}"
+            db_url = f"postgresql://postgres:mysecretpassword@localhost:5432/{db_name}"
+            # # Use explicit psycopg2 driver and 127.0.0.1 to match Docker in setup_db.sh
+            # db_url = f"postgresql+psycopg2://postgres:mysecretpassword@127.0.0.1:5432/{db_name}"
         storage = db_url
         print(f"Using Optuna storage: {storage}")
 
@@ -339,31 +264,7 @@ class OptunaTuner:
         print(f"Best trial: {final_study.best_trial.number} with value {final_study.best_trial.value:.6f}")
 
         self.save_results(final_study)
-        self.register_best_model(final_study, "land_rainfall_model")
         return final_study
-
-    def register_best_model(self, study: optuna.Study, model_name: str):
-        """Registers the best model from the study to the MLflow Model Registry."""
-        if not self.enable_mlflow:
-            print("MLflow not enabled; skipping model registration.")
-            return
-
-        run_id = study.best_trial.user_attrs.get("mlflow_run_id")
-        if not run_id:
-            print("Warning: No MLflow run ID found in best trial; cannot register model.")
-            return
-
-        try:
-            model_uri = f"runs:/{run_id}/best_model_in_trial"
-            print(f"Registering model from URI: {model_uri}")
-            model_version = mlflow.register_model(model_uri, model_name)
-            print(f"Successfully registered model '{model_name}' version {model_version.version}.")
-            
-            client = mlflow.tracking.MlflowClient()
-            client.set_registered_model_alias(name=model_name, alias="champion", version=model_version.version)
-            print(f"Set alias 'champion' for model version {model_version.version}.")
-        except Exception as e:
-            print(f"Error registering model: {e}")
 
     def save_results(self, study: optuna.Study):
         """Saves tuning results, including hyperparameters and plots."""
@@ -390,19 +291,18 @@ class OptunaTuner:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
-    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily.npz", help="Path to data")
-    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_data_5x5_3_cyclical2", help="Directory for outputs")
+    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_1km4km_one_hot.npz", help="Path to data")
+    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_3x3_1km4km_one_hot_3_1_3", help="Directory for outputs")
     parser.add_argument("--n-trials", type=int, default=20, help="Number of Optuna trials")
-    parser.add_argument("--n-folds", type=int, default=3)
+    parser.add_argument("--n-folds", type=int, default=2)
     parser.add_argument("--max-epochs", type=int, default=150)
     parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--study-name", type=str, default="land_model_tuning")
+    parser.add_argument("--study-name", type=str, default="daily_3x3_1km4km_one_hot_3_1_3")
     parser.add_argument("--loss-name", type=str, default="mse")
     parser.add_argument("--loss-params", type=str, default=None)
-    parser.add_argument("--enable-mlflow", action="store_true")
-    parser.add_argument("--mlflow-experiment", type=str, default=None)
+    # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.95}')
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_data_5x5_3_cyclical2/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
+    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_1km4km_one_hot_3_1_3/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducible splits and CV")
     parser.add_argument("--db-url", type=str, default=None, help="Optuna database URL")
     parser.add_argument("--time-interval", type=str, default="daily", help="Time interval for the study")

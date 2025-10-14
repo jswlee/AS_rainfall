@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Prepare artifacts for the rainfall prediction API.
-This script automatically selects the best trial from MLflow runs and copies
+This script automatically selects the best trial from saved runs and copies
 the necessary model files and preprocessing stats to the api/artifacts directory.
 """
 import os
 import shutil
 import json
 from pathlib import Path
-from select_best_trial import get_best_trial_from_mlflow, find_trial_artifacts
+from select_best_trial import get_best_trial_from_runs, find_trial_artifacts
 
 def prepare_artifacts():
     """Copy training artifacts to api/artifacts directory."""
@@ -17,16 +17,16 @@ def prepare_artifacts():
     artifacts_dir = Path(__file__).parent / 'artifacts'
     artifacts_dir.mkdir(exist_ok=True)
     
-    print("🔍 Finding best trial from MLflow runs...")
+    print("🔍 Finding best trial from saved runs...")
     
-    # Get best trial from MLflow
-    best_trial = get_best_trial_from_mlflow(
+    # Get best trial from run directories
+    best_trial = get_best_trial_from_runs(
         metric_name="val_loss",
         minimize=True
     )
     
     if not best_trial:
-        print("❌ Could not find best trial from MLflow. Falling back to manual paths...")
+        print("❌ Could not find best trial from saved runs. Falling back to manual paths...")
         # Fallback to manual paths
         hyperparams_src = '../Hyperparameter_Tuning/output_WeightedMSE_4/best_hyperparameters.json'
         model_src = '../Train_Best_Model/output_WeightedMSE_4/pytorch_best_model/best_model.pth'

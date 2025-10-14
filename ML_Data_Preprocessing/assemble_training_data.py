@@ -34,7 +34,7 @@ class TrainingDataAssembler:
     4. Saving the assembled dataset
     """
     
-    def __init__(self, time_interval='monthly', rainfall_dir=None, output_dir=None):
+    def __init__(self, time_interval='monthly', time_encoding='one_hot', rainfall_dir=None, output_dir=None):
         """
         Initialize the training data assembler.
         
@@ -63,6 +63,7 @@ class TrainingDataAssembler:
         self.rainfall_data = {}
         self.rainfall_mean = None
         self.rainfall_std = None
+        self.time_encoding = time_encoding
     
     def load_station_rainfall(self, station_name):
         """
@@ -237,8 +238,15 @@ class TrainingDataAssembler:
                                                f'reanalysis_features_all_standardized_{self.time_interval}.npz')
         if out_dir is None:
             out_dir = os.path.join(str(config.OUTPUT_DIR), 'assembled_npz')
+
+        local_patch_size = config.DEM_PATCH_CONFIG['local']['patch_size']
+        local_km_per_cell = config.DEM_PATCH_CONFIG['local']['km_per_cell']
+
+        regional_patch_size = config.DEM_PATCH_CONFIG['regional']['patch_size']
+        regional_km_per_cell = config.DEM_PATCH_CONFIG['regional']['km_per_cell']
+
         if out_filename is None:
-            out_filename = f'full_training_data_{self.time_interval}.npz'
+            out_filename = f'full_training_data_{self.time_interval}_{local_patch_size}x{local_patch_size}_{local_km_per_cell}km{regional_km_per_cell}km_{self.time_encoding}.npz'
         os.makedirs(out_dir, exist_ok=True)
 
         if not os.path.exists(reanalysis_npz_path):
@@ -281,10 +289,13 @@ class TrainingDataAssembler:
         if missing_in_dem:
             print(f"Warning: {len(missing_in_dem)} reanalysis tuples missing in DEM NPZ.")
 
-        # Month one-hot
+        # Month encodings
         month_onehot = np.stack([month_one_hot(int(m)) for m in re_months.tolist()], axis=0).astype(np.float32)
+        # Cyclical month encoding (sin/cos) for 1..12
+        angle_m = 2.0 * np.pi * (re_months.astype(int) / 12.0)
+        month_cyc = np.stack([np.sin(angle_m).astype(np.float32), np.cos(angle_m).astype(np.float32)], axis=1)
 
-        # For daily data, also compute cyclical day-of-year encoding (sin, cos)
+        # For daily data, optionally compute cyclical day-of-year encoding (sin, cos)
         day_cyc = None
         if self.time_interval == 'daily' and re_days is not None:
             # Compute day-of-year for each (year, month, day)
@@ -403,7 +414,7 @@ class TrainingDataAssembler:
         # Save all data to a single compressed NPZ file
         # This file will contain:
         # 1. Metadata (stations, years, months)
-        # 2. Month one-hot encodings
+        # 2. Time encodings (one-hot or cyclical)
         # 3. Rainfall data (both min-max and std-normalized)
         # 4. DEM patches extracted around rainfall station coordinates (both local and regional)
         # 5. Reanalysis features
@@ -413,7 +424,6 @@ class TrainingDataAssembler:
             'stations': re_stations,
             'years': re_years,
             'months': re_months,
-            'month_onehot': month_onehot,
             'rainfall_mm': rainfall_mm,
             'rainfall_mm_divstd': rainfall_mm_divstd,
             'rainfall_mm_std': np.array(rstd, dtype=np.float32),
@@ -432,10 +442,16 @@ class TrainingDataAssembler:
             'reanalysis_patches': re_features if re_features is not None else np.array([]),
             'variables': re_variables if re_variables is not None else np.array([]),
         }
+
+        # Include time encodings based on requested scheme
+        if self.time_encoding == 'one_hot':
+            save_data['month_onehot'] = month_onehot
+        elif self.time_encoding == 'cyclical':
+            save_data['month_cyc'] = month_cyc.astype(np.float32)
         
         if self.time_interval == 'daily' and re_days is not None:
             save_data['days'] = re_days
-            if day_cyc is not None:
+            if self.time_encoding == 'cyclical' and day_cyc is not None:
                 save_data['day_cyc'] = day_cyc.astype(np.float32)
         
         np.savez_compressed(out_path, **save_data)
@@ -696,9 +712,9 @@ class TrainingDataAssembler:
         print(f"Dataset visualizations saved to {output_dir}")
 
 
-def main(time_interval='monthly'):
+def main(time_interval='monthly', time_encoding='one_hot'):
     print(f"Assembling {time_interval} training data...")
-    assembler = TrainingDataAssembler(time_interval=time_interval)
+    assembler = TrainingDataAssembler(time_interval=time_interval, time_encoding=time_encoding)
     out_path = assembler.assemble_from_precomputed()
     return out_path
 
@@ -706,7 +722,9 @@ def main(time_interval='monthly'):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Assemble training data.')
-    parser.add_argument('time_interval', type=str, nargs='?', default='monthly',
+    parser.add_argument('time_interval', type=str, nargs='?', default='daily',
                        choices=['monthly', 'daily'], help='Time interval to process')
+    parser.add_argument('time_encoding', type=str, nargs='?', default='one_hot',
+                       choices=['one_hot', 'cyclical'], help='Time encoding to use')
     args = parser.parse_args()
-    main(time_interval=args.time_interval)
+    main(time_interval=args.time_interval, time_encoding=args.time_encoding)

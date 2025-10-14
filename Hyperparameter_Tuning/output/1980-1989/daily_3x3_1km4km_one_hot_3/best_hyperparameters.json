@@ -1,0 +1,20 @@
+{
+    "best_value": 0.5390312552452088,
+    "best_params": {
+        "climate_units": 1380,
+        "local_dem_units": 8,
+        "regional_dem_units": 32,
+        "temporal_units": 8,
+        "na": 3200,
+        "nb": 512,
+        "dropout_rate": 0.39999999999999997,
+        "l2_reg": 2.424244217796701e-07,
+        "learning_rate": 7.713954834857454e-05,
+        "weight_decay": 0.0006795883497177482,
+        "batch_size": 16384,
+        "use_residual": true,
+        "climate_activation": "relu",
+        "output_activation": "softplus",
+        "climate_processing": "conv2d"
+    }
+}

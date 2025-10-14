@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Utility to programmatically select the best trial from MLflow runs.
+Utility to programmatically select the best trial from saved run directories.
 """
 import os
 import json
@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Dict, Optional, List
 
 
-def get_best_trial_from_mlflow(metric_name: str = "val_loss", minimize: bool = True) -> Optional[Dict]:
+def get_best_trial_from_runs(metric_name: str = "val_loss", minimize: bool = True) -> Optional[Dict]:
     """
-    Find the best trial from MLflow runs based on a metric.
+    Find the best trial from run directories based on a metric.
     
     Args:
         metric_name: Metric to optimize (e.g., 'val_loss', 'val_r2')
@@ -20,11 +20,11 @@ def get_best_trial_from_mlflow(metric_name: str = "val_loss", minimize: bool = T
     Returns:
         Dictionary with best trial info or None if not found
     """
-    # Hardcoded path to MLflow directory
+    # Hardcoded path to runs directory
     mlruns_dir = "/Users/jlee/Desktop/github/AS_rainfall/mlruns"
     
     if not os.path.exists(mlruns_dir):
-        print(f"MLflow directory not found at {mlruns_dir}")
+        print(f"Runs directory not found at {mlruns_dir}")
         return None
         
     print(f"Looking for best trial in {mlruns_dir}...")
@@ -167,7 +167,7 @@ def find_trial_artifacts(trial_info: Dict,
     run_uuid = trial_info['run_uuid']
     experiment_id = trial_info['experiment_id']
     
-    # Construct the MLflow run artifacts path
+    # Construct the run artifacts path
     mlruns_dir = "/Users/jlee/Desktop/github/AS_rainfall/mlruns"
     run_dir = os.path.join(mlruns_dir, experiment_id, run_uuid)
     artifacts_dir = os.path.join(run_dir, 'artifacts')
@@ -247,8 +247,8 @@ def find_trial_artifacts(trial_info: Dict,
 
 if __name__ == "__main__":
     # Example usage
-    print("Finding best trial from MLflow...")
-    best_trial = get_best_trial_from_mlflow(metric_name="val_loss", minimize=True)
+    print("Finding best trial from saved runs...")
+    best_trial = get_best_trial_from_runs(metric_name="val_loss", minimize=True)
     
     if best_trial:
         print("\nBest trial information:")
