@@ -106,19 +106,19 @@ class OptunaTuner:
         time_interval = self.config.get('time_interval', 'daily')
         if time_interval == 'daily':
             return {
-                'climate_units': trial.suggest_int('climate_units', 1110, 1290, step=15),
+                'climate_units': trial.suggest_int('climate_units', 900, 1450, step=15),
                 'local_dem_units': trial.suggest_categorical('local_dem_units', [24, 32, 64]),
                 'regional_dem_units': trial.suggest_categorical('regional_dem_units', [4, 8, 16]),
                 'temporal_units': trial.suggest_categorical('temporal_units', [8, 16, 24, 32]),
 
                 'na': trial.suggest_int('na', 3584, 4224, step=128),
-                'nb': trial.suggest_int('nb', 600, 696, step=16),
+                'nb': trial.suggest_int('nb', 500, 800, step=16),
 
                 'dropout_rate': trial.suggest_float('dropout_rate', 0.35, 0.50, step=0.05),
                 'l2_reg': trial.suggest_float('l2_reg', 1e-7, 2e-7, log=True),
 
                 'learning_rate': trial.suggest_float('learning_rate', 5e-6, 7e-5, log=True),
-                'weight_decay': trial.suggest_float('weight_decay', 5e-4, 1.5e-3, log=True),
+                'weight_decay': trial.suggest_float('weight_decay', 2e-4, 1.5e-3, log=True),
                 'batch_size': trial.suggest_categorical('batch_size', [512, 1024, 2048]),
 
                 'use_residual': trial.suggest_categorical('use_residual', [True]),
@@ -291,18 +291,18 @@ class OptunaTuner:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
-    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_1km4km_one_hot.npz", help="Path to data")
-    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_3x3_1km4km_one_hot_3_1_3", help="Directory for outputs")
-    parser.add_argument("--n-trials", type=int, default=20, help="Number of Optuna trials")
-    parser.add_argument("--n-folds", type=int, default=2)
+    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz", help="Path to data")
+    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_one_hot_1994_1", help="Directory for outputs")
+    parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
+    parser.add_argument("--n-folds", type=int, default=3)
     parser.add_argument("--max-epochs", type=int, default=150)
     parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--study-name", type=str, default="daily_3x3_1km4km_one_hot_3_1_3")
+    parser.add_argument("--study-name", type=str, default="daily_3x3_2km8km_one_hot_1994_1")
     parser.add_argument("--loss-name", type=str, default="mse")
     parser.add_argument("--loss-params", type=str, default=None)
     # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.95}')
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_1km4km_one_hot_3_1_3/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
+    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_2km8km_one_hot_1994_1/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducible splits and CV")
     parser.add_argument("--db-url", type=str, default=None, help="Optuna database URL")
     parser.add_argument("--time-interval", type=str, default="daily", help="Time interval for the study")

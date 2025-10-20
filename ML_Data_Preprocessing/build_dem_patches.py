@@ -655,6 +655,6 @@ def main(time_interval: str = "monthly"):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Build standardized DEM patches (monthly or daily)")
-    parser.add_argument('time_interval', type=str, nargs='?', default='monthly', choices=['monthly', 'daily'])
+    parser.add_argument('time_interval', type=str, nargs='?', default='daily', choices=['monthly', 'daily'])
     args = parser.parse_args()
     main(time_interval=args.time_interval)

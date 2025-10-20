@@ -536,7 +536,7 @@ def train_best_model_pytorch(
         # Ensure inference runs on the same device as the model (cuda/mps/cpu)
         _infer_device = next(model.parameters()).device
         for features, targets in test_loader:
-            features = {k: v.to(device=_infer_device) for k, v in features.items()}
+            features = {k: torch.nan_to_num(v.to(device=_infer_device)) for k, v in features.items()}
             outputs = model(features)
             test_predictions.extend(outputs.cpu().numpy().flatten())
             test_targets.extend(targets.numpy().flatten())
@@ -583,12 +583,12 @@ def train_best_model_pytorch(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
     parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz", help="Path to assembled NPZ data file")
-    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km", help="Directory containing best_hyperparameters.json or Optuna DB")
-    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_2", help="Directory to write training outputs")
-    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km/test_indices.pkl", help="Path to test indices file for reproducibility")
+    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_one_hot_1994_1", help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_one_hot_1994_1", help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km__one_hot_1994_1/test_indices.pkl", help="Path to test indices file for reproducibility")
 
-    parser.add_argument("--epochs", type=int, default=150, help="Maximum training epochs")
-    parser.add_argument("--patience", type=int, default=15, help="Patience for early stopping")
+    parser.add_argument("--epochs", type=int, default=200, help="Maximum training epochs")
+    parser.add_argument("--patience", type=int, default=40, help="Patience for early stopping")
     parser.add_argument("--save-model", action="store_true", help="Save trained model state_dict to output dir")
     parser.add_argument("--no-save-model", dest="save_model", action="store_false", help="Do not save model")
     parser.set_defaults(save_model=True)

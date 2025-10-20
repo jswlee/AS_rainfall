@@ -495,8 +495,8 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader,
     
     with torch.no_grad():
         for features, targets in dataloader:
-            features = {k: v.to(device=device) for k, v in features.items()}
-            targets = targets.to(device=device)
+            features = {k: torch.nan_to_num(v.to(device=device)) for k, v in features.items()}
+            targets = torch.nan_to_num(targets.to(device=device))
             
             outputs = model(features)
             
@@ -631,7 +631,7 @@ def save_predictions(model: nn.Module, dataloader: DataLoader, save_path: str,
     
     with torch.no_grad():
         for features, batch_targets in dataloader:
-            features = {k: v.to(device=device) for k, v in features.items()}
+            features = {k: torch.nan_to_num(v.to(device=device)) for k, v in features.items()}
             outputs = model(features)
             
             predictions.extend(outputs.cpu().numpy().flatten())

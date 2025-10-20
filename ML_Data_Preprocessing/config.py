@@ -25,11 +25,11 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DEM_PATCH_CONFIG = {
     'local': {
         'patch_size': 3,  # 3x3 grid
-        'km_per_cell': 1  # 2km per cell (6km total; or 3 x 2km)
+        'km_per_cell': 2  # 2km per cell (6km total; or 3 x 2km)
     },
     'regional': {
         'patch_size': 3,  # 3x3 grid
-        'km_per_cell': 4  # 8km per cell (24km total; or 3 x 8km)
+        'km_per_cell': 8  # 8km per cell (24km total; or 3 x 8km)
     }
 }
 
@@ -262,17 +262,17 @@ DAILY_REANALYSIS_VARIABLE_CONFIGS = {
 }
 
 DAILY_FOLDER_TO_VARIABLE = {
-    'gh_1980-1989': 'Geopotential Height',
-    'mslp_1980-1989': 'Sea Level Pressure',
-    't2m_1980-1989': 'Air 2m',
-    'temp_1980-1989': 'Air',
-    'omg_1980-1989': 'Omega',
-    'pwat_1980-1989': 'Precipitable Water',
-    'shum_1980-1989': 'Specific Humidity',
-    'uwnd_1980-1989': 'Zonal Wind',
-    'vwnd_1980-1989': 'Meridional Wind',
-    'tskn_1980-1989': 'Skin Temperature',
-    'ptmp_1980-1989': 'Potential Temperature',
+    'gh_1980-1994': 'Geopotential Height',
+    'mslp_1980-1994': 'Sea Level Pressure',
+    't2m_1980-1994': 'Air 2m',
+    'temp_1980-1994': 'Air',
+    'omg_1980-1994': 'Omega',
+    'pwat_1980-1994': 'Precipitable Water',
+    'shum_1980-1994': 'Specific Humidity',
+    'uwnd_1980-1994': 'Zonal Wind',
+    'vwnd_1980-1994': 'Meridional Wind',
+    'tskn_1980-1994': 'Skin Temperature',
+    'ptmp_1980-1994': 'Potential Temperature',
 }
 
 # List of reanalysis variables to use in the ML pipeline
