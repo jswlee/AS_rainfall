@@ -286,9 +286,13 @@ def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Modul
             total_mse_unweighted += mse_unweighted
             num_batches += 1
     
-    avg_loss = total_loss / max(1, num_batches)
-    avg_mae = total_mae / max(1, num_batches)
-    avg_mse_unweighted = total_mse_unweighted / max(1, num_batches)
+    # Return inf if no valid batches (consistent with train_epoch)
+    if num_batches == 0:
+        return float('inf'), float('inf'), float('inf')
+    
+    avg_loss = total_loss / num_batches
+    avg_mae = total_mae / num_batches
+    avg_mse_unweighted = total_mse_unweighted / num_batches
     
     return avg_loss, avg_mae, avg_mse_unweighted
 

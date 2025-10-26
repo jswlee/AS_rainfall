@@ -476,7 +476,7 @@ if __name__ == "__main__":
                        help='Number of parallel workers')
     parser.add_argument('--start_date', type=str, default='1980-01-01', 
                        help='Start date for station data discovery')
-    parser.add_argument('--end_date', type=str, default='1994-12-31', 
+    parser.add_argument('--end_date', type=str, default='1999-12-31', 
                        help='End date for station data discovery')
     
     args = parser.parse_args()

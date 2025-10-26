@@ -132,7 +132,9 @@ def save_evaluation_metrics(metrics, save_path, rainfall_std=None):
     df.to_csv(path_or_buf=save_path, index=False)
 
 
-def save_training_summary(output_dir, hyperparams, history, test_metrics, training_time, rainfall_std=None, loss_name: str = 'mse'):
+def save_training_summary(output_dir, hyperparams, history, test_metrics, training_time, rainfall_std=None, loss_name: str = 'mse', 
+                         npz_path: str = None, epochs: int = None, patience: int = None, n_folds: int = None, val_size: float = None, seed: int = None,
+                         learning_rate_used: float = None, cv_results: dict = None):
     """Save training summary to text file."""
     summary_path = os.path.join(output_dir, 'training_summary.txt')
     
@@ -140,12 +142,42 @@ def save_training_summary(output_dir, hyperparams, history, test_metrics, traini
         f.write("PyTorch LAND Model Training Summary\n")
         f.write("=" * 50 + "\n\n")
         
+        # Training Configuration
+        f.write("Training Configuration:\n")
+        if npz_path:
+            f.write(f"  Data path: {npz_path}\n")
+        if epochs:
+            f.write(f"  Max epochs: {epochs}\n")
+        if patience:
+            f.write(f"  Patience: {patience}\n")
+        if n_folds:
+            f.write(f"  Cross-validation folds: {n_folds}\n")
+        if val_size is not None:
+            f.write(f"  Validation size: {val_size:.1%} of train+val\n")
+        if seed is not None:
+            f.write(f"  Random seed: {seed}\n")
+        f.write(f"  Loss function: {loss_name}\n")
+        if learning_rate_used is not None:
+            f.write(f"  Learning rate (actual): {learning_rate_used:.6e}\n")
+        f.write("\n")
+        
         f.write("Hyperparameters:\n")
         for key, value in hyperparams.items():
             f.write(f"  {key}: {value}\n")
         f.write("\n")
         
-        f.write("Training Results:\n")
+        # Cross-Validation Results (if available)
+        if cv_results is not None:
+            f.write("Cross-Validation Results:\n")
+            f.write(f"  Fold val losses: {[f'{v:.6f}' for v in cv_results['fold_val_losses']]}\n")
+            f.write(f"  Avg val loss: {cv_results['avg_val_loss']:.6f} +/- {cv_results['std_val_loss']:.6f}\n")
+            if cv_results.get('fold_val_mse_unweighted'):
+                f.write(f"  Fold val MSE (unweighted): {[f'{v:.6f}' for v in cv_results['fold_val_mse_unweighted']]}\n")
+                f.write(f"  Avg val MSE (unweighted): {cv_results['avg_val_mse_unweighted']:.6f} +/- {cv_results['std_val_mse_unweighted']:.6f}\n")
+            f.write(f"  Best fold: {cv_results['best_fold_index'] + 1}\n")
+            f.write("\n")
+        
+        f.write("Training Results (Best Fold):\n")
         f.write(f"  Criterion (loss_name): {loss_name}\n")
         f.write(f"  Training time: {training_time:.2f} seconds\n")
         f.write(f"  Final train loss (criterion): {history['train_loss'][-1]:.6f}\n")
@@ -186,6 +218,7 @@ def train_best_model_pytorch(
     loss_name: str = 'mse',
     loss_params: dict | None = None,
     n_folds: int = 5,
+    val_size: float = 0.1,
     seed: int = 42,
     patience: int = 60,
 ):
@@ -202,7 +235,9 @@ def train_best_model_pytorch(
         loss_name: Loss function name ('mse' or 'weighted_mse')
         loss_params: Parameters for the loss function
         n_folds: Number of cross-validation folds (minimum 2)
+        val_size: Validation set size as fraction of train+val (default 0.1 to match HP tuning)
         seed: Random seed for reproducibility
+        patience: Early stopping patience
     """
     # ================================================================
     # Input Validation and Setup
@@ -340,7 +375,7 @@ def train_best_model_pytorch(
     cv_tensors, cv_indices = data_manager.get_cv_tensors()
     
     # ----------------------------------------------------------------
-    # Stratified Cross-Validation Setup
+    # Stratified Cross-Validation Setup with Custom val_size
     # ----------------------------------------------------------------
     # Create stratification bins (same approach as tuner)
     y = cv_tensors['targets'][cv_indices].cpu().numpy().ravel()
@@ -355,13 +390,30 @@ def train_best_model_pytorch(
         print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
         y_bins = np.zeros_like(y, dtype=int)
 
+    # Proper cross-validation: use StratifiedKFold for non-overlapping folds
+    # Calculate n_folds needed to achieve desired val_size
+    # For val_size=0.1, we need n_folds=10 (each fold is 10% validation)
+    # For val_size=0.2, we need n_folds=5 (each fold is 20% validation)
+    
+    # If user specified n_folds, use it directly (standard CV)
+    # If user wants specific val_size, calculate required n_folds
+    if val_size is not None and val_size != (1.0 / n_folds):
+        # Calculate n_folds needed for desired val_size
+        calculated_n_folds = int(round(1.0 / val_size))
+        print(f"Note: To achieve val_size={val_size:.1%}, using {calculated_n_folds} folds instead of {n_folds}")
+        print(f"      (Each fold will have {1/calculated_n_folds:.1%} validation)")
+        n_folds = calculated_n_folds
+    
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-    # Pre-compute splits - skf.split gives indices relative to cv_indices
     cv_splits = []
+    
     for train_fold_idx, val_fold_idx in skf.split(np.zeros_like(y_bins), y_bins):
         train_original_indices = cv_indices[train_fold_idx]
         val_original_indices = cv_indices[val_fold_idx]
         cv_splits.append((train_original_indices, val_original_indices))
+    
+    actual_val_size = 1.0 / n_folds
+    print(f"Using {n_folds}-fold cross-validation (val_size={actual_val_size:.1%} per fold)")
 
     # ----------------------------------------------------------------
     # Cross-Validation Execution Loop
@@ -387,11 +439,19 @@ def train_best_model_pytorch(
         )
 
         model = create_model_from_hyperparams(hyperparams, metadata)
+        
+        # Apply learning rate scaling (same as HP tuning)
+        batch_ref = 1024
+        alpha = 0.5
+        base_lr = float(hyperparams.get('learning_rate', 0.001))
+        lr_scale = (batch_size / batch_ref) ** alpha
+        scaled_lr = base_lr * lr_scale
+        
         hist = train_model(
             model=model,
             dataloaders=fold_loaders,
             epochs=epochs,
-            learning_rate=hyperparams.get('learning_rate', 0.001),
+            learning_rate=scaled_lr,
             weight_decay=hyperparams.get('weight_decay', 0.001),
             patience=patience,
             save_path=None,
@@ -428,9 +488,34 @@ def train_best_model_pytorch(
     # Select best fold model and history for downstream saving/plots
     model = fold_models[best_fold]
     history = fold_histories[best_fold]
-    # Optionally save the selected best-fold model
+    
+    # Calculate best epoch and best val loss from history
+    best_epoch = int(np.argmin(history['val_loss']))
+    best_val_loss = float(np.min(history['val_loss']))
+    
+    # Optionally save the selected best-fold model with full checkpoint
     if model_save_path is not None:
-        torch.save(model.state_dict(), model_save_path)
+        checkpoint = {
+            'model_state_dict': model.state_dict(),
+            'hyperparameters': hyperparams,
+            'metadata': data_manager.metadata,
+            'best_fold': best_fold,
+            'best_epoch': best_epoch,
+            'best_val_loss': best_val_loss,
+            'val_loss': fold_val_losses[best_fold],
+            'loss_name': loss_name,
+            'loss_params': loss_params,
+        }
+        torch.save(checkpoint, model_save_path)
+        print(f"Saved full model checkpoint to {model_save_path}")
+        
+        # Save a copy of the model architecture code for reproducibility
+        import shutil
+        model_py_source = os.path.join('Hyperparameter_Tuning', 'model.py')
+        model_py_backup = os.path.join(output_dir, 'model_architecture.py')
+        if os.path.exists(model_py_source):
+            shutil.copy2(model_py_source, model_py_backup)
+            print(f"Saved model architecture to {model_py_backup}")
 
     # Summarize CV
     cv_results = {
@@ -556,9 +641,12 @@ def train_best_model_pytorch(
     pred_path = os.path.join(output_dir, 'test_predictions.json')
     save_predictions(model, test_loader, pred_path, rainfall_std=rainfall_std)
     
-    # Save training summary
+    # Save training summary (use actual_val_size from CV setup)
+    actual_val_size = 1.0 / n_folds if n_folds > 0 else val_size
     summary_path = save_training_summary(
-        output_dir, hyperparams, history, test_metrics, training_time, rainfall_std, loss_name=loss_name
+        output_dir, hyperparams, history, test_metrics, training_time, rainfall_std, loss_name=loss_name,
+        npz_path=npz_path, epochs=epochs, patience=patience, n_folds=n_folds, val_size=actual_val_size, seed=seed,
+        learning_rate_used=scaled_lr, cv_results=cv_results
     )
 
 
@@ -582,10 +670,10 @@ def train_best_model_pytorch(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
-    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz", help="Path to assembled NPZ data file")
-    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_one_hot_1994_1", help="Directory containing best_hyperparameters.json or Optuna DB")
-    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_one_hot_1994_1", help="Directory to write training outputs")
-    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km__one_hot_1994_1/test_indices.pkl", help="Path to test indices file for reproducibility")
+    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_cyclical.npz", help="Path to assembled NPZ data file")
+    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2", help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2", help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2 /test_indices.pkl", help="Path to test indices file for reproducibility")
 
     parser.add_argument("--epochs", type=int, default=200, help="Maximum training epochs")
     parser.add_argument("--patience", type=int, default=40, help="Patience for early stopping")
@@ -597,7 +685,8 @@ if __name__ == "__main__":
     parser.add_argument("--loss-params", type=str, default=None)
     # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.90}', help="JSON string of loss params, e.g. '{\"alpha\": 5, \"power\": 4, \"percentile\": 0.9}'")
 
-    parser.add_argument("--n-folds", type=int, default=10, help="If >1, perform CV on train+val and select best fold")
+    parser.add_argument("--n-folds", type=int, default=5, help="If >1, perform CV on train+val and select best fold")
+    parser.add_argument("--val-size", type=float, default=0.1, help="Validation set size as fraction of train+val (default 0.1 to match HP tuning)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()
@@ -620,6 +709,7 @@ if __name__ == "__main__":
         save_model=args.save_model,
         loss_name=args.loss_name,
         loss_params=loss_params,
+        val_size=args.val_size,
         n_folds=args.n_folds,
         seed=args.seed,
     )

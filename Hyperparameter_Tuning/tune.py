@@ -73,8 +73,12 @@ class OptunaTuner:
         # Get the metadata and the specific tensors needed for cross-validation
         self.metadata = data_manager.metadata
         self.cv_tensors, self.cv_indices = data_manager.get_cv_tensors()
-
-        self._prepare_cv_splits()
+        self.data_manager = data_manager  # Store for single-fold case
+        if self.config['n_folds'] > 1:
+            self._prepare_cv_splits()
+        else:
+            # For single fold, we'll use the train/val split from DataManager
+            self._cv_splits = None
 
     def _prepare_cv_splits(self):
         """Pre-computes Stratified K-Fold splits based on target quantiles."""
@@ -106,25 +110,48 @@ class OptunaTuner:
         time_interval = self.config.get('time_interval', 'daily')
         if time_interval == 'daily':
             return {
-                'climate_units': trial.suggest_int('climate_units', 900, 1450, step=15),
-                'local_dem_units': trial.suggest_categorical('local_dem_units', [24, 32, 64]),
-                'regional_dem_units': trial.suggest_categorical('regional_dem_units', [4, 8, 16]),
-                'temporal_units': trial.suggest_categorical('temporal_units', [8, 16, 24, 32]),
+                # Refined based on top 10 trials: narrow range around 1200-1425
+                'climate_units': trial.suggest_int('climate_units', 150, 1350, step=15),
+                
+                # Fixed based on top trials (low importance)
+                'local_dem_units': trial.suggest_int('local_dem_units', 16, 256, step=16),
+                'regional_dem_units': trial.suggest_int('regional_dem_units', 16, 256, step=16),
+                # EXPANDED: Best trial at max (64), expand further
+                'temporal_units': trial.suggest_int('temporal_units', 16, 128, step=16),
 
-                'na': trial.suggest_int('na', 3584, 4224, step=128),
-                'nb': trial.suggest_int('nb', 500, 800, step=16),
+                # EXPANDED: 5/10 top trials at max (4352), expand further
+                'na': trial.suggest_int('na', 4096, 5120, step=128),
+                # EXPANDED: clustering in upper range, expand further
+                'nb': trial.suggest_int('nb', 516, 628, step=16),
 
-                'dropout_rate': trial.suggest_float('dropout_rate', 0.35, 0.50, step=0.05),
+                # Refined: top trials use 0.35-0.45
+                'dropout_rate': trial.suggest_float('dropout_rate', 0.40, 0.45, step=0.05),
+                # Refined: very narrow range in top trials (1.58e-7 to 2.30e-7)
                 'l2_reg': trial.suggest_float('l2_reg', 1e-7, 2e-7, log=True),
 
-                'learning_rate': trial.suggest_float('learning_rate', 5e-6, 7e-5, log=True),
-                'weight_decay': trial.suggest_float('weight_decay', 2e-4, 1.5e-3, log=True),
-                'batch_size': trial.suggest_categorical('batch_size', [512, 1024, 2048]),
+                # Most important parameter! Refined: 2.9e-5 to 5.1e-5
+                'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-2, log=True),
+                # Refined: top trials use 2.0e-4 to 3.1e-4
+                'weight_decay': trial.suggest_float('weight_decay', 8e-6, 5e-4, log=True),
+                
+                # Fixed based on top trials
+                'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256]),
 
-                'use_residual': trial.suggest_categorical('use_residual', [True]),
+                # Fixed based on top trials (all True)
+                'use_residual': trial.suggest_categorical('use_residual', [False]),
                 'climate_activation': trial.suggest_categorical('climate_activation', ['relu']),
-                'output_activation': trial.suggest_categorical('output_activation', ['softplus']),
-                'climate_processing': trial.suggest_categorical('climate_processing', ['conv2d'])
+                'output_activation': trial.suggest_categorical('output_activation', ['softplus']),  # NEVER 'none' - must be non-negative!
+                'climate_processing': trial.suggest_categorical('climate_processing', ['conv2d']),
+                
+                # Attention mechanism: fixed based on top trials
+                'use_spatial_attention': trial.suggest_categorical('use_spatial_attention', [True]),
+                'use_multihead_attention': trial.suggest_categorical('use_multihead_attention', [False]),
+                'attention_heads': trial.suggest_categorical('attention_heads', [3, 5]),
+                'attention_dropout': trial.suggest_float('attention_dropout', 0.1, 0.3, step=0.05),
+                
+                # Temporal branch depth (new MLP architecture)
+                'temporal_depth': trial.suggest_categorical('temporal_depth', [1, 2]),
+                'temporal_dropout': trial.suggest_float('temporal_dropout', 0.05, 0.2, step=0.05)
             }
         else:
             return {
@@ -151,7 +178,17 @@ class OptunaTuner:
                 'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
                 'climate_activation': trial.suggest_categorical(name='climate_activation', choices=['relu', 'none']),
                 'output_activation': trial.suggest_categorical(name='output_activation', choices=['relu', 'softplus']),
-                'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d'])
+                'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d']),
+                
+                # Attention mechanism hyperparameters
+                'use_spatial_attention': trial.suggest_categorical(name='use_spatial_attention', choices=[True, False]),
+                'use_multihead_attention': trial.suggest_categorical(name='use_multihead_attention', choices=[True, False]),
+                'attention_heads': trial.suggest_categorical(name='attention_heads', choices=[2, 4, 8]),
+                'attention_dropout': trial.suggest_float(name='attention_dropout', low=0.0, high=0.3, step=0.1),
+                
+                # Temporal branch depth
+                'temporal_depth': trial.suggest_categorical(name='temporal_depth', choices=[1, 2, 3]),
+                'temporal_dropout': trial.suggest_float(name='temporal_dropout', low=0.0, high=0.3, step=0.1)
             }
 
     def objective(self, trial: optuna.Trial) -> float:
@@ -160,7 +197,16 @@ class OptunaTuner:
         print(f"\nTrial {trial.number}: Starting with params: {hyperparams}")
 
         fold_losses, fold_models = [], []
-        for fold_idx, (train_idx, val_idx) in enumerate(self._cv_splits):
+        
+        # Handle single fold vs multi-fold
+        if self._cv_splits is None:
+            # Single fold: use train/val split from DataManager
+            cv_iterations = [(0, (self.data_manager.indices['train'], self.data_manager.indices['val']))]
+        else:
+            # Multi-fold: use CV splits
+            cv_iterations = enumerate(self._cv_splits)
+        
+        for fold_idx, (train_idx, val_idx) in cv_iterations:
             # Create datasets by passing the shared tensors and the specific indices for this fold
             train_ds = RainfallDataset(self.cv_tensors, train_idx)
             val_ds = RainfallDataset(self.cv_tensors, val_idx)
@@ -291,18 +337,18 @@ class OptunaTuner:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
-    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz", help="Path to data")
-    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_one_hot_1994_1", help="Directory for outputs")
+    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_cyclical.npz", help="Path to data")
+    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2", help="Directory for outputs")
     parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
-    parser.add_argument("--n-folds", type=int, default=3)
+    parser.add_argument("--n-folds", type=int, default=1)
     parser.add_argument("--max-epochs", type=int, default=150)
     parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--study-name", type=str, default="daily_3x3_2km8km_one_hot_1994_1")
+    parser.add_argument("--study-name", type=str, default="daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2")
     parser.add_argument("--loss-name", type=str, default="mse")
     parser.add_argument("--loss-params", type=str, default=None)
     # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.95}')
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_2km8km_one_hot_1994_1/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
+    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducible splits and CV")
     parser.add_argument("--db-url", type=str, default=None, help="Optuna database URL")
     parser.add_argument("--time-interval", type=str, default="daily", help="Time interval for the study")

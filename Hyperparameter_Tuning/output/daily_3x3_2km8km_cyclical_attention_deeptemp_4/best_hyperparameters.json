@@ -1,0 +1,26 @@
+{
+    "best_value": 0.4656121092183249,
+    "best_params": {
+        "climate_units": 660,
+        "local_dem_units": 4,
+        "regional_dem_units": 144,
+        "temporal_units": 80,
+        "na": 5120,
+        "nb": 532,
+        "dropout_rate": 0.35,
+        "l2_reg": 1.579197261432869e-07,
+        "learning_rate": 0.008112827985870048,
+        "weight_decay": 0.00046330259603117354,
+        "batch_size": 256,
+        "use_residual": false,
+        "climate_activation": "relu",
+        "output_activation": "softplus",
+        "climate_processing": "conv2d",
+        "use_spatial_attention": true,
+        "use_multihead_attention": false,
+        "attention_heads": 2,
+        "attention_dropout": 0.2,
+        "temporal_depth": 2,
+        "temporal_dropout": 0.1
+    }
+}

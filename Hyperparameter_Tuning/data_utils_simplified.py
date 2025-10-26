@@ -92,9 +92,24 @@ class DataManager:
         print("Data loaded into tensors.")
 
     def _split_data(self, test_size: float, val_size: float, test_indices_path: str):
-        """Manages reproducible train/val/test splits."""
+        """Manages reproducible train/val/test splits with stratification."""
         n_samples = len(self.tensors['targets'])
         all_indices = np.arange(n_samples)
+        
+        # Create stratification bins based on rainfall distribution
+        # Use quantile-based binning to handle skewed rainfall distribution
+        y = self.tensors['targets'].cpu().numpy()
+        n_bins = 5
+        try:
+            # Use quantiles of non-zero rainfall for binning
+            edges = np.quantile(y[y > 0], np.linspace(0, 1, n_bins + 1))
+            edges = np.unique(edges)
+            if len(edges) < 2:
+                raise ValueError("Not enough unique quantile edges.")
+            y_bins = np.digitize(y, edges[1:-1])
+        except Exception as e:
+            print(f"Warning: stratification binning failed ({e}); falling back to random split.")
+            y_bins = None
 
         # 1. Determine test indices (load from file or create new)
         if test_indices_path and os.path.exists(test_indices_path):
@@ -102,18 +117,33 @@ class DataManager:
             with open(test_indices_path, 'rb') as f:
                 test_indices = pickle.load(f)
         else:
-            print("Generating new test indices...")
-            _, test_indices = train_test_split(all_indices, test_size=test_size, random_state=self.random_state)
+            print("Generating new stratified test indices...")
+            if y_bins is not None:
+                _, test_indices = train_test_split(
+                    all_indices, test_size=test_size, random_state=self.random_state,
+                    stratify=y_bins
+                )
+            else:
+                _, test_indices = train_test_split(
+                    all_indices, test_size=test_size, random_state=self.random_state
+                )
             if test_indices_path:
                 os.makedirs(os.path.dirname(test_indices_path), exist_ok=True)
                 with open(test_indices_path, 'wb') as f:
                     pickle.dump(test_indices, f)
         
-        # 2. Create train/val split from the remaining indices
+        # 2. Create stratified train/val split from the remaining indices
         train_val_indices = np.setdiff1d(all_indices, test_indices)
-        train_indices, val_indices = train_test_split(
-            train_val_indices, test_size=val_size, random_state=self.random_state
-        )
+        if y_bins is not None:
+            train_val_bins = y_bins[train_val_indices]
+            train_indices, val_indices = train_test_split(
+                train_val_indices, test_size=val_size, random_state=self.random_state,
+                stratify=train_val_bins
+            )
+        else:
+            train_indices, val_indices = train_test_split(
+                train_val_indices, test_size=val_size, random_state=self.random_state
+            )
 
         self.indices = {
             'train': train_indices,

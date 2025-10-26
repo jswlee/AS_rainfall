@@ -1,0 +1,61 @@
+PyTorch LAND Model Training Summary
+==================================================
+
+Training Configuration:
+  Data path: ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz
+  Max epochs: 200
+  Patience: 40
+  Cross-validation folds: 10
+  Validation size: 10.0% of train+val
+  Random seed: 42
+  Loss function: mse
+  Learning rate (actual): 4.898041e-05
+
+Hyperparameters:
+  climate_units: 1320
+  local_dem_units: 16
+  regional_dem_units: 8
+  temporal_units: 64
+  na: 5248
+  nb: 564
+  dropout_rate: 0.39999999999999997
+  l2_reg: 1.8924346594977838e-07
+  learning_rate: 3.463438173800202e-05
+  weight_decay: 0.0002515883657501417
+  batch_size: 2048
+  use_residual: True
+  climate_activation: relu
+  output_activation: softplus
+  climate_processing: conv2d
+  use_spatial_attention: True
+  use_multihead_attention: True
+  attention_heads: 2
+  attention_dropout: 0.1
+  temporal_depth: 3
+  temporal_dropout: 0.2
+
+Cross-Validation Results:
+  Fold val losses: ['0.454685', '0.446328', '0.358732', '0.493087', '0.438257', '0.446021', '0.505077', '0.447302', '0.481497', '0.420312']
+  Avg val loss: 0.449130 +/- 0.039092
+  Fold val MSE (unweighted): ['0.454685', '0.446328', '0.358732', '0.493087', '0.438257', '0.446021', '0.505077', '0.447302', '0.481497', '0.420312']
+  Avg val MSE (unweighted): 0.449130 +/- 0.039092
+  Best fold: 3
+
+Training Results (Best Fold):
+  Criterion (loss_name): mse
+  Training time: 1034.55 seconds
+  Final train loss (criterion): 0.084465
+  Final val loss (criterion): 0.373752
+  Best val loss (criterion): 0.358732 at epoch 97
+  Val MSE (unweighted) at best epoch: 0.358732
+  Total epochs: 137
+
+Test Set Evaluation:
+  R²: 0.5867
+  MSE: 0.436986
+  RMSE: 0.661049
+  MAE: 0.318726
+
+Denormalized Metrics (mm):
+  RMSE: 16.4461 mm
+  MAE: 7.9295 mm

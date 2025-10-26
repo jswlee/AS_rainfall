@@ -724,7 +724,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Assemble training data.')
     parser.add_argument('time_interval', type=str, nargs='?', default='daily',
                        choices=['monthly', 'daily'], help='Time interval to process')
-    parser.add_argument('time_encoding', type=str, nargs='?', default='one_hot',
+    parser.add_argument('time_encoding', type=str, nargs='?', default='cyclical',
                        choices=['one_hot', 'cyclical'], help='Time encoding to use')
     args = parser.parse_args()
     main(time_interval=args.time_interval, time_encoding=args.time_encoding)
