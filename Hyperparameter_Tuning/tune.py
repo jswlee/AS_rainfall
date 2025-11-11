@@ -29,29 +29,14 @@ class OptunaTuner:
         os.makedirs(self.config['output_dir'], exist_ok=True)
         
         # Setup device
-        is_cuda_available = torch.cuda.is_available()
-        print(f"Is CUDA Available: {is_cuda_available}")
-
-        if is_cuda_available:
+        if torch.cuda.is_available():
             self.device = torch.device('cuda')
-            print(f"CUDA Version: {torch.version.cuda}")
-            print(f"Number of GPUs: {torch.cuda.device_count()}")
-            print(f"Current Device Name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = torch.device('mps')
         else:
-            # Provide detailed error information if CUDA is not available
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                self.device = torch.device('mps')
-                print(f"--- Using device: {self.device} ---")
-            else:
-                self.device = torch.device('cpu')
-                print("WARNING: CUDA is not available. Falling back to CPU.")
-                try:
-                    # This function provides a detailed error message if CUDA fails to initialize
-                    torch.cuda.init()
-                except Exception as e:
-                    print(f"CUDA Initialization Error: {e}")
+            self.device = torch.device('cpu')
 
-                print(f"--- Using device: {self.device} ---")
+        print(f"--- Using device: {self.device} ---")
 
         # Instantiate the DataManager to handle all data logic
         data_manager = DataManager(device=self.device, **self.config)
@@ -90,8 +75,8 @@ class OptunaTuner:
             if len(edges) < 2: raise ValueError("Not enough unique quantile edges.")
             y_bins = np.digitize(y, edges[1:-1])
         except Exception as e:
-            print(f"Warning: Stratified binning failed ({e}). Falling back to non-stratified CV.")
-            y_bins = np.zeros_like(y, dtype=int)
+            # Stratified CV is required for robust evaluation
+            raise ValueError(f"Stratified binning failed: {e}. Cannot proceed with non-stratified CV.") from e
             
         cv_seed = self.config.get('random_state', 42)
         skf = StratifiedKFold(n_splits=self.config['n_folds'], shuffle=True, random_state=cv_seed)
@@ -110,46 +95,32 @@ class OptunaTuner:
         time_interval = self.config.get('time_interval', 'daily')
         if time_interval == 'daily':
             return {
-                # Refined based on top 10 trials: narrow range around 1200-1425
                 'climate_units': trial.suggest_int('climate_units', 150, 1350, step=15),
-                
-                # Fixed based on top trials (low importance)
                 'local_dem_units': trial.suggest_int('local_dem_units', 16, 256, step=16),
                 'regional_dem_units': trial.suggest_int('regional_dem_units', 16, 256, step=16),
-                # EXPANDED: Best trial at max (64), expand further
                 'temporal_units': trial.suggest_int('temporal_units', 16, 128, step=16),
 
-                # EXPANDED: 5/10 top trials at max (4352), expand further
                 'na': trial.suggest_int('na', 4096, 5120, step=128),
-                # EXPANDED: clustering in upper range, expand further
                 'nb': trial.suggest_int('nb', 516, 628, step=16),
 
-                # Refined: top trials use 0.35-0.45
                 'dropout_rate': trial.suggest_float('dropout_rate', 0.40, 0.45, step=0.05),
-                # Refined: very narrow range in top trials (1.58e-7 to 2.30e-7)
                 'l2_reg': trial.suggest_float('l2_reg', 1e-7, 2e-7, log=True),
-
-                # Most important parameter! Refined: 2.9e-5 to 5.1e-5
                 'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-2, log=True),
-                # Refined: top trials use 2.0e-4 to 3.1e-4
                 'weight_decay': trial.suggest_float('weight_decay', 8e-6, 5e-4, log=True),
-                
-                # Fixed based on top trials
-                'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256]),
 
-                # Fixed based on top trials (all True)
+                'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256]),
                 'use_residual': trial.suggest_categorical('use_residual', [False]),
                 'climate_activation': trial.suggest_categorical('climate_activation', ['relu']),
                 'output_activation': trial.suggest_categorical('output_activation', ['softplus']),  # NEVER 'none' - must be non-negative!
                 'climate_processing': trial.suggest_categorical('climate_processing', ['conv2d']),
                 
-                # Attention mechanism: fixed based on top trials
+                # Attention mechanism
                 'use_spatial_attention': trial.suggest_categorical('use_spatial_attention', [True]),
                 'use_multihead_attention': trial.suggest_categorical('use_multihead_attention', [False]),
                 'attention_heads': trial.suggest_categorical('attention_heads', [3, 5]),
                 'attention_dropout': trial.suggest_float('attention_dropout', 0.1, 0.3, step=0.05),
                 
-                # Temporal branch depth (new MLP architecture)
+                # Temporal branch depth
                 'temporal_depth': trial.suggest_categorical('temporal_depth', [1, 2]),
                 'temporal_dropout': trial.suggest_float('temporal_dropout', 0.05, 0.2, step=0.05)
             }
@@ -225,8 +196,8 @@ class OptunaTuner:
             model = create_model_from_hyperparams(hyperparams, self.metadata).to(self.device)
 
             try:
-                # --- Simple LR scaling heuristic ---
-                # Scale LR with batch size relative to a reference using alpha=0.5 (sqrt scaling)
+                # Scale LR with batch size using sqrt scaling (alpha=0.5)
+                # Reference: "Accurate, Large Minibatch SGD" (Goyal et al., 2017)
                 batch_ref = 1024
                 alpha = 0.5
                 base_lr = float(hyperparams['learning_rate'])
@@ -262,7 +233,6 @@ class OptunaTuner:
 
     def run_tuning(self):
         """Orchestrates a robust Optuna study."""
-
         study_name = self.config['study_name']
         # Choose a separate Optuna DB per interval. Allow explicit override via config['db_url'].
         db_url = self.config.get('db_url')
@@ -272,9 +242,9 @@ class OptunaTuner:
                 npz_path = str(self.config.get('npz_path', '')).lower()
                 interval = 'daily' if 'daily' in npz_path else 'monthly'
             db_name = f"optuna_{interval}"
-            # For PC
+            # Default to PC-style connection; override via --db-url for Mac or other platforms
             db_url = f"postgresql://postgres:mysecretpassword@localhost:5432/{db_name}"
-            # # Use explicit psycopg2 driver and 127.0.0.1 to match Docker in setup_db.sh
+            # For Mac, use explicit psycopg2 driver and 127.0.0.1 to match Docker in setup_db.sh
             # db_url = f"postgresql+psycopg2://postgres:mysecretpassword@127.0.0.1:5432/{db_name}"
         storage = db_url
         print(f"Using Optuna storage: {storage}")
@@ -302,7 +272,6 @@ class OptunaTuner:
         # Let Optuna manage the optimization loop. This is much more robust.
         study.optimize(self.objective, n_trials=remaining_trials, show_progress_bar=True)
 
-        # --- Finalization ---
         # Reload the study to ensure we have the absolute latest state before saving.
         final_study = optuna.load_study(study_name=study_name, storage=storage)
 
@@ -321,7 +290,6 @@ class OptunaTuner:
         results = {'best_value': best_trial.value, 'best_params': best_trial.params}
         with open(os.path.join(results_dir, 'best_hyperparameters.json'), 'w') as f:
             json.dump(results, f, indent=4)
-            
         print(f"Best hyperparameters saved to {results_dir}/best_hyperparameters.json")
 
         # Save visualizations
@@ -346,7 +314,6 @@ if __name__ == "__main__":
     parser.add_argument("--study-name", type=str, default="daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2")
     parser.add_argument("--loss-name", type=str, default="mse")
     parser.add_argument("--loss-params", type=str, default=None)
-    # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.95}')
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducible splits and CV")
@@ -364,6 +331,22 @@ if __name__ == "__main__":
             config['loss_params'] = json.loads(config['loss_params'])
         except json.JSONDecodeError as e:
             raise SystemExit(f"Invalid --loss-params JSON: {e}")
+    
+    # Auto-set loss_params based on loss_name to avoid manual configuration
+    if config['loss_params'] is None:  # Only auto-set if not explicitly provided
+        if config['loss_name'] == 'mse':
+            config['loss_params'] = None
+        elif config['loss_name'] == 'weighted_mse':
+            # Default parameters for weighted MSE
+            config['loss_params'] = {"alpha": 2.0, "power": 1.5, "percentile": 0.95}
+    
+    # Auto-generate output_dir and test_indices_path if not provided
+    if not config.get('output_dir'):
+        interval = config.get('time_interval', 'daily')
+        config['output_dir'] = f"Hyperparameter_Tuning/output/{interval}_{config['study_name']}"
+    
+    if not config.get('test_indices_path'):
+        config['test_indices_path'] = os.path.join(config['output_dir'], 'test_indices.pkl')
 
     # Instantiate the class with the config and run the tuning process
     tuner = OptunaTuner(**config)
