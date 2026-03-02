@@ -10,7 +10,7 @@ import os
 STATION_METADATA_PATH = "raw_data/station_locations.csv"
 DEM_PATH = "raw_data/DEM/DEM_Tut1.tif"
 REANALYSIS_DIR_MONTHLY = "raw_data/climate_variables_monthly_raw"
-REANALYSIS_DIR_DAILY = "raw_data/climate_variables_daily_FULL"
+REANALYSIS_DIR_DAILY = "raw_data/climate_variables_daily_FULL_1980-2024"
 MONTHLY_RAINFALL_DATA_DIR = "Process_Raw_Rainfall_Data/output/monthly_rainfall"
 DAILY_RAINFALL_DATA_DIR = "raw_data/rainfall_corrected"
 
@@ -294,7 +294,9 @@ def get_config():
             'reanalysis_dir': REANALYSIS_DIR,
             'reanalysis_dir_monthly': REANALYSIS_DIR_MONTHLY,
             'reanalysis_dir_daily': REANALYSIS_DIR_DAILY,
-            'rainfall_data_dir': RAINFALL_DATA_DIR,
+            'rainfall_data_dir': MONTHLY_RAINFALL_DATA_DIR,
+            'rainfall_data_dir_monthly': MONTHLY_RAINFALL_DATA_DIR,
+            'rainfall_data_dir_daily': DAILY_RAINFALL_DATA_DIR,
             'output_dir': OUTPUT_DIR,
         },
         'dem_patch_config': DEM_PATCH_CONFIG,

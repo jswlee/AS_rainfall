@@ -1,11 +1,3 @@
-# hp_tuning_final.py
-
-# For daily data:
-# python -m Hyperparameter_Tuning.hp_tuning_simplified --npz-path "ML_Data_Preprocessing\output\assembled_npz\full_training_data_daily.npz" --output-dir "output/daily_data_200trials" --n-trials 20 --time-interval "daily" --study-name "land_model_tuning_daily"
-
-# For monthly data:
-# python -m Hyperparameter_Tuning.hp_tuning_simplified --npz-path "ML_Data_Preprocessing\output\assembled_npz\full_training_data_monthly.npz" --output-dir "output/monthly_data_200trials" --n-trials 20 --time-interval "monthly" --study-name "land_model_tuning_monthly"
-
 import os
 import json
 import numpy as np
@@ -14,8 +6,9 @@ import argparse
 import optuna
 from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
-from sklearn.model_selection import StratifiedKFold
 from typing import Dict, Any
+import shutil
+import csv
 
 from Hyperparameter_Tuning.data_utils_simplified import DataManager, create_pytorch_dataloaders, RainfallDataset
 from Hyperparameter_Tuning.model import create_model_from_hyperparams
@@ -28,21 +21,92 @@ class OptunaTuner:
         
         os.makedirs(self.config['output_dir'], exist_ok=True)
         
-        # Setup device
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-        else:
-            self.device = torch.device('cpu')
+        # Setup device (prefer CUDA, then MPS, otherwise CPU)
+        has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        device_type = 'cuda' if torch.cuda.is_available() else ('mps' if has_mps else 'cpu')
+        self.device = torch.device(device_type)
 
         print(f"--- Using device: {self.device} ---")
 
         # Instantiate the DataManager to handle all data logic
         data_manager = DataManager(device=self.device, **self.config)
-        
+
         # Persist the exact test indices used by the tuner for reproducibility
-        # If the caller did not provide a path, default to <output_dir>/test_indices.pkl
+        self._save_test_indices(data_manager)
+
+        # Get the metadata and the specific tensors needed for cross-validation
+        self.metadata = data_manager.metadata
+        self.cv_tensors, self.cv_indices = data_manager.get_cv_tensors()
+        self.data_manager = data_manager  # Store for single-fold case
+
+        # Persist the exact hyperparameter search space used for this run
+        self._save_init_search_space()
+
+        if self.config['n_folds'] > 1:
+            self._prepare_cv_splits()
+        else:
+            # For single fold, we'll use the train/val split from DataManager
+            self._cv_splits = None
+
+    def _prepare_cv_splits(self):
+        """Pre-computes temporal CV splits where validation occurs AFTER training in time.
+
+        This avoids leakage from future conditions into the training set.
+        Splits are created on grouped timestamps (year-month[-day]) so that all
+        samples from the same timestamp stay together.
+        """
+        years = getattr(self.data_manager, 'years', None)
+        months = getattr(self.data_manager, 'months', None)
+        days = getattr(self.data_manager, 'days', None)
+        if years is None or months is None:
+            raise ValueError("Temporal CV requires 'years' and 'months' arrays in the NPZ.")
+
+        time_interval = self.config.get('time_interval', 'daily')
+        if time_interval == 'daily' and days is not None:
+            group_all = (years.astype(np.int64) * 10000) + (months.astype(np.int64) * 100) + days.astype(np.int64)
+        else:
+            group_all = (years.astype(np.int64) * 100) + months.astype(np.int64)
+
+        group_cv = group_all[self.cv_indices]
+        unique_groups = np.unique(group_cv)
+        unique_groups.sort()
+
+        n_folds = int(self.config['n_folds'])
+        if len(unique_groups) <= n_folds:
+            raise ValueError(
+                f"Not enough unique time groups ({len(unique_groups)}) for n_folds={n_folds}."
+            )
+
+        # Expanding-window splits across time groups.
+        # Fold i uses earlier groups for train, immediately following block for val.
+        self._cv_splits = []
+        total = len(unique_groups)
+        for i in range(n_folds):
+            train_end = int(((i + 1) * total) / (n_folds + 1))
+            val_end = int(((i + 2) * total) / (n_folds + 1))
+
+            train_groups = unique_groups[:train_end]
+            val_groups = unique_groups[train_end:val_end]
+
+            if len(train_groups) == 0 or len(val_groups) == 0:
+                continue
+
+            train_mask = np.isin(group_cv, train_groups)
+            val_mask = np.isin(group_cv, val_groups)
+
+            train_original_indices = self.cv_indices[train_mask]
+            val_original_indices = self.cv_indices[val_mask]
+            self._cv_splits.append((train_original_indices, val_original_indices))
+
+        if len(self._cv_splits) != n_folds:
+            raise ValueError(
+                f"Temporal CV produced {len(self._cv_splits)} folds, expected {n_folds}."
+            )
+
+        print(f"Pre-computed {n_folds} temporal CV splits (train before val).")
+
+    def _save_test_indices(self, data_manager: DataManager) -> None:
+        """Persist the test indices to a stable location for reproducibility."""
         import pickle
         ti_path = self.config.get('test_indices_path')
         if not ti_path:
@@ -54,119 +118,115 @@ class OptunaTuner:
             print(f"Saved tuner test indices to {ti_path}")
         except Exception as e:
             print(f"Warning: Could not save test indices to {ti_path}: {e}")
-        
-        # Get the metadata and the specific tensors needed for cross-validation
-        self.metadata = data_manager.metadata
-        self.cv_tensors, self.cv_indices = data_manager.get_cv_tensors()
-        self.data_manager = data_manager  # Store for single-fold case
-        if self.config['n_folds'] > 1:
-            self._prepare_cv_splits()
-        else:
-            # For single fold, we'll use the train/val split from DataManager
-            self._cv_splits = None
 
-    def _prepare_cv_splits(self):
-        """Pre-computes Stratified K-Fold splits based on target quantiles."""
-        n_bins = 5
-        y = self.cv_tensors['targets'][self.cv_indices].cpu().numpy().ravel()
+    def _save_init_search_space(self) -> None:
+        """Persist the hyperparameter search space at initialization time.
+
+        This captures the exact HP ranges/choices used for this run, tied to
+        the current config and metadata.
+        """
         try:
-            edges = np.quantile(y[y > 0], np.linspace(0, 1, n_bins + 1))
-            edges = np.unique(edges)
-            if len(edges) < 2: raise ValueError("Not enough unique quantile edges.")
-            y_bins = np.digitize(y, edges[1:-1])
+            search_space = self._get_search_space_definition()
+            search_space_path = os.path.join(self.config['output_dir'], 'search_space.json')
+            with open(search_space_path, 'w') as f:
+                json.dump(
+                    {
+                        'search_space': search_space,
+                        'time_interval': self.config.get('time_interval', 'daily'),
+                        'loss_name': self.config.get('loss_name', 'mse'),
+                        'num_climate_vars': int(self.metadata.get('num_climate_vars', 1)),
+                    },
+                    f,
+                    indent=2,
+                )
+            print(f"Saved hyperparameter search space to {search_space_path}")
         except Exception as e:
-            # Stratified CV is required for robust evaluation
-            raise ValueError(f"Stratified binning failed: {e}. Cannot proceed with non-stratified CV.") from e
-            
-        cv_seed = self.config.get('random_state', 42)
-        skf = StratifiedKFold(n_splits=self.config['n_folds'], shuffle=True, random_state=cv_seed)
-        # skf.split gives indices *relative to the input array* (self.cv_indices). 
-        # We need to map them back to the original tensor indices.
-        self._cv_splits = []
-        for train_fold_idx, val_fold_idx in skf.split(np.zeros_like(y_bins), y_bins):
-            train_original_indices = self.cv_indices[train_fold_idx]
-            val_original_indices = self.cv_indices[val_fold_idx]
-            self._cv_splits.append((train_original_indices, val_original_indices))
-            
-        print(f"Pre-computed {self.config['n_folds']} stratified CV splits.")
+            print(f"Warning: Could not save hyperparameter search space: {e}")
+
+    def _get_search_space_definition(self) -> Dict[str, Dict[str, Any]]:
+        """Returns the hyperparameter search space definition based on time interval.
+
+        If loss_name is 'tweedie', constrain output_activation to 'softplus' to ensure
+        strictly non-negative outputs compatible with Tweedie loss.
+        """
+        time_interval = self.config.get('time_interval', 'daily')
+        loss_name = self.config.get('loss_name', 'mse')
+        num_climate_vars = int(self.metadata.get('num_climate_vars', 1))
+
+        def _ceil_to_multiple(x: int, m: int) -> int:
+            return ((x + m - 1) // m) * m
+
+        def _floor_to_multiple(x: int, m: int) -> int:
+            return (x // m) * m
+        
+        if time_interval == 'daily':
+            climate_low = _ceil_to_multiple(900, num_climate_vars)
+            climate_high = _floor_to_multiple(1200, num_climate_vars)
+            if climate_low > climate_high:
+                raise ValueError(
+                    f"Invalid climate_units range after enforcing divisibility: low={climate_low}, high={climate_high}, num_climate_vars={num_climate_vars}"
+                )
+            return {
+                'climate_units': {'type': 'int', 'low': climate_low, 'high': climate_high, 'step': num_climate_vars},
+                'local_dem_units': {'type': 'int', 'low': 16, 'high': 64, 'step': 16},
+                'regional_dem_units': {'type': 'int', 'low': 8, 'high': 32, 'step': 8},
+                'temporal_units': {'type': 'int', 'low': 4, 'high': 12, 'step': 4},
+                'na': {'type': 'int', 'low': 256, 'high': 1024, 'step': 256},
+                'nb': {'type': 'int', 'low': 64, 'high': 160, 'step': 16},
+                'dropout_rate': {'type': 'float', 'low': 0.2, 'high': 0.35, 'step': 0.05},
+                'learning_rate': {'type': 'float', 'low': 3e-5, 'high': 1e-4, 'log': True},
+                'weight_decay': {'type': 'float', 'low': 1e-6, 'high': 1e-3, 'log': True},
+                'batch_size': {'type': 'categorical', 'choices': [64, 128, 256, 512,1024]},
+                'use_residual': {'type': 'categorical', 'choices': [False]},
+                'climate_activation': {'type': 'categorical', 'choices': ['relu']},
+                'output_activation': {'type': 'categorical', 'choices': ['softplus']},
+                'climate_processing': {'type': 'categorical', 'choices': ['conv2d']},
+            }
+        else:
+            climate_low = _ceil_to_multiple(64, num_climate_vars)
+            climate_high = _floor_to_multiple(512, num_climate_vars)
+            return {
+                'climate_units': {'type': 'int', 'low': climate_low, 'high': climate_high, 'step': num_climate_vars},
+                'local_dem_units': {'type': 'int', 'low': 16, 'high': 1024, 'step': 16},
+                'regional_dem_units': {'type': 'int', 'low': 32, 'high': 512, 'step': 16},
+                'temporal_units': {'type': 'int', 'low': 16, 'high': 64, 'step': 8},
+                'na': {'type': 'int', 'low': 128, 'high': 512, 'step': 64},
+                'nb': {'type': 'int', 'low': 32, 'high': 512, 'step': 32},
+                'dropout_rate': {'type': 'float', 'low': 0.0, 'high': 0.5, 'step': 0.05},
+                'learning_rate': {'type': 'float', 'low': 1e-5, 'high': 1e-3, 'log': True},
+                'weight_decay': {'type': 'float', 'low': 1e-6, 'high': 1e-3, 'log': True},
+                'batch_size': {'type': 'categorical', 'choices': [256, 512, 1024, 2048]},
+                'use_residual': {'type': 'categorical', 'choices': [True, False]},
+                'climate_activation': {'type': 'categorical', 'choices': ['relu', 'none']},
+                'output_activation': {'type': 'categorical', 'choices': ['softplus'] if loss_name == 'tweedie' else ['relu', 'softplus']},
+                'climate_processing': {'type': 'categorical', 'choices': ['flatten', 'conv2d']},
+            }
 
     def suggest_hyperparameters(self, trial: optuna.Trial) -> Dict[str, Any]:
         """Defines the hyperparameter search space for Optuna."""
-        time_interval = self.config.get('time_interval', 'daily')
-        if time_interval == 'daily':
-            return {
-                'climate_units': trial.suggest_int('climate_units', 150, 1350, step=15),
-                'local_dem_units': trial.suggest_int('local_dem_units', 16, 256, step=16),
-                'regional_dem_units': trial.suggest_int('regional_dem_units', 16, 256, step=16),
-                'temporal_units': trial.suggest_int('temporal_units', 16, 128, step=16),
-
-                'na': trial.suggest_int('na', 4096, 5120, step=128),
-                'nb': trial.suggest_int('nb', 516, 628, step=16),
-
-                'dropout_rate': trial.suggest_float('dropout_rate', 0.40, 0.45, step=0.05),
-                'l2_reg': trial.suggest_float('l2_reg', 1e-7, 2e-7, log=True),
-                'learning_rate': trial.suggest_float('learning_rate', 1e-3, 1e-2, log=True),
-                'weight_decay': trial.suggest_float('weight_decay', 8e-6, 5e-4, log=True),
-
-                'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256]),
-                'use_residual': trial.suggest_categorical('use_residual', [False]),
-                'climate_activation': trial.suggest_categorical('climate_activation', ['relu']),
-                'output_activation': trial.suggest_categorical('output_activation', ['softplus']),  # NEVER 'none' - must be non-negative!
-                'climate_processing': trial.suggest_categorical('climate_processing', ['conv2d']),
-                
-                # Attention mechanism
-                'use_spatial_attention': trial.suggest_categorical('use_spatial_attention', [True]),
-                'use_multihead_attention': trial.suggest_categorical('use_multihead_attention', [False]),
-                'attention_heads': trial.suggest_categorical('attention_heads', [3, 5]),
-                'attention_dropout': trial.suggest_float('attention_dropout', 0.1, 0.3, step=0.05),
-                
-                # Temporal branch depth
-                'temporal_depth': trial.suggest_categorical('temporal_depth', [1, 2]),
-                'temporal_dropout': trial.suggest_float('temporal_dropout', 0.05, 0.2, step=0.05)
-            }
-        else:
-            return {
-                # Climate variables
-                'climate_units': trial.suggest_int(name='climate_units', low=64, high=512, step=32),
-                'local_dem_units': trial.suggest_int(name='local_dem_units', low=16, high=1024, step=16),
-                'regional_dem_units': trial.suggest_int(name='regional_dem_units', low=32, high=512, step=16),
-                'temporal_units': trial.suggest_int(name='temporal_units', low=16, high=64, step=8),
-                
-                # Neural network architecture
-                'na': trial.suggest_int(name='na', low=128, high=512, step=64),
-                'nb': trial.suggest_int(name='nb', low=32, high=512, step=32),
-                
-                # Regularization parameters
-                'dropout_rate': trial.suggest_float(name='dropout_rate', low=0.0, high=0.5, step=0.05),
-                'l2_reg': trial.suggest_float(name='l2_reg', low=1e-5, high=1e-4, log=True),
-                
-                # Training parameters
-                'learning_rate': trial.suggest_float(name='learning_rate', low=1e-5, high=1e-2, log=True),
-                'weight_decay': trial.suggest_float(name='weight_decay', low=1e-6, high=1e-3, log=True),
-                'batch_size': trial.suggest_categorical(name='batch_size', choices=[256, 512, 1024, 2048]),
-                
-                # Model architecture choices
-                'use_residual': trial.suggest_categorical(name='use_residual', choices=[True, False]),
-                'climate_activation': trial.suggest_categorical(name='climate_activation', choices=['relu', 'none']),
-                'output_activation': trial.suggest_categorical(name='output_activation', choices=['relu', 'softplus']),
-                'climate_processing': trial.suggest_categorical(name='climate_processing', choices=['flatten', 'conv2d']),
-                
-                # Attention mechanism hyperparameters
-                'use_spatial_attention': trial.suggest_categorical(name='use_spatial_attention', choices=[True, False]),
-                'use_multihead_attention': trial.suggest_categorical(name='use_multihead_attention', choices=[True, False]),
-                'attention_heads': trial.suggest_categorical(name='attention_heads', choices=[2, 4, 8]),
-                'attention_dropout': trial.suggest_float(name='attention_dropout', low=0.0, high=0.3, step=0.1),
-                
-                # Temporal branch depth
-                'temporal_depth': trial.suggest_categorical(name='temporal_depth', choices=[1, 2, 3]),
-                'temporal_dropout': trial.suggest_float(name='temporal_dropout', low=0.0, high=0.3, step=0.1)
-            }
+        search_space = self._get_search_space_definition()
+        
+        hyperparams = {}
+        for name, definition in search_space.items():
+            if definition['type'] == 'int':
+                hyperparams[name] = trial.suggest_int(name, definition['low'], definition['high'], step=definition['step'])
+            elif definition['type'] == 'float':
+                # Check if step is present (linear float) or use log scale
+                if 'step' in definition:
+                    hyperparams[name] = trial.suggest_float(name, definition['low'], definition['high'], step=definition['step'])
+                else:
+                    # Log-scaled float without step
+                    hyperparams[name] = trial.suggest_float(name, definition['low'], definition['high'], log=definition.get('log', False))
+            elif definition['type'] == 'categorical':
+                hyperparams[name] = trial.suggest_categorical(name, definition['choices'])
+        
+        print(f"\nTrial {trial.number}: Starting with params: {hyperparams}")
+        return hyperparams
 
     def objective(self, trial: optuna.Trial) -> float:
         """Objective function for one Optuna trial, performing cross-validation."""
         hyperparams = self.suggest_hyperparameters(trial)
-        print(f"\nTrial {trial.number}: Starting with params: {hyperparams}")
-
+        
         fold_losses, fold_models = [], []
         
         # Handle single fold vs multi-fold
@@ -178,9 +238,11 @@ class OptunaTuner:
             cv_iterations = enumerate(self._cv_splits)
         
         for fold_idx, (train_idx, val_idx) in cv_iterations:
+            # Train-only target scaling computed from the primary train split (DataManager)
+            target_scale = getattr(self.data_manager, 'target_scale', None)
             # Create datasets by passing the shared tensors and the specific indices for this fold
-            train_ds = RainfallDataset(self.cv_tensors, train_idx)
-            val_ds = RainfallDataset(self.cv_tensors, val_idx)
+            train_ds = RainfallDataset(self.cv_tensors, train_idx, target_scale=target_scale)
+            val_ds = RainfallDataset(self.cv_tensors, val_idx, target_scale=target_scale)
             
             # Dataloader creation now pass dataloader-specific params from config
             dataloader_params = {k: v for k, v in self.config.items() if k in ['num_workers', 'pin_memory']}
@@ -230,6 +292,90 @@ class OptunaTuner:
 
         avg_loss = float(np.mean(fold_losses))
         return avg_loss
+
+    def _save_search_space(self, results_dir: str):
+        """Extract and save the hyperparameter search space for reproducibility."""
+        search_space = self._get_search_space_definition()
+        output_path = os.path.join(results_dir, 'search_space.json')
+        with open(output_path, 'w') as f:
+            json.dump(search_space, f, indent=4)
+        print(f"Search space saved to {output_path}")
+
+    def _save_all_trials_csv(self, study: optuna.Study, results_dir: str):
+        """Save all completed trials to CSV (without rank column)."""
+        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        
+        if not completed_trials:
+            print("No completed trials to save.")
+            return
+        
+        # Collect all unique param names
+        param_names = set()
+        for trial in completed_trials:
+            param_names.update(trial.params.keys())
+        param_names = sorted(param_names)
+        
+        output_path = os.path.join(results_dir, 'all_trials.csv')
+        with open(output_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            # Header: trial_number, trial_id, objective_value, then all params
+            header = ['trial_number', 'trial_id', 'objective_value'] + param_names
+            writer.writerow(header)
+            
+            # Write each trial
+            for trial in completed_trials:
+                row = [
+                    trial.number,
+                    trial._trial_id,
+                    trial.value
+                ]
+                # Add param values in same order as header
+                for param_name in param_names:
+                    row.append(trial.params.get(param_name, ''))
+                writer.writerow(row)
+        
+        print(f"All trials saved to {output_path} ({len(completed_trials)} trials)")
+
+    def _copy_model_architecture(self, results_dir: str):
+        """Copy model.py to output directory for reproducibility."""
+        source = os.path.join('Hyperparameter_Tuning', 'model.py')
+        dest = os.path.join(results_dir, 'model_architecture.py')
+        
+        try:
+            shutil.copy2(source, dest)
+            print(f"Model architecture copied to {dest}")
+        except Exception as e:
+            print(f"Warning: Could not copy model.py: {e}")
+
+    def save_results(self, study: optuna.Study):
+        """Saves tuning results, including hyperparameters and plots."""
+        results_dir = self.config['output_dir']
+        best_trial = study.best_trial
+        
+        # Save best hyperparameters to JSON
+        results = {'best_value': best_trial.value, 'best_params': best_trial.params}
+        with open(os.path.join(results_dir, 'best_hyperparameters.json'), 'w') as f:
+            json.dump(results, f, indent=4)
+        print(f"Best hyperparameters saved to {results_dir}/best_hyperparameters.json")
+
+        # Save search space for reproducibility
+        self._save_search_space(results_dir)
+        
+        # Save all trials to CSV
+        self._save_all_trials_csv(study, results_dir)
+        
+        # Copy model architecture
+        self._copy_model_architecture(results_dir)
+
+        # Save visualizations
+        try:
+            fig_hist = optuna.visualization.plot_optimization_history(study)
+            fig_hist.write_image(os.path.join(results_dir, "optimization_history.png"))
+            fig_importance = optuna.visualization.plot_param_importances(study)
+            fig_importance.write_image(os.path.join(results_dir, "param_importances.png"))
+            print("Saved optimization history and parameter importance plots.")
+        except (ImportError, ValueError) as e:
+            print(f"Could not save plots. Install plotly and kaleido or disable. Error: {e}")
 
     def run_tuning(self):
         """Orchestrates a robust Optuna study."""
@@ -281,47 +427,28 @@ class OptunaTuner:
         self.save_results(final_study)
         return final_study
 
-    def save_results(self, study: optuna.Study):
-        """Saves tuning results, including hyperparameters and plots."""
-        results_dir = self.config['output_dir']
-        best_trial = study.best_trial
-        
-        # Save best hyperparameters to JSON
-        results = {'best_value': best_trial.value, 'best_params': best_trial.params}
-        with open(os.path.join(results_dir, 'best_hyperparameters.json'), 'w') as f:
-            json.dump(results, f, indent=4)
-        print(f"Best hyperparameters saved to {results_dir}/best_hyperparameters.json")
-
-        # Save visualizations
-        try:
-            fig_hist = optuna.visualization.plot_optimization_history(study)
-            fig_hist.write_image(os.path.join(results_dir, "optimization_history.png"))
-            fig_importance = optuna.visualization.plot_param_importances(study)
-            fig_importance.write_image(os.path.join(results_dir, "param_importances.png"))
-            print("Saved optimization history and parameter importance plots.")
-        except (ImportError, ValueError) as e:
-            print(f"Could not save plots. Install plotly and kaleido or disable. Error: {e}")
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PyTorch hyperparameter tuning for LAND rainfall model")
-    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_cyclical.npz", help="Path to data")
-    parser.add_argument("--output-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2", help="Directory for outputs")
-    parser.add_argument("--n-trials", type=int, default=100, help="Number of Optuna trials")
-    parser.add_argument("--n-folds", type=int, default=1)
+    parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_one_hot.npz", help="Path to data")
+    # Let output_dir be optional; if omitted, it will be auto-generated from study_name and time_interval
+    parser.add_argument("--output-dir", default=None, help="Directory for outputs (if omitted, derived from study name and time interval)")
+     # Let test_indices_path be optional; if omitted, it will default to <output_dir>/test_indices.pkl
+    parser.add_argument("--test-indices-path", type=str, default=None, help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
+    parser.add_argument("--n-trials", type=int, default=50, help="Number of Optuna trials")
+    parser.add_argument("--n-folds", type=int, default=3)
     parser.add_argument("--max-epochs", type=int, default=150)
     parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--study-name", type=str, default="daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2")
+    parser.add_argument("--study-name", type=str, default="3x3_2km8km_one_hot_1980-2024")
     parser.add_argument("--loss-name", type=str, default="mse")
     parser.add_argument("--loss-params", type=str, default=None)
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--test-indices-path", type=str, default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2/test_indices.pkl", help="Path to save/load test indices (pkl). If omitted, will save to <output-dir>/test_indices.pkl")
+   
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducible splits and CV")
     parser.add_argument("--db-url", type=str, default=None, help="Optuna database URL")
     parser.add_argument("--time-interval", type=str, default="daily", help="Time interval for the study")
 
     args = parser.parse_args()
-
+    
     # Convert the argparse.Namespace to a dictionary for easy use
     config = vars(args)
     

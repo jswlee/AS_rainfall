@@ -1,0 +1,21 @@
+{
+  "local_dem_cfg": 2,
+  "regional_dem_cfg": 0,
+  "arch_idx": 14,
+  "arch_type": "glu",
+  "tweedie_p": 1.75,
+  "dropout": 0.15000000000000002,
+  "lr": 1.0257563974185649e-05,
+  "wd": 0.0002795015916508333,
+  "bs": 512,
+  "loss_type": "tweedie",
+  "local_dem_patch": 3,
+  "local_dem_km": 2,
+  "regional_dem_patch": 3,
+  "regional_dem_km": 3,
+  "hidden_sizes": [
+    512,
+    256,
+    256
+  ]
+}

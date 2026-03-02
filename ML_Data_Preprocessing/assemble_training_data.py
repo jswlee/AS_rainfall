@@ -231,11 +231,14 @@ class TrainingDataAssembler:
         """
         if dem_npz_path is None:
             # Select DEM NPZ filename based on granularity to match build_dem_patches.py outputs
-            dem_fname = 'dem_patches_all_standardized_monthly.npz' if self.time_interval == 'monthly' else 'dem_patches_all_standardized_daily.npz'
+            dem_fname = 'dem_patches_all_raw_monthly.npz' if self.time_interval == 'monthly' else 'dem_patches_all_raw_daily.npz'
             dem_npz_path = os.path.join(str(config.OUTPUT_DIR), 'dem_npz', dem_fname)
         if reanalysis_npz_path is None:
-            reanalysis_npz_path = os.path.join(str(config.OUTPUT_DIR), 'reanalysis_npz', 
-                                               f'reanalysis_features_all_standardized_{self.time_interval}.npz')
+            reanalysis_npz_path = os.path.join(
+                str(config.OUTPUT_DIR),
+                'reanalysis_npz',
+                f'reanalysis_features_all_raw_{self.time_interval}.npz'
+            )
         if out_dir is None:
             out_dir = os.path.join(str(config.OUTPUT_DIR), 'assembled_npz')
 
@@ -250,11 +253,21 @@ class TrainingDataAssembler:
         os.makedirs(out_dir, exist_ok=True)
 
         if not os.path.exists(reanalysis_npz_path):
-            print(f"ERROR: Missing reanalysis NPZ at {reanalysis_npz_path}. Run build_reanalysis_features first.")
-            return None
+            legacy = os.path.join(str(config.OUTPUT_DIR), 'reanalysis_npz', f'reanalysis_features_all_standardized_{self.time_interval}.npz')
+            if os.path.exists(legacy):
+                print(f"Warning: Missing raw reanalysis NPZ; falling back to legacy standardized: {legacy}")
+                reanalysis_npz_path = legacy
+            else:
+                print(f"ERROR: Missing reanalysis NPZ at {reanalysis_npz_path}. Run build_reanalysis_features first.")
+                return None
         if not os.path.exists(dem_npz_path):
-            print(f"ERROR: Missing DEM NPZ at {dem_npz_path}. Run build_dem_patches first.")
-            return None
+            legacy = os.path.join(str(config.OUTPUT_DIR), 'dem_npz', f'dem_patches_all_standardized_{self.time_interval}.npz')
+            if os.path.exists(legacy):
+                print(f"Warning: Missing raw DEM NPZ; falling back to legacy standardized: {legacy}")
+                dem_npz_path = legacy
+            else:
+                print(f"ERROR: Missing DEM NPZ at {dem_npz_path}. Run build_dem_patches first.")
+                return None
 
         # Load NPZs
         re_npz = np.load(reanalysis_npz_path, allow_pickle=True)
@@ -346,13 +359,17 @@ class TrainingDataAssembler:
         # These patches represent the topographic context around each rainfall station
         # and are important features for the machine learning model
         
-        # Get the min-max normalized DEM patches (scaled to [0,1] range)
-        dem_local_npz = dem_npz['dem_local_minmax']      # Local patches (finer detail, smaller area)
-        dem_regional_npz = dem_npz['dem_regional_minmax']  # Regional patches (broader context, larger area)
-        
-        # Get the standard deviation normalized DEM patches if available
-        dem_local_divstd_npz = dem_npz['dem_local_divstd'] if 'dem_local_divstd' in dem_npz.files else None
-        dem_regional_divstd_npz = dem_npz['dem_regional_divstd'] if 'dem_regional_divstd' in dem_npz.files else None
+        # Prefer raw DEM if available, otherwise fall back to legacy standardized keys.
+        if 'dem_local_raw' in dem_npz.files and 'dem_regional_raw' in dem_npz.files:
+            dem_local_npz = dem_npz['dem_local_raw']
+            dem_regional_npz = dem_npz['dem_regional_raw']
+            dem_local_divstd_npz = None
+            dem_regional_divstd_npz = None
+        else:
+            dem_local_npz = dem_npz['dem_local_minmax']
+            dem_regional_npz = dem_npz['dem_regional_minmax']
+            dem_local_divstd_npz = dem_npz['dem_local_divstd'] if 'dem_local_divstd' in dem_npz.files else None
+            dem_regional_divstd_npz = dem_npz['dem_regional_divstd'] if 'dem_regional_divstd' in dem_npz.files else None
         
         # Initialize lists to store aligned DEM patches
         # We need to align DEM patches with the reanalysis data index
@@ -388,26 +405,30 @@ class TrainingDataAssembler:
                     local_divstd_list.append(np.full(dem_local_divstd_npz[0].shape, np.nan, dtype=np.float32))
                     regional_divstd_list.append(np.full(dem_regional_divstd_npz[0].shape, np.nan, dtype=np.float32))
         # Convert lists of DEM patches to numpy arrays for the final dataset
-        # These arrays contain the topographic context around each rainfall station
-        # and will be used as input features for the machine learning model
-        dem_local_minmax = np.asarray(local_list, dtype=np.float32)  # Local patches (min-max normalized)
-        dem_regional_minmax = np.asarray(regional_list, dtype=np.float32)  # Regional patches (min-max normalized)
+        dem_local_arr = np.asarray(local_list, dtype=np.float32)
+        dem_regional_arr = np.asarray(regional_list, dtype=np.float32)
         
         # Convert std-normalized patches if available
         dem_local_divstd = np.asarray(local_divstd_list, dtype=np.float32) if local_divstd_list else None
         dem_regional_divstd = np.asarray(regional_divstd_list, dtype=np.float32) if regional_divstd_list else None
 
-        # Extract the global statistics used for DEM standardization
-        # These are needed if we want to convert back to original elevation values
-        # or ensure consistent scaling across different datasets
-        l_min = float(dem_npz['dem_local_min'])    # Global minimum for local patches
-        l_max = float(dem_npz['dem_local_max'])    # Global maximum for local patches
-        r_min = float(dem_npz['dem_regional_min'])  # Global minimum for regional patches
-        r_max = float(dem_npz['dem_regional_max'])  # Global maximum for regional patches
-        l_std = float(dem_npz['dem_local_std']) if 'dem_local_std' in dem_npz.files else np.float32(1.0)  # Global std for local
-        r_std = float(dem_npz['dem_regional_std']) if 'dem_regional_std' in dem_npz.files else np.float32(1.0)  # Global std for regional
+        using_raw_dem = 'dem_local_raw' in dem_npz.files and 'dem_regional_raw' in dem_npz.files
+        dem_local_raw = dem_local_arr if using_raw_dem else None
+        dem_regional_raw = dem_regional_arr if using_raw_dem else None
 
-        # Reanalysis patches (already standardized in builder save)
+        # For legacy compatibility, only populate minmax keys if the source DEM is standardized.
+        dem_local_minmax = np.array([]) if using_raw_dem else dem_local_arr
+        dem_regional_minmax = np.array([]) if using_raw_dem else dem_regional_arr
+
+        # Extract global statistics if available (legacy standardized DEM). For raw DEM, keep neutral placeholders.
+        l_min = float(dem_npz['dem_local_min']) if 'dem_local_min' in dem_npz.files else 0.0
+        l_max = float(dem_npz['dem_local_max']) if 'dem_local_max' in dem_npz.files else 0.0
+        r_min = float(dem_npz['dem_regional_min']) if 'dem_regional_min' in dem_npz.files else 0.0
+        r_max = float(dem_npz['dem_regional_max']) if 'dem_regional_max' in dem_npz.files else 0.0
+        l_std = float(dem_npz['dem_local_std']) if 'dem_local_std' in dem_npz.files else np.float32(1.0)
+        r_std = float(dem_npz['dem_regional_std']) if 'dem_regional_std' in dem_npz.files else np.float32(1.0)
+
+        # Reanalysis patches (raw-only by default; legacy standardized supported)
         re_features = re_npz['patches'] if 'patches' in re_npz.files else None
         re_variables = re_npz['variables'] if 'variables' in re_npz.files else None
 
@@ -424,11 +445,16 @@ class TrainingDataAssembler:
             'stations': re_stations,
             'years': re_years,
             'months': re_months,
+            # Raw rainfall in mm (for on-the-fly normalization using train-only statistics)
+            'rainfall_mm_raw': rainfall_mm_raw,
+            # Legacy pre-normalized versions (computed from global stats - may have data leakage)
             'rainfall_mm': rainfall_mm,
             'rainfall_mm_divstd': rainfall_mm_divstd,
             'rainfall_mm_std': np.array(rstd, dtype=np.float32),
             'rainfall_mm_min': np.array(rmin, dtype=np.float32),
             'rainfall_mm_max': np.array(rmax, dtype=np.float32),
+            'dem_local_raw': dem_local_raw if dem_local_raw is not None else np.array([]),
+            'dem_regional_raw': dem_regional_raw if dem_regional_raw is not None else np.array([]),
             'dem_local_minmax': dem_local_minmax,
             'dem_regional_minmax': dem_regional_minmax,
             'dem_local_divstd': dem_local_divstd if dem_local_divstd is not None else np.array([]),
@@ -724,7 +750,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Assemble training data.')
     parser.add_argument('time_interval', type=str, nargs='?', default='daily',
                        choices=['monthly', 'daily'], help='Time interval to process')
-    parser.add_argument('time_encoding', type=str, nargs='?', default='cyclical',
+    parser.add_argument('time_encoding', type=str, nargs='?', default='one_hot',
                        choices=['one_hot', 'cyclical'], help='Time encoding to use')
     args = parser.parse_args()
     main(time_interval=args.time_interval, time_encoding=args.time_encoding)

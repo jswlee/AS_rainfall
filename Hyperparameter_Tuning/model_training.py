@@ -238,6 +238,57 @@ class WeightedMSELoss(nn.Module):
         return loss
 
 
+class TweedieLoss(nn.Module):
+    """Tweedie loss for modeling non-negative continuous data with point mass at zero.
+    
+    Commonly used for rainfall prediction. The Tweedie distribution is a member of the
+    exponential dispersion family that includes special cases:
+    - p = 0: Normal distribution
+    - p = 1: Poisson distribution
+    - 1 < p < 2: Compound Poisson-Gamma (typical for rainfall)
+    - p = 2: Gamma distribution
+    - p = 3: Inverse Gaussian
+    
+    Args:
+        p: Power parameter (1 < p < 2 recommended for rainfall, default 1.5)
+    """
+    
+    def __init__(self, p: float = 1.5):
+        super().__init__()
+        if p < 1.0 or p >= 2.0:
+            raise ValueError(f"Tweedie power parameter p should be in range [1, 2) for rainfall, got {p}")
+        self.p = float(p)
+    
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute Tweedie deviance loss.
+        
+        The deviance is: 2 * [y^(2-p) / ((1-p)(2-p)) - y*mu^(1-p) / (1-p) + mu^(2-p) / (2-p)]
+        
+        For numerical stability, we add a small epsilon to predictions.
+        """
+        eps = 1e-8
+        preds = torch.clamp(preds, min=eps)  # Ensure positive predictions
+        targets = torch.clamp(targets, min=0.0)  # Ensure non-negative targets
+        
+        p = self.p
+        
+        # Compute Tweedie deviance components
+        # Component 1: y^(2-p) / ((1-p)(2-p))
+        a = torch.pow(targets + eps, 2 - p) / ((1 - p) * (2 - p))
+        
+        # Component 2: -y * mu^(1-p) / (1-p)
+        b = -targets * torch.pow(preds, 1 - p) / (1 - p)
+        
+        # Component 3: mu^(2-p) / (2-p)
+        c = torch.pow(preds, 2 - p) / (2 - p)
+        
+        # Tweedie deviance
+        deviance = 2 * (a + b + c)
+        
+        # Return mean deviance
+        return torch.mean(deviance)
+
+
 def validate_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, 
                   device: torch.device, use_amp: bool = False) -> Tuple[float, float, float]:
     """
@@ -364,6 +415,12 @@ def train_model(model: nn.Module, dataloaders: Dict[str, DataLoader],
 
         if verbose:
             print(f"Global threshold ({percentile*100:.1f}%): {global_thresholds[percentile]:.6f}")
+    elif loss_name == 'tweedie':
+        params = loss_params or {}
+        p = float(params.get('p', 1.5))
+        criterion = TweedieLoss(p=p)
+        if verbose:
+            print(f"Using Tweedie loss with p={p}")
     else:
         criterion = nn.MSELoss(reduction='mean')
     

@@ -7,6 +7,7 @@ Concatenates files with matching names along the time dimension.
 import xarray as xr
 from pathlib import Path
 import argparse
+import numpy as np
 
 
 def combine_matching_files(dir1: Path, dir2: Path, output_dir: Path):
@@ -48,16 +49,36 @@ def combine_matching_files(dir1: Path, dir2: Path, output_dir: Path):
         
         print(f"Combining {filename}...")
         try:
-            # Open via multi-file dataset and let xarray align by coordinates
-            # This mirrors: with xr.open_mfdataset(subset_files, combine='by_coords') as ds: ds.to_netcdf(...)
-            with xr.open_mfdataset([file1, file2], combine='by_coords') as ds:
-                # Sort by time to ensure chronological order if 'time' exists
-                if 'time' in ds.coords:
-                    ds = ds.sortby('time')
+            # Explicitly open each file and concatenate along a time-like dimension
+            with xr.open_dataset(file1) as ds1, xr.open_dataset(file2) as ds2:
+                # Prefer 'valid_time' if present, otherwise fall back to 'time'
+                time_dims1 = [d for d in ds1.dims if d in ("valid_time", "time")]
+                time_dims2 = [d for d in ds2.dims if d in ("valid_time", "time")]
+
+                if not time_dims1 or not time_dims2 or time_dims1[0] != time_dims2[0]:
+                    raise ValueError(
+                        f"Cannot determine common time dimension for {filename}: "
+                        f"dims1={list(ds1.dims)}, dims2={list(ds2.dims)}"
+                    )
+
+                time_dim = time_dims1[0]
+
+                ds = xr.concat([ds1, ds2], dim=time_dim)
+
+                # Sort along the time dimension to enforce monotonic order
+                if time_dim in ds.coords:
+                    ds = ds.sortby(time_dim)
+
+                    # Drop duplicate time indices, if any, to ensure strictly monotonic
+                    coord_values = ds[time_dim].values
+                    _, unique_indices = np.unique(coord_values, return_index=True)
+                    unique_indices = np.sort(unique_indices)
+                    ds = ds.isel({time_dim: unique_indices})
+
                 ds.to_netcdf(output_file)
-            
+
             print(f"  ✓ Saved to {output_file.name}")
-            
+
         except Exception as e:
             print(f"  ✗ Error combining {filename}: {e}")
     
@@ -71,19 +92,19 @@ def main():
     parser.add_argument(
         '--dir1',
         type=Path,
-        default=Path('raw_data/climate_variables_daily_processed'),
+        default=Path('raw_data/climate_variables_daily_FULL_2015-2019'),
         help='First directory with .nc files'
     )
     parser.add_argument(
         '--dir2',
         type=Path,
-        default=Path('raw_data/climate_variables_daily_1994-1994_concatenated'),
+        default=Path('raw_data/2020-2024'),
         help='Second directory with .nc files'
     )
     parser.add_argument(
         '--output',
         type=Path,
-        default=Path('raw_data/climate_variables_daily_FULL'),
+        default=Path('raw_data/climate_variables_daily_FULL_2020-2024'),
         help='Output directory for combined files'
     )
     

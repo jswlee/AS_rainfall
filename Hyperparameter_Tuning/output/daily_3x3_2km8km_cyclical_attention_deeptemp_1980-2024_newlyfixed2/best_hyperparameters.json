@@ -1,0 +1,19 @@
+{
+    "best_value": 0.8253850103437301,
+    "best_params": {
+        "climate_units": 1080,
+        "local_dem_units": 16,
+        "regional_dem_units": 24,
+        "temporal_units": 4,
+        "na": 256,
+        "nb": 160,
+        "dropout_rate": 0.35,
+        "learning_rate": 7.939900239532824e-05,
+        "weight_decay": 8.200518402245835e-06,
+        "batch_size": 256,
+        "use_residual": false,
+        "climate_activation": "relu",
+        "output_activation": "softplus",
+        "climate_processing": "flatten"
+    }
+}

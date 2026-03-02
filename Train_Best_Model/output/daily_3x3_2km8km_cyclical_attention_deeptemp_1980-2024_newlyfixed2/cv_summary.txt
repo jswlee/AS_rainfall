@@ -1,0 +1,12 @@
+Cross-Validation Summary
+==================================================
+
+n_folds: 5
+Criterion (loss_name): mse
+Fold best val losses (criterion): ['0.949137', '1.576026', '0.592209', '0.720797', '0.446672']
+Avg val loss (criterion): 0.856968 +/- 0.395606
+Fold val MSE (unweighted) at best epoch: ['0.949137', '1.576026', '0.592209', '0.720797', '0.446672']
+Avg val MSE (unweighted): 0.856968 +/- 0.395606
+Fold val R2: ['0.0710', '0.0673', '0.1835', '0.2491', '-0.3583']
+Avg val R2: 0.0425 +/- 0.2120
+Best fold index (0-based): 4

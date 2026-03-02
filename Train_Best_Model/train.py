@@ -16,7 +16,6 @@ import torch
 import numpy as np
 import random
 import argparse
-from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import r2_score
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -355,6 +354,16 @@ def train_best_model_pytorch(
             print("Warning: Using weighted_mse but no loss parameters provided and none found in tuning results")
             print("Consider providing --loss-params or re-running hyperparameter tuning with loss parameter optimization")
     
+    # Ensure model output activation is compatible with Tweedie loss.
+    # Tweedie requires strictly non-negative predictions, so enforce softplus.
+    if loss_name == 'tweedie':
+        prev_act = hyperparams.get('output_activation', None)
+        if prev_act != 'softplus':
+            print("\n[Safety] Tweedie loss selected -> forcing output_activation='softplus' ")
+            if prev_act is not None:
+                print(f"       (overriding tuned output_activation='{prev_act}')")
+            hyperparams['output_activation'] = 'softplus'
+    
     # ------------------------------------------------------------------
     # Main training loop
     # ------------------------------------------------------------------
@@ -375,45 +384,44 @@ def train_best_model_pytorch(
     cv_tensors, cv_indices = data_manager.get_cv_tensors()
     
     # ----------------------------------------------------------------
-    # Stratified Cross-Validation Setup with Custom val_size
+    # Temporal Cross-Validation Setup
     # ----------------------------------------------------------------
-    # Create stratification bins (same approach as tuner)
-    y = cv_tensors['targets'][cv_indices].cpu().numpy().ravel()
-    n_bins = 5
-    try:
-        edges = np.quantile(y[y > 0], np.linspace(0, 1, n_bins + 1))
-        edges = np.unique(edges)
-        if len(edges) < 2:
-            raise ValueError("Not enough unique quantile edges.")
-        y_bins = np.digitize(y, edges[1:-1])
-    except Exception as e:
-        print(f"Warning: stratification binning failed ({e}); falling back to single bin.")
-        y_bins = np.zeros_like(y, dtype=int)
+    years = getattr(data_manager, 'years', None)
+    months = getattr(data_manager, 'months', None)
+    days = getattr(data_manager, 'days', None)
+    if years is None or months is None:
+        raise ValueError("Temporal CV requires 'years' and 'months' arrays in the NPZ.")
 
-    # Proper cross-validation: use StratifiedKFold for non-overlapping folds
-    # Calculate n_folds needed to achieve desired val_size
-    # For val_size=0.1, we need n_folds=10 (each fold is 10% validation)
-    # For val_size=0.2, we need n_folds=5 (each fold is 20% validation)
-    
-    # If user specified n_folds, use it directly (standard CV)
-    # If user wants specific val_size, calculate required n_folds
-    if val_size is not None and val_size != (1.0 / n_folds):
-        # Calculate n_folds needed for desired val_size
-        calculated_n_folds = int(round(1.0 / val_size))
-        print(f"Note: To achieve val_size={val_size:.1%}, using {calculated_n_folds} folds instead of {n_folds}")
-        print(f"      (Each fold will have {1/calculated_n_folds:.1%} validation)")
-        n_folds = calculated_n_folds
-    
-    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    if days is not None:
+        group_all = (years.astype(np.int64) * 10000) + (months.astype(np.int64) * 100) + days.astype(np.int64)
+    else:
+        group_all = (years.astype(np.int64) * 100) + months.astype(np.int64)
+
+    group_cv = group_all[cv_indices]
+    unique_groups = np.unique(group_cv)
+    unique_groups.sort()
+
+    if len(unique_groups) <= n_folds:
+        raise ValueError(f"Not enough unique time groups ({len(unique_groups)}) for n_folds={n_folds}.")
+
+    # Forward-chaining / expanding-window temporal CV.
     cv_splits = []
-    
-    for train_fold_idx, val_fold_idx in skf.split(np.zeros_like(y_bins), y_bins):
-        train_original_indices = cv_indices[train_fold_idx]
-        val_original_indices = cv_indices[val_fold_idx]
+    total = len(unique_groups)
+    for i in range(n_folds):
+        train_end = int(((i + 1) * total) / (n_folds + 1))
+        val_end = int(((i + 2) * total) / (n_folds + 1))
+
+        train_groups = unique_groups[:train_end]
+        val_groups = unique_groups[train_end:val_end]
+
+        train_mask = np.isin(group_cv, train_groups)
+        val_mask = np.isin(group_cv, val_groups)
+
+        train_original_indices = cv_indices[train_mask]
+        val_original_indices = cv_indices[val_mask]
         cv_splits.append((train_original_indices, val_original_indices))
-    
-    actual_val_size = 1.0 / n_folds
-    print(f"Using {n_folds}-fold cross-validation (val_size={actual_val_size:.1%} per fold)")
+
+    print(f"Using {n_folds}-fold temporal cross-validation (train before val)")
 
     # ----------------------------------------------------------------
     # Cross-Validation Execution Loop
@@ -428,8 +436,9 @@ def train_best_model_pytorch(
         print(f"Fold {fold_idx+1}/{n_folds}: train={len(train_idx)} val={len(val_idx)}")
 
         # Create datasets using the shared tensors and indices
-        fold_train_ds = RainfallDataset(cv_tensors, train_idx)
-        fold_val_ds = RainfallDataset(cv_tensors, val_idx)
+        target_scale = getattr(data_manager, 'target_scale', None)
+        fold_train_ds = RainfallDataset(cv_tensors, train_idx, target_scale=target_scale)
+        fold_val_ds = RainfallDataset(cv_tensors, val_idx, target_scale=target_scale)
 
         fold_loaders = create_pytorch_dataloaders(
             {'train': fold_train_ds, 'val': fold_val_ds},
@@ -554,7 +563,27 @@ def train_best_model_pytorch(
         dataloader=test_loader,
         rainfall_std=rainfall_std
     )
-    
+
+    # ---------------------------------------------------------------
+    # Baseline evaluation: mean predictor on the test set
+    # ---------------------------------------------------------------
+    all_targets = []
+    with torch.no_grad():
+        for _, targets in test_loader:
+            all_targets.extend(targets.numpy().ravel())
+    if all_targets:
+        all_targets_arr = np.asarray(all_targets, dtype=np.float32)
+        mean_y = float(all_targets_arr.mean())
+        mean_pred = np.full_like(all_targets_arr, mean_y)
+        mse_baseline = float(np.mean((all_targets_arr - mean_pred) ** 2))
+        var_y = float(np.var(all_targets_arr))
+        r2_baseline = 1.0 - (mse_baseline / var_y) if var_y > 0.0 else float('nan')
+
+        test_metrics['baseline_mean_mse'] = mse_baseline
+        test_metrics['baseline_mean_r2'] = r2_baseline
+        if rainfall_std is not None and rainfall_std > 0:
+            test_metrics['baseline_mean_rmse_mm'] = float(np.sqrt(mse_baseline) * rainfall_std)
+
     print(f"Test Results:")
     print(f"  R²: {test_metrics['r2']:.4f}")
     print(f"  RMSE: {test_metrics['rmse']:.6f}")
@@ -566,6 +595,14 @@ def train_best_model_pytorch(
     else:
         print(f"  RMSE (inches): {test_metrics['rmse'] * 100:.4f}")
         print(f"  MAE (inches): {test_metrics['mae'] * 100:.4f}")
+
+    if 'baseline_mean_mse' in test_metrics:
+        print("  Baseline (mean predictor):")
+        print(f"    MSE: {test_metrics['baseline_mean_mse']:.6f}")
+        if not np.isnan(test_metrics['baseline_mean_r2']):
+            print(f"    R²: {test_metrics['baseline_mean_r2']:.4f}")
+        if 'baseline_mean_rmse_mm' in test_metrics:
+            print(f"    RMSE (mm): {test_metrics['baseline_mean_rmse_mm']:.4f}")
     
     # ================================================================
     # Results Saving and Visualization
@@ -671,9 +708,9 @@ def train_best_model_pytorch(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train best LAND model (PyTorch) with tuned hyperparameters")
     parser.add_argument("--npz-path", default="ML_Data_Preprocessing/output/assembled_npz/full_training_data_daily_3x3_2km8km_cyclical.npz", help="Path to assembled NPZ data file")
-    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2", help="Directory containing best_hyperparameters.json or Optuna DB")
-    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2", help="Directory to write training outputs")
-    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999_2 /test_indices.pkl", help="Path to test indices file for reproducibility")
+    parser.add_argument("--hyperparams-dir", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-2024_newlyfixed2", help="Directory containing best_hyperparameters.json or Optuna DB")
+    parser.add_argument("--output-dir", default="Train_Best_Model/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-2024_newlyfixed2", help="Directory to write training outputs")
+    parser.add_argument("--test-indices-path", default="Hyperparameter_Tuning/output/daily_3x3_2km8km_cyclical_attention_deeptemp_1980-2024_newlyfixed2/test_indices.pkl", help="Path to test indices file for reproducibility")
 
     parser.add_argument("--epochs", type=int, default=200, help="Maximum training epochs")
     parser.add_argument("--patience", type=int, default=40, help="Patience for early stopping")
@@ -681,7 +718,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-save-model", dest="save_model", action="store_false", help="Do not save model")
     parser.set_defaults(save_model=True)
 
-    parser.add_argument("--loss-name", type=str, default="mse", choices=["mse", "weighted_mse"], help="Training loss name")
+    parser.add_argument("--loss-name", type=str, default="mse", choices=["mse", "weighted_mse", "tweedie"], help="Training loss name")
     parser.add_argument("--loss-params", type=str, default=None)
     # parser.add_argument("--loss-params", type=str, default='{"alpha": 2.0, "power": 1.5, "percentile": 0.90}', help="JSON string of loss params, e.g. '{\"alpha\": 5, \"power\": 4, \"percentile\": 0.9}'")
 

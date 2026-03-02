@@ -1,0 +1,90 @@
+{
+    "climate_units": {
+        "type": "int",
+        "low": 1260,
+        "high": 1500,
+        "step": 15
+    },
+    "local_dem_units": {
+        "type": "int",
+        "low": 16,
+        "high": 128,
+        "step": 16
+    },
+    "regional_dem_units": {
+        "type": "int",
+        "low": 8,
+        "high": 64,
+        "step": 8
+    },
+    "temporal_units": {
+        "type": "int",
+        "low": 4,
+        "high": 16,
+        "step": 4
+    },
+    "na": {
+        "type": "int",
+        "low": 3000,
+        "high": 5120,
+        "step": 128
+    },
+    "nb": {
+        "type": "int",
+        "low": 128,
+        "high": 256,
+        "step": 16
+    },
+    "dropout_rate": {
+        "type": "float",
+        "low": 0.3,
+        "high": 0.4,
+        "step": 0.05
+    },
+    "learning_rate": {
+        "type": "float",
+        "low": 1e-05,
+        "high": 0.0001,
+        "log": true
+    },
+    "weight_decay": {
+        "type": "float",
+        "low": 8e-06,
+        "high": 0.0001,
+        "log": true
+    },
+    "batch_size": {
+        "type": "categorical",
+        "choices": [
+            64,
+            128,
+            256
+        ]
+    },
+    "use_residual": {
+        "type": "categorical",
+        "choices": [
+            true,
+            false
+        ]
+    },
+    "climate_activation": {
+        "type": "categorical",
+        "choices": [
+            "relu"
+        ]
+    },
+    "output_activation": {
+        "type": "categorical",
+        "choices": [
+            "relu",
+            "softplus"
+        ]
+    },
+    "climate_processing": {
+        "type": "categorical",
+        "choices": [
+            "conv2d"
+        ]
+    }
+}

@@ -191,7 +191,7 @@ def save_csv(trials: List[Dict[str, Any]], path: str) -> None:
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Query Optuna Postgres for top-N trials and their parameters")
     parser.add_argument("--db-url", default="postgresql+psycopg2://postgres:mysecretpassword@localhost:5432/optuna_daily", help="SQLAlchemy DB URL")
-    parser.add_argument("--study-name", default="daily_3x3_2km8km_cyclical_attention_deeptemp_1980-1999", help="Optuna study name (alternative to --study-id)")
+    parser.add_argument("--study-name", default="daily_3x3_2km8km_cyclical_attention_deeptemp_1980-2024_4", help="Optuna study name (alternative to --study-id)")
     parser.add_argument("--study-id", type=int, help="Optuna study id (alternative to --study-name)")
     parser.add_argument("--top-n", type=int, default=10, help="Number of top trials to return")
     parser.add_argument("--objective-index", type=int, default=0, help="Objective index (0 for single-objective)")

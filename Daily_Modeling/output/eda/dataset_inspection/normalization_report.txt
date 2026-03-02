@@ -1,0 +1,63 @@
+
+======================================================================
+  NORMALIZATION REPORT - Feature Statistics After Normalisation
+======================================================================
+
+  Climate reanalysis: shape=(60582, 13, 3, 3)
+  Channel                                 mean      std        min        max    NaN%
+  ----------------------------------- -------- -------- ---------- ---------- -------
+  air_temp_diff_1000_500                0.1112   1.0197     -5.846      5.741   0.00%
+  air_2m                                0.2004   1.0269     -4.533      4.002   0.00%
+  hgt_500                               0.1713   1.0352    -21.221      3.544   0.00%
+  omega_500                             0.0039   1.0527    -28.092      4.240   0.00%
+  pr_wtr                                0.0482   0.9872     -3.445      3.478   0.00%
+  shum_750                              0.0436   0.9854     -3.037      3.290   0.00%
+  shum_925                              0.0341   0.9550     -6.082      3.976   0.00%
+  zon_moist_750                        -0.0496   1.0181     -3.667     12.663   0.00%
+  zon_moist_925                        -0.0209   1.0184     -3.655      9.043   0.00%
+  merid_moist_750                      -0.0148   1.0013    -17.380     12.257   0.00%
+  merid_moist_925                      -0.0451   0.9958    -13.720      9.609   0.00%
+  skin_temp                             0.2344   0.9995     -3.012      3.447   0.00%
+  slp                                   0.0417   0.9975    -23.057      2.845   0.00%
+
+  Climate normalisation params (train-only):
+    air_temp_diff_1000_500              mean=     30.8583  std=      1.0544
+    air_2m                              mean=    299.7078  std=      0.7332
+    hgt_500                             mean=  57476.1914  std=    171.6146
+    omega_500                           mean=     -0.0269  std=      0.1097
+    pr_wtr                              mean=     46.8161  std=      9.0566
+    shum_750                            mean=      0.0075  std=      0.0025
+    shum_925                            mean=      0.0147  std=      0.0013
+    zon_moist_750                       mean=     -0.0131  std=      0.0366
+    zon_moist_925                       mean=     -0.0656  std=      0.0655
+    merid_moist_750                     mean=     -0.0117  std=      0.0244
+    merid_moist_925                     mean=     -0.0009  std=      0.0499
+    skin_temp                           mean=    301.3769  std=      0.7785
+    slp                                 mean= 101071.9844  std=    238.6278
+
+  local_dem: shape=(60582, 11, 11)
+    After norm:  mean=-0.0344  std=0.9935  min=-0.958  max=4.643  NaN=0.00%
+    Norm params: mean=99.5788  std=104.9740
+
+  regional_dem: shape=(60582, 25, 25)
+    After norm:  mean=-0.0123  std=0.9874  min=-0.548  max=6.633  NaN=0.00%
+    Norm params: mean=42.3257  std=82.1197
+
+  temporal: shape=(60582, 12)
+    min=0.0000  max=1.0000  (not normalised, one-hot)
+
+  targets (raw mm): shape=(60582,)
+    mean=10.7361  std=22.1094  min=0.0000  max=467.3600
+    Train-only std (divisor for target normalisation): 24.0375 mm
+
+  Per-split target statistics (raw mm):
+  Split                 N     mean      std      min      max   %zero
+  --------------- ------- -------- -------- -------- -------- -------
+  train             31962    11.06    24.04     0.00   467.36   46.4%
+  val_spatial        3648    10.08    19.03     0.00   205.74   35.2%
+  test_spatial       7186     9.62    18.03     0.00   287.78   26.4%
+  val_temporal       4378    13.51    24.36     0.00   251.46   31.4%
+  test_temporal      7459    10.19    18.60     0.00   208.03   24.9%
+
+======================================================================
+

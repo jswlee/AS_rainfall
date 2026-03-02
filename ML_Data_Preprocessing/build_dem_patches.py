@@ -12,7 +12,7 @@ from rasterio.transform import rowcol, xy
 from scipy.ndimage import zoom
 
 from . import config
-from .utils import haversine, visualize_patches, discover_station_months, discover_station_days, visualize_grid
+from .utils import haversine, discover_station_months, discover_station_days, visualize_grid
 from .extract_station_metadata import get_station_metadata
 
 
@@ -189,7 +189,6 @@ class DEMPatchBuilder:
             pre_resize = patch
             # Bilinear interpolation result
             patch_interpolated = zoom(pre_resize, zoom_factor, order=1)  # order=1 is bilinear interpolation
-            print(f"Interpolated DEM (shape {patch_interpolated.shape}):\n{patch_interpolated}")
             
             # Compute block-mean from the pre-resize patch using edge padding to ensure divisibility
             # We need the pre-resize array shape to be exactly divisible by patch_size in both dims
@@ -209,7 +208,6 @@ class DEMPatchBuilder:
                 # Edge padding replicates border values, avoiding artificial gradients or zeros that
                 # would bias the block averages near edges.
                 patch_padded = np.pad(pre_resize, ((top, bottom), (left, right)), mode='edge')
-                print(f"Applied edge padding for block-mean: top={top}, bottom={bottom}, left={left}, right={right}")
             else:
                 patch_padded = pre_resize
             # Now divisible; compute block sizes
@@ -220,7 +218,6 @@ class DEMPatchBuilder:
             patch_block = patch_padded.reshape(patch_size, bh, patch_size, bw)
             patch_avg = patch_block.mean(axis=(1, 3))
             patch_avg = self._clean_dem_data(patch_avg)
-            print(f"Block-mean averaged DEM (shape {patch_avg.shape}):\n{patch_avg}")
 
             # Continue with the interpolated patch as the function output path
             patch = patch_interpolated
@@ -531,6 +528,72 @@ class DEMPatchBuilder:
         )
         return save_path
 
+    def export_all_dem_npz_raw(self, dem_patches, station_time_map, out_dir,
+                               filename: str = "dem_patches_all_raw_monthly.npz",
+                               time_interval: str = "monthly"):
+        os.makedirs(out_dir, exist_ok=True)
+        if not dem_patches:
+            print("No DEM patches provided.")
+            return None
+
+        entries_local = []
+        entries_regional = []
+        stations = []
+        years = []
+        months = []
+        days = []
+
+        for station_name, pairs in station_time_map.items():
+            if station_name not in dem_patches:
+                continue
+
+            raw_local = np.asarray(dem_patches[station_name]['local'], dtype=np.float32)
+            raw_reg = np.asarray(dem_patches[station_name]['regional'], dtype=np.float32)
+
+            if time_interval == "daily":
+                for (y, m, d) in pairs:
+                    entries_local.append(raw_local[np.newaxis, ...])
+                    entries_regional.append(raw_reg[np.newaxis, ...])
+                    stations.append(station_name)
+                    years.append(int(y))
+                    months.append(int(m))
+                    days.append(int(d))
+            else:
+                for (y, m) in pairs:
+                    entries_local.append(raw_local[np.newaxis, ...])
+                    entries_regional.append(raw_reg[np.newaxis, ...])
+                    stations.append(station_name)
+                    years.append(int(y))
+                    months.append(int(m))
+
+        if not entries_local:
+            print("No raw DEM entries to export.")
+            return None
+
+        local_arr = np.concatenate(entries_local, axis=0).astype(np.float32)
+        regional_arr = np.concatenate(entries_regional, axis=0).astype(np.float32)
+
+        stations_arr = np.array(stations, dtype=object)
+        years_arr = np.array(years, dtype=np.int32)
+        months_arr = np.array(months, dtype=np.int32)
+
+        save_path = os.path.join(out_dir, filename)
+
+        save_dict = {
+            'dem_local_raw': local_arr,
+            'dem_regional_raw': regional_arr,
+            'stations': stations_arr,
+            'years': years_arr,
+            'months': months_arr,
+            'local_patch_size': np.array(config.DEM_PATCH_CONFIG['local']['patch_size']),
+            'regional_patch_size': np.array(config.DEM_PATCH_CONFIG['regional']['patch_size']),
+        }
+        if time_interval == "daily":
+            save_dict['days'] = np.array(days, dtype=np.int32)
+
+        np.savez_compressed(save_path, **save_dict)
+        return save_path
+
     def visualize_patches(self, dem_patches, station_name, output_dir=None):
         """
         Visualize Digital Elevation Model (DEM) patches for a specific rainfall station.
@@ -601,14 +664,14 @@ def main(time_interval: str = "monthly"):
     # Monthly: (year, month) pairs; Daily: (year, month, day) tuples
     if time_interval == "daily":
         station_time_map = discover_station_days(station_metadata)
-        out_filename = "dem_patches_all_standardized_daily.npz"
+        out_filename = "dem_patches_all_raw_daily.npz"
     else:
         station_time_map = discover_station_months(station_metadata)
-        out_filename = "dem_patches_all_standardized_monthly.npz"
+        out_filename = "dem_patches_all_raw_monthly.npz"
 
-    # Export standardized DEM patches for each station-time combination
+    # Export raw DEM patches for each station-time combination
     out_dir = os.path.join(str(config.OUTPUT_DIR), "dem_npz")
-    save_path = dem_builder.export_all_dem_npz_standardized(
+    save_path = dem_builder.export_all_dem_npz_raw(
         dem_patches,
         station_time_map,
         out_dir,
@@ -616,18 +679,18 @@ def main(time_interval: str = "monthly"):
         time_interval=time_interval,
     )
     if save_path:
-        print(f"Saved standardized DEM patches for all rainfall stations to {save_path}")
+        print(f"Saved raw DEM patches for all rainfall stations to {save_path}")
 
     # Visualize DEM patches for a sample rainfall station to verify the extraction worked correctly
     try:
         if save_path:
-            # Load the standardized DEM patches from the saved NPZ file
+            # Load the DEM patches from the saved NPZ file
             npz = np.load(save_path, allow_pickle=True)
             
             # Extract station names and corresponding DEM patches
             stations = npz['stations']  # Array of station names
-            dem_local_minmax = npz['dem_local_minmax']  # Local DEM patches (min-max normalized)
-            dem_regional_minmax = npz['dem_regional_minmax']  # Regional DEM patches (min-max normalized)
+            dem_local_raw = npz['dem_local_raw'] if 'dem_local_raw' in npz.files else npz['dem_local_minmax']
+            dem_regional_raw = npz['dem_regional_raw'] if 'dem_regional_raw' in npz.files else npz['dem_regional_minmax']
             
             # Create a visualization for the first station in the dataset
             if len(stations) > 0:
@@ -637,8 +700,8 @@ def main(time_interval: str = "monthly"):
                 # Create a patches dictionary in the format expected by visualize_patches
                 sample_patches = {
                     sample_station: {
-                        'local': dem_local_minmax[idx],      # Local patch for this station
-                        'regional': dem_regional_minmax[idx],  # Regional patch for this station
+                        'local': dem_local_raw[idx],
+                        'regional': dem_regional_raw[idx],
                     }
                 }
                 

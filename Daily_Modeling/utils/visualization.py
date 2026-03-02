@@ -1,0 +1,1054 @@
+"""
+Visualization helpers: EDA plots, training curves, scatter plots, station maps.
+"""
+
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# ===================================================================
+# EDA plots
+# ===================================================================
+
+def plot_rainfall_histograms(
+    rain_mm: np.ndarray,
+    split_indices: Dict[str, np.ndarray],
+    save_path: Optional[Path] = None,
+):
+    """Histograms of raw rainfall per split (linear + log1p)."""
+    fig, axes = plt.subplots(2, len(split_indices), figsize=(5 * len(split_indices), 8),
+                             squeeze=False, sharey="row")
+    bins_lin = np.linspace(0, np.nanquantile(rain_mm, 0.995), 60)
+    bins_log = np.linspace(0, np.nanquantile(np.log1p(rain_mm), 0.995), 60)
+
+    for col, (name, idx) in enumerate(split_indices.items()):
+        y = rain_mm[idx]
+        axes[0, col].hist(y, bins=bins_lin, alpha=0.8, color="steelblue")
+        axes[0, col].set_title(f"{name} rainfall (mm)")
+        axes[0, col].set_xlabel("mm")
+        axes[0, col].grid(alpha=0.3)
+
+        axes[1, col].hist(np.log1p(y), bins=bins_log, alpha=0.8, color="coral")
+        axes[1, col].set_title(f"{name} log1p(rain)")
+        axes[1, col].set_xlabel("log(1+mm)")
+        axes[1, col].grid(alpha=0.3)
+
+    axes[0, 0].set_ylabel("count")
+    axes[1, 0].set_ylabel("count")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_monthly_seasonality(
+    rain_mm: np.ndarray,
+    months: np.ndarray,
+    split_indices: Dict[str, np.ndarray],
+    save_path: Optional[Path] = None,
+):
+    """Mean rainfall by month across splits."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for name, idx in split_indices.items():
+        import pandas as pd
+        df = pd.DataFrame({"month": months[idx], "rain": rain_mm[idx]})
+        m = df.groupby("month")["rain"].mean().reindex(range(1, 13))
+        ax.plot(m.index, m.values, marker="o", label=name)
+    ax.set_xticks(range(1, 13))
+    ax.set_title("Mean daily rainfall by month (mm)")
+    ax.set_xlabel("Month")
+    ax.set_ylabel("Mean mm")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_station_sample_counts(
+    stations: np.ndarray,
+    split_indices: Dict[str, np.ndarray],
+    save_path: Optional[Path] = None,
+):
+    """Bar chart of sample counts per station per split."""
+    import pandas as pd
+    rows = []
+    for name, idx in split_indices.items():
+        for st in np.unique(stations[idx]):
+            rows.append({"station": str(st), "split": name, "count": int((stations[idx] == st).sum())})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(14, 5))
+    pivot = df.pivot_table(index="station", columns="split", values="count", fill_value=0)
+    pivot.plot.bar(ax=ax, stacked=True)
+    ax.set_title("Samples per station by split")
+    ax.set_ylabel("Count")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_per_station_histograms(
+    rain_mm: np.ndarray,
+    stations: np.ndarray,
+    save_dir: Optional[Path] = None,
+):
+    """One histogram per station, saved as individual PNGs."""
+    if save_dir:
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+    unique = np.unique(stations)
+    for st in unique:
+        mask = stations == st
+        y = rain_mm[mask]
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.hist(y, bins=50, alpha=0.8, color="steelblue")
+        ax.set_title(f"{st} - daily rainfall (N={len(y)})")
+        ax.set_xlabel("mm")
+        ax.set_ylabel("count")
+        ax.grid(alpha=0.3)
+        plt.tight_layout()
+        if save_dir:
+            fig.savefig(save_dir / f"hist_{st}.png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+
+
+# ===================================================================
+# Training plots
+# ===================================================================
+
+def plot_training_history(
+    history: Dict[str, list],
+    title: str = "Training History",
+    save_path: Optional[Path] = None,
+):
+    """Plot train vs val loss curves."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(history["train_loss"], label="Train")
+    ax.plot(history["val_loss"], label="Val")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+# ===================================================================
+# Result plots
+# ===================================================================
+
+def plot_scatter(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    title: str = "Predicted vs Observed",
+    units: str = "mm",
+    save_path: Optional[Path] = None,
+):
+    """Scatter plot with 1:1 line and density colouring."""
+    fig, ax = plt.subplots(figsize=(6, 6))
+    yt = np.asarray(y_true).ravel()
+    yp = np.asarray(y_pred).ravel()
+    mask = np.isfinite(yt) & np.isfinite(yp)
+    yt, yp = yt[mask], yp[mask]
+    if len(yt) == 0:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        if save_path:
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+        return fig
+
+    ax.scatter(yt, yp, s=4, alpha=0.3, rasterized=True)
+    lo = min(yt.min(), yp.min(), 0)
+    hi = max(yt.max(), yp.max())
+    ax.plot([lo, hi], [lo, hi], "r--", lw=1, label="1:1")
+    ax.set_xlabel(f"Observed ({units})")
+    ax.set_ylabel(f"Predicted ({units})")
+    ax.set_title(title)
+    ax.legend()
+    ax.set_aspect("equal", "box")
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_model_comparison_table(
+    results: Dict[str, Dict[str, float]],
+    save_path: Optional[Path] = None,
+):
+    """Render a metrics comparison table as a matplotlib figure."""
+    import pandas as pd
+    df = pd.DataFrame(results).T
+    fig, ax = plt.subplots(figsize=(10, max(2, 0.5 * len(df))))
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=df.round(4).values,
+        colLabels=df.columns,
+        rowLabels=df.index,
+        loc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.auto_set_column_width(list(range(len(df.columns))))
+    ax.set_title("Model Comparison", fontsize=12, pad=20)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+# ===================================================================
+# Dataset inspection / audit plots
+# ===================================================================
+
+def plot_sample_dem_patches(
+    local_dem: np.ndarray,
+    regional_dem: np.ndarray,
+    stations: np.ndarray,
+    sample_indices: Optional[Sequence[int]] = None,
+    n_samples: int = 6,
+    save_path: Optional[Path] = None,
+):
+    """Visualise local and regional DEM patches for a handful of samples.
+
+    Picks *n_samples* evenly spaced across unique stations if *sample_indices*
+    is not given.
+    """
+    if sample_indices is None:
+        unique_st = np.unique(stations)
+        pick_st = unique_st[np.linspace(0, len(unique_st) - 1, min(n_samples, len(unique_st)), dtype=int)]
+        sample_indices = [int(np.where(stations == s)[0][0]) for s in pick_st]
+
+    n = len(sample_indices)
+    fig, axes = plt.subplots(2, n, figsize=(3.2 * n, 6), squeeze=False)
+    for col, idx in enumerate(sample_indices):
+        ld = local_dem[idx]
+        rd = regional_dem[idx]
+        st = str(stations[idx])
+
+        im0 = axes[0, col].imshow(ld, cmap="terrain", interpolation="nearest")
+        axes[0, col].set_title(f"Local DEM\n{st} [#{idx}]", fontsize=8)
+        plt.colorbar(im0, ax=axes[0, col], fraction=0.046, pad=0.04)
+
+        im1 = axes[1, col].imshow(rd, cmap="terrain", interpolation="nearest")
+        axes[1, col].set_title(f"Regional DEM\n{st} [#{idx}]", fontsize=8)
+        plt.colorbar(im1, ax=axes[1, col], fraction=0.046, pad=0.04)
+
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.set_xticks([])
+            ax.set_yticks([])
+    fig.suptitle("Sample DEM Patches (raw, metres)", fontsize=12)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_sample_reanalysis_patches(
+    reanalysis: np.ndarray,
+    variable_names: Sequence[str],
+    stations: np.ndarray,
+    sample_idx: int = 0,
+    save_path: Optional[Path] = None,
+):
+    """Plot all reanalysis channels for a single sample as a grid of 3x3 heatmaps."""
+    n_vars = reanalysis.shape[1]
+    ncols = 5
+    nrows = int(np.ceil(n_vars / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.2 * ncols, 3 * nrows), squeeze=False)
+    st = str(stations[sample_idx])
+
+    for i in range(nrows * ncols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+        if i < n_vars:
+            patch = reanalysis[sample_idx, i]
+            vname = variable_names[i] if i < len(variable_names) else f"ch{i}"
+            im = ax.imshow(patch, cmap="coolwarm", interpolation="nearest")
+            ax.set_title(f"{vname}\n[{patch.min():.1f}, {patch.max():.1f}]", fontsize=7)
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        else:
+            ax.axis("off")
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    fig.suptitle(f"Reanalysis patch - station {st}  (sample #{sample_idx})", fontsize=11)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_nan_audit(
+    arrays: Dict[str, np.ndarray],
+    save_path: Optional[Path] = None,
+):
+    """Bar chart showing NaN fraction per feature group."""
+    names, fracs, counts, totals = [], [], [], []
+    for name, arr in arrays.items():
+        flat = arr.astype(np.float32).ravel()
+        n_nan = int(np.isnan(flat).sum())
+        total = len(flat)
+        names.append(name)
+        counts.append(n_nan)
+        totals.append(total)
+        fracs.append(100.0 * n_nan / total if total > 0 else 0)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    bars = ax.barh(names, fracs, color="salmon")
+    for bar, cnt, tot in zip(bars, counts, totals):
+        ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                f"{cnt:,} / {tot:,}", va="center", fontsize=8)
+    ax.set_xlabel("NaN fraction (%)")
+    ax.set_title("NaN Audit - Raw Features")
+    ax.grid(alpha=0.3, axis="x")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_feature_distributions(
+    arrays: Dict[str, np.ndarray],
+    save_path: Optional[Path] = None,
+    tag: str = "raw",
+):
+    """Histograms of each feature group's value distribution (ignoring NaN)."""
+    n = len(arrays)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 4), squeeze=False)
+    for col, (name, arr) in enumerate(arrays.items()):
+        ax = axes[0][col]
+        flat = arr.astype(np.float32).ravel()
+        valid = flat[np.isfinite(flat)]
+        if len(valid) == 0:
+            ax.text(0.5, 0.5, "All NaN", ha="center", va="center", transform=ax.transAxes)
+        else:
+            lo, hi = np.percentile(valid, [0.5, 99.5])
+            ax.hist(valid, bins=80, range=(lo, hi), alpha=0.8, color="steelblue")
+            ax.axvline(valid.mean(), color="red", ls="--", lw=1, label=f"mean={valid.mean():.2f}")
+            ax.legend(fontsize=7)
+        ax.set_title(f"{name} ({tag})", fontsize=9)
+        ax.set_xlabel("value")
+        ax.grid(alpha=0.3)
+    axes[0][0].set_ylabel("count")
+    fig.suptitle(f"Feature Distributions - {tag}", fontsize=12)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_reanalysis_channel_distributions(
+    reanalysis: np.ndarray,
+    variable_names: Sequence[str],
+    save_path: Optional[Path] = None,
+    tag: str = "raw",
+):
+    """Per-channel histograms for all reanalysis variables."""
+    n_vars = reanalysis.shape[1]
+    ncols = 5
+    nrows = int(np.ceil(n_vars / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
+
+    for i in range(nrows * ncols):
+        r, c = divmod(i, ncols)
+        ax = axes[r][c]
+        if i < n_vars:
+            vals = reanalysis[:, i].ravel()
+            valid = vals[np.isfinite(vals)]
+            vname = variable_names[i] if i < len(variable_names) else f"ch{i}"
+            if len(valid) > 0:
+                lo, hi = np.percentile(valid, [0.5, 99.5])
+                ax.hist(valid, bins=60, range=(lo, hi), alpha=0.8, color="teal")
+                ax.set_title(f"{vname}\nmean={valid.mean():.2f} std={valid.std():.2f}", fontsize=7)
+            else:
+                ax.text(0.5, 0.5, "All NaN", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(vname, fontsize=7)
+        else:
+            ax.axis("off")
+        ax.tick_params(labelsize=6)
+        ax.grid(alpha=0.3)
+
+    fig.suptitle(f"Reanalysis Channel Distributions - {tag}", fontsize=11)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_reanalysis_correlation(
+    reanalysis: np.ndarray,
+    variable_names: Sequence[str],
+    save_path: Optional[Path] = None,
+    tag: str = "raw",
+):
+    """Correlation heatmap across reanalysis channels (sampled for speed)."""
+    n = reanalysis.shape[0]
+    idx = np.random.RandomState(42).choice(n, min(n, 5000), replace=False)
+    flat = reanalysis[idx].reshape(len(idx), reanalysis.shape[1], -1).mean(axis=-1)
+    vnames = [variable_names[i] if i < len(variable_names) else f"ch{i}" for i in range(flat.shape[1])]
+    corr = np.corrcoef(flat.T)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    im = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1, interpolation="nearest")
+    ax.set_xticks(range(len(vnames)))
+    ax.set_xticklabels(vnames, rotation=45, ha="right", fontsize=7)
+    ax.set_yticks(range(len(vnames)))
+    ax.set_yticklabels(vnames, fontsize=7)
+    for i in range(len(vnames)):
+        for j in range(len(vnames)):
+            ax.text(j, i, f"{corr[i, j]:.2f}", ha="center", va="center", fontsize=6,
+                    color="white" if abs(corr[i, j]) > 0.6 else "black")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_title(f"Reanalysis Channel Correlation - {tag}", fontsize=11)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_normalization_comparison(
+    raw_arrays: Dict[str, np.ndarray],
+    norm_arrays: Dict[str, np.ndarray],
+    save_path: Optional[Path] = None,
+):
+    """Side-by-side histograms of raw vs normalised features."""
+    keys = list(raw_arrays.keys())
+    n = len(keys)
+    fig, axes = plt.subplots(2, n, figsize=(5 * n, 7), squeeze=False)
+    for col, key in enumerate(keys):
+        for row, (arr, label) in enumerate([(raw_arrays[key], "raw"), (norm_arrays[key], "normalised")]):
+            ax = axes[row][col]
+            flat = arr.astype(np.float32).ravel()
+            valid = flat[np.isfinite(flat)]
+            if len(valid) > 0:
+                lo, hi = np.percentile(valid, [0.5, 99.5])
+                ax.hist(valid, bins=80, range=(lo, hi), alpha=0.8,
+                        color="steelblue" if label == "raw" else "coral")
+                ax.axvline(valid.mean(), color="black", ls="--", lw=1, label=f"mean={valid.mean():.3f}")
+                ax.axvline(valid.mean() + valid.std(), color="gray", ls=":", lw=1, label=f"std={valid.std():.3f}")
+                ax.axvline(valid.mean() - valid.std(), color="gray", ls=":", lw=1)
+                ax.legend(fontsize=6)
+            ax.set_title(f"{key} ({label})", fontsize=9)
+            ax.grid(alpha=0.3)
+    fig.suptitle("Feature Distributions - Raw vs Normalised", fontsize=12)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_per_station_dem_summary(
+    local_dem: np.ndarray,
+    regional_dem: np.ndarray,
+    stations: np.ndarray,
+    save_path: Optional[Path] = None,
+):
+    """Box plots of DEM elevation per station (centre pixel)."""
+    import pandas as pd
+    rows = []
+    for st in np.unique(stations):
+        mask = stations == st
+        # Centre pixel of the 3x3 patch
+        ld_center = local_dem[mask, 1, 1] if local_dem.ndim == 3 else local_dem[mask].ravel()
+        rd_center = regional_dem[mask, 1, 1] if regional_dem.ndim == 3 else regional_dem[mask].ravel()
+        ld_val = float(np.nanmean(ld_center))
+        rd_val = float(np.nanmean(rd_center))
+        rows.append({"station": str(st), "local_dem_centre": ld_val, "regional_dem_centre": rd_val})
+    df = pd.DataFrame(rows).sort_values("local_dem_centre")
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for ax, col, colour in zip(axes, ["local_dem_centre", "regional_dem_centre"], ["teal", "coral"]):
+        ax.barh(df["station"], df[col], color=colour, alpha=0.8)
+        ax.set_xlabel("Elevation (m)")
+        ax.set_title(col.replace("_", " ").title())
+        ax.grid(alpha=0.3, axis="x")
+    fig.suptitle("Mean Centre-Pixel DEM by Station", fontsize=12)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+# ===================================================================
+# Enhanced EDA plots (spatial, correlation, autocorrelation, lay-person)
+# ===================================================================
+
+def plot_station_map(
+    station_metadata: dict,
+    station_groups: Optional[Dict[str, str]] = None,
+    save_path: Optional[Path] = None,
+):
+    """Map of American Samoa showing station locations coloured by train/val/test role.
+
+    *station_metadata*: {name: {latitude, longitude, ...}}
+    *station_groups*:   {name: 'train'|'val'|'test'} (optional colour coding)
+    """
+    role_colours = {"train": "steelblue", "val": "orange", "test": "crimson"}
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    for sname, info in station_metadata.items():
+        lat = info.get("latitude", info.get("lat", None))
+        lon = info.get("longitude", info.get("lon", None))
+        if lat is None or lon is None:
+            continue
+        role = station_groups.get(sname, "train") if station_groups else "train"
+        colour = role_colours.get(role, "gray")
+        ax.scatter(lon, lat, c=colour, s=80, edgecolors="black", linewidths=0.5, zorder=5)
+        ax.annotate(sname, (lon, lat), fontsize=6, xytext=(4, 4),
+                    textcoords="offset points", zorder=6)
+
+    # Legend
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0], [0], marker='o', color='w', markerfacecolor=c,
+                       markersize=8, label=r) for r, c in role_colours.items()
+               if station_groups is None or r in set(station_groups.values())]
+    ax.legend(handles=handles, loc="upper left", fontsize=9)
+
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title("Station Locations — American Samoa", fontsize=13)
+    ax.grid(alpha=0.3)
+    ax.set_aspect("equal")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_reanalysis_rainfall_correlation(
+    climate: np.ndarray,
+    rain_mm: np.ndarray,
+    variable_names: Sequence[str],
+    save_path: Optional[Path] = None,
+):
+    """Bar chart of Pearson correlation between each reanalysis channel mean and rainfall."""
+    # Spatially average each channel: (N, C, H, W) -> (N, C)
+    if climate.ndim == 4:
+        ch_means = np.nanmean(climate, axis=(2, 3))
+    else:
+        ch_means = climate
+
+    n_vars = ch_means.shape[1]
+    corrs = []
+    for ci in range(n_vars):
+        valid = np.isfinite(ch_means[:, ci]) & np.isfinite(rain_mm)
+        if valid.sum() < 10:
+            corrs.append(0.0)
+        else:
+            corrs.append(float(np.corrcoef(ch_means[valid, ci], rain_mm[valid])[0, 1]))
+
+    vnames = [variable_names[i] if i < len(variable_names) else f"ch{i}" for i in range(n_vars)]
+    order = np.argsort(np.abs(corrs))[::-1]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    colours = ["#e74c3c" if c > 0 else "#3498db" for c in np.array(corrs)[order]]
+    ax.barh([vnames[i] for i in order], [corrs[i] for i in order], color=colours, alpha=0.85)
+    ax.axvline(0, color="black", lw=0.8)
+    ax.set_xlabel("Pearson Correlation with Rainfall")
+    ax.set_title("Reanalysis Variable — Rainfall Correlation\n(spatially-averaged channel means)", fontsize=11)
+    ax.grid(alpha=0.3, axis="x")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_temporal_autocorrelation(
+    rain_mm: np.ndarray,
+    stations: np.ndarray,
+    max_lag: int = 14,
+    save_path: Optional[Path] = None,
+):
+    """Per-station lag-1…max_lag autocorrelation of daily rainfall.
+
+    Shows how much temporal dependence exists — relevant for deciding
+    whether to add temporal context to models.
+    """
+    import pandas as pd
+    unique_st = np.unique(stations)
+    all_acf = []
+    for st in unique_st:
+        mask = stations == st
+        y = rain_mm[mask]
+        if len(y) < max_lag + 20:
+            continue
+        acf_vals = []
+        for lag in range(1, max_lag + 1):
+            c = np.corrcoef(y[:-lag], y[lag:])[0, 1]
+            acf_vals.append(c if np.isfinite(c) else 0.0)
+        all_acf.append(acf_vals)
+
+    if not all_acf:
+        return None
+
+    acf_arr = np.array(all_acf)  # (n_stations, max_lag)
+    lags = np.arange(1, max_lag + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: individual station ACFs
+    ax = axes[0]
+    for i, st in enumerate(unique_st[:len(all_acf)]):
+        ax.plot(lags, acf_arr[i], alpha=0.4, lw=1, color="steelblue")
+    ax.plot(lags, acf_arr.mean(axis=0), color="red", lw=2.5, label="Mean across stations")
+    ax.axhline(0, color="black", lw=0.5)
+    ax.set_xlabel("Lag (days)")
+    ax.set_ylabel("Autocorrelation")
+    ax.set_title("Daily Rainfall Autocorrelation by Station")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Right: heatmap
+    ax = axes[1]
+    im = ax.imshow(acf_arr, aspect="auto", cmap="RdBu_r", vmin=-0.3, vmax=0.5,
+                   interpolation="nearest")
+    ax.set_xlabel("Lag (days)")
+    ax.set_ylabel("Station index")
+    ax.set_xticks(range(max_lag))
+    ax.set_xticklabels(lags)
+    ax.set_title("ACF Heatmap (stations × lags)")
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_rainfall_exceedance(
+    rain_mm: np.ndarray,
+    split_indices: Optional[Dict[str, np.ndarray]] = None,
+    save_path: Optional[Path] = None,
+):
+    """Exceedance probability curve: P(rainfall > x) vs x.
+
+    Intuitive for lay people — shows how often extreme events occur.
+    """
+    fig, ax = plt.subplots(figsize=(9, 5))
+    if split_indices is None:
+        split_indices = {"all": np.arange(len(rain_mm))}
+
+    for name, idx in split_indices.items():
+        y = np.sort(rain_mm[idx])[::-1]
+        y = y[y > 0]  # only rainy days
+        prob = np.arange(1, len(y) + 1) / len(y)
+        ax.semilogy(y, prob, lw=1.5, label=f"{name} (N={len(y):,})")
+
+    ax.set_xlabel("Daily Rainfall (mm)")
+    ax.set_ylabel("Exceedance Probability P(rain > x)")
+    ax.set_title("Rainfall Exceedance Curve\n(rainy days only — how often do extreme events occur?)")
+    ax.legend()
+    ax.grid(alpha=0.3, which="both")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_dry_wet_spells(
+    rain_mm: np.ndarray,
+    stations: np.ndarray,
+    threshold_mm: float = 1.0,
+    save_path: Optional[Path] = None,
+):
+    """Distribution of consecutive dry-spell and wet-spell lengths.
+
+    Helps lay people understand rainfall persistence patterns.
+    """
+    dry_lengths, wet_lengths = [], []
+    for st in np.unique(stations):
+        y = rain_mm[stations == st]
+        is_wet = y >= threshold_mm
+        # Run-length encoding
+        if len(is_wet) < 2:
+            continue
+        changes = np.diff(is_wet.astype(int))
+        starts = np.where(changes != 0)[0] + 1
+        starts = np.concatenate([[0], starts, [len(is_wet)]])
+        for i in range(len(starts) - 1):
+            length = starts[i + 1] - starts[i]
+            if is_wet[starts[i]]:
+                wet_lengths.append(length)
+            else:
+                dry_lengths.append(length)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, data, title, colour in [
+        (axes[0], dry_lengths, "Dry Spell Lengths", "#e67e22"),
+        (axes[1], wet_lengths, "Wet Spell Lengths", "#2980b9"),
+    ]:
+        if data:
+            bins = np.arange(0.5, min(max(data), 60) + 1.5, 1)
+            ax.hist(data, bins=bins, color=colour, alpha=0.8, edgecolor="white")
+            ax.axvline(np.mean(data), color="red", ls="--", lw=1.5,
+                       label=f"Mean = {np.mean(data):.1f} days")
+            ax.axvline(np.median(data), color="black", ls=":", lw=1.5,
+                       label=f"Median = {np.median(data):.0f} days")
+            ax.legend(fontsize=8)
+        ax.set_xlabel("Consecutive Days")
+        ax.set_ylabel("Count")
+        ax.set_title(f"{title}\n(threshold = {threshold_mm} mm)")
+        ax.grid(alpha=0.3)
+
+    fig.suptitle("Dry & Wet Spell Distributions Across All Stations", fontsize=12, y=1.02)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_rainfall_by_station_boxplot(
+    rain_mm: np.ndarray,
+    stations: np.ndarray,
+    save_path: Optional[Path] = None,
+):
+    """Box-and-whisker plot of rainfall per station — intuitive summary for lay people."""
+    import pandas as pd
+    df = pd.DataFrame({"station": [str(s) for s in stations], "rain_mm": rain_mm})
+    # Order by median rainfall
+    order = df.groupby("station")["rain_mm"].median().sort_values(ascending=False).index.tolist()
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    df_rainy = df[df["rain_mm"] > 0]
+    bp = ax.boxplot(
+        [df_rainy[df_rainy["station"] == st]["rain_mm"].values for st in order],
+        labels=order, vert=True, patch_artist=True, showfliers=False,
+        medianprops=dict(color="red", lw=2),
+    )
+    for patch in bp["boxes"]:
+        patch.set_facecolor("steelblue")
+        patch.set_alpha(0.6)
+    ax.set_xlabel("Station")
+    ax.set_ylabel("Daily Rainfall (mm, rainy days only)")
+    ax.set_title("Rainfall Distribution by Station\n(rainy days only, outliers hidden for clarity)")
+    plt.xticks(rotation=45, ha="right")
+    ax.grid(alpha=0.3, axis="y")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_annual_rainfall_trends(
+    rain_mm: np.ndarray,
+    years: np.ndarray,
+    stations: np.ndarray,
+    save_path: Optional[Path] = None,
+):
+    """Annual total rainfall trends per station — shows long-term patterns."""
+    import pandas as pd
+    df = pd.DataFrame({
+        "station": [str(s) for s in stations],
+        "year": years.astype(int),
+        "rain_mm": rain_mm,
+    })
+    annual = df.groupby(["station", "year"])["rain_mm"].sum().reset_index()
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+    # Left: individual station trends
+    ax = axes[0]
+    for st in annual["station"].unique():
+        sub = annual[annual["station"] == st].sort_values("year")
+        ax.plot(sub["year"], sub["rain_mm"], alpha=0.4, lw=1)
+    # Overall mean
+    overall = annual.groupby("year")["rain_mm"].mean().sort_index()
+    ax.plot(overall.index, overall.values, color="red", lw=2.5, label="Mean across stations")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Annual Total Rainfall (mm)")
+    ax.set_title("Annual Rainfall by Station")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Right: mean annual rainfall bar chart per station
+    ax = axes[1]
+    mean_annual = annual.groupby("station")["rain_mm"].mean().sort_values(ascending=False)
+    ax.barh(mean_annual.index, mean_annual.values, color="steelblue", alpha=0.8)
+    ax.set_xlabel("Mean Annual Rainfall (mm)")
+    ax.set_title("Mean Annual Rainfall by Station")
+    ax.grid(alpha=0.3, axis="x")
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+# ===================================================================
+# DEM on geographic map
+# ===================================================================
+
+def plot_dem_on_map(
+    local_dem: np.ndarray,
+    regional_dem: np.ndarray,
+    stations: np.ndarray,
+    station_metadata: dict,
+    n_samples: int = 6,
+    save_path: Optional[Path] = None,
+):
+    """Overlay DEM patches on a geographic scatter map of station locations.
+
+    Shows local and regional DEM patches positioned at their station coordinates.
+    """
+    unique_st = np.unique(stations)
+    pick_st = unique_st[np.linspace(0, len(unique_st) - 1, min(n_samples, len(unique_st)), dtype=int)]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    for ax, dem_arr, label in [(axes[0], local_dem, "Local DEM"), (axes[1], regional_dem, "Regional DEM")]:
+        # Plot all stations as dots
+        for sname, info in station_metadata.items():
+            lat = info.get("latitude", info.get("lat", None))
+            lon = info.get("longitude", info.get("lon", None))
+            if lat is None or lon is None:
+                continue
+            ax.plot(lon, lat, 'k.', markersize=3, zorder=3)
+
+        # Overlay DEM patches for selected stations
+        for st in pick_st:
+            idx = int(np.where(stations == st)[0][0])
+            sname = str(st)
+            info = station_metadata.get(sname, {})
+            lat = info.get("latitude", info.get("lat", None))
+            lon = info.get("longitude", info.get("lon", None))
+            if lat is None or lon is None:
+                continue
+            patch = dem_arr[idx]
+            h, w = patch.shape
+            # Scale patch extent based on approximate km
+            extent_deg = 0.05 * max(h, w)  # rough scaling
+            extent = [lon - extent_deg, lon + extent_deg, lat - extent_deg, lat + extent_deg]
+            ax.imshow(patch, extent=extent, cmap="terrain", alpha=0.7, zorder=2,
+                      interpolation="bilinear")
+            ax.annotate(sname, (lon, lat), fontsize=5, xytext=(3, 3),
+                        textcoords="offset points", zorder=4)
+
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+        ax.set_title(f"{label} Patches on Map")
+        ax.set_aspect("equal")
+        ax.grid(alpha=0.3)
+
+    fig.suptitle("DEM Patches Overlaid on Station Locations", fontsize=12)
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+# ===================================================================
+# Model architecture visualization
+# ===================================================================
+
+def plot_model_architecture(
+    model: "torch.nn.Module",
+    model_name: str = "Model",
+    input_data: Optional[dict] = None,
+    save_path: Optional[Path] = None,
+):
+    """Generate a dynamic architecture diagram from a live PyTorch model.
+
+    Uses torchviz (graphviz-based) if available, otherwise falls back to a
+    custom matplotlib block diagram built from the model's actual layers.
+    """
+    import torch
+
+    fig = _plot_architecture_matplotlib(model, model_name)
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    # Also try torchviz for a computation-graph PDF/PNG
+    if input_data is not None:
+        try:
+            from torchviz import make_dot
+            import shutil
+            if shutil.which("dot") is None:
+                print("  Graphviz 'dot' not found on PATH — skipping torchviz computation graph")
+                return fig
+            model.eval()
+            # torchviz needs grad_fn, so run with gradients enabled
+            if isinstance(input_data, dict):
+                out = model(input_data)
+            else:
+                out = model(input_data)
+            dot = make_dot(out, params=dict(model.named_parameters()),
+                           show_attrs=False, show_saved=False)
+            graph_path = str(save_path).replace(".png", "_graph") if save_path else "model_graph"
+            dot.render(graph_path, format="png", cleanup=True)
+            print(f"  Saved torchviz graph to {graph_path}.png")
+        except ImportError:
+            print("  torchviz not installed — skipping computation graph (pip install torchviz)")
+        except Exception as e:
+            print(f"  WARNING: torchviz graph failed: {e}")
+
+    return fig
+
+
+def _plot_architecture_matplotlib(model: "torch.nn.Module", model_name: str):
+    """Build a block diagram of the model architecture from its actual layers."""
+    import torch.nn as nn
+
+    # Collect layer info
+    blocks = []
+    for name, module in model.named_modules():
+        if name == "":
+            continue
+        # Only show leaf modules (no containers)
+        children = list(module.children())
+        if len(children) > 0:
+            continue
+        n_params = sum(p.numel() for p in module.parameters())
+        layer_type = type(module).__name__
+        # Get shape info
+        shape_str = ""
+        if isinstance(module, nn.Linear):
+            shape_str = f"{module.in_features}→{module.out_features}"
+        elif isinstance(module, nn.Conv2d):
+            shape_str = (f"{module.in_channels}→{module.out_channels} "
+                         f"k={module.kernel_size} g={module.groups}")
+        elif isinstance(module, (nn.BatchNorm1d, nn.LayerNorm)):
+            nf = module.num_features if hasattr(module, 'num_features') else module.normalized_shape
+            shape_str = f"features={nf}"
+        elif isinstance(module, nn.Dropout):
+            shape_str = f"p={module.p}"
+
+        blocks.append({
+            "name": name,
+            "type": layer_type,
+            "shape": shape_str,
+            "params": n_params,
+        })
+
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # Determine branch structure by name prefix
+    branch_colours = {
+        "climate": "#3498db",
+        "clim": "#3498db",
+        "ld_": "#27ae60",
+        "rd_": "#e67e22",
+        "mo_": "#9b59b6",
+        "fc_": "#e74c3c",
+        "bn_": "#e74c3c",
+        "backbone": "#2c3e50",
+        "out": "#c0392b",
+        "dropout": "#95a5a6",
+    }
+
+    def _get_colour(name):
+        for prefix, colour in branch_colours.items():
+            if prefix in name:
+                return colour
+        return "#34495e"
+
+    # Draw
+    n = len(blocks)
+    fig_height = max(6, n * 0.45 + 2)
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+    ax.set_xlim(-0.5, 10)
+    ax.set_ylim(-1, n + 1)
+    ax.axis("off")
+
+    for i, b in enumerate(blocks):
+        y = n - i - 0.5
+        colour = _get_colour(b["name"])
+        # Draw box
+        rect = plt.Rectangle((1, y - 0.35), 8, 0.7, facecolor=colour, alpha=0.15,
+                              edgecolor=colour, linewidth=1.5, zorder=2)
+        ax.add_patch(rect)
+        # Layer type + name
+        ax.text(1.2, y + 0.1, f"{b['type']}", fontsize=8, fontweight="bold",
+                va="center", color=colour, zorder=3)
+        ax.text(1.2, y - 0.15, f"{b['name']}", fontsize=6, va="center",
+                color="gray", zorder=3)
+        # Shape info
+        if b["shape"]:
+            ax.text(5.5, y, b["shape"], fontsize=7, va="center", ha="center",
+                    color="#2c3e50", zorder=3)
+        # Param count
+        if b["params"] > 0:
+            ax.text(8.8, y, f"{b['params']:,}", fontsize=7, va="center", ha="right",
+                    color="#7f8c8d", zorder=3)
+        # Arrow to next
+        if i < n - 1:
+            ax.annotate("", xy=(5, y - 0.35), xytext=(5, y - 0.65),
+                        arrowprops=dict(arrowstyle="->", color="gray", lw=0.8))
+
+    # Header
+    ax.text(5, n + 0.5, f"{model_name}  ({total_params:,} trainable parameters)",
+            fontsize=12, fontweight="bold", ha="center", va="center")
+    # Column headers
+    ax.text(1.2, n + 0.0, "Layer", fontsize=8, fontweight="bold", color="gray")
+    ax.text(5.5, n + 0.0, "Shape", fontsize=8, fontweight="bold", ha="center", color="gray")
+    ax.text(8.8, n + 0.0, "Params", fontsize=8, fontweight="bold", ha="right", color="gray")
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_per_station_comparison(
+    station_metrics: Dict[str, Dict[str, Dict[str, float]]],
+    metric_name: str = "rmse",
+    save_path: Optional[Path] = None,
+):
+    """Grouped bar chart of a metric per station across models."""
+    import pandas as pd
+    rows = []
+    for model_name, sm in station_metrics.items():
+        for st, m in sm.items():
+            rows.append({"model": model_name, "station": st, metric_name: m.get(metric_name, np.nan)})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(14, 5))
+    pivot = df.pivot_table(index="station", columns="model", values=metric_name)
+    pivot.plot.bar(ax=ax)
+    ax.set_title(f"{metric_name.upper()} by station")
+    ax.set_ylabel(metric_name.upper())
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
