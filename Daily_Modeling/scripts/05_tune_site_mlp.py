@@ -39,10 +39,11 @@ import numpy as np
 import optuna
 import pandas as pd
 import torch
+
+from Daily_Modeling import config
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from torch.utils.data import DataLoader
 
-from Daily_Modeling import config
 from Daily_Modeling.data_utils.dataset import (
     load_tensors_from_npz, normalize_tensors, RainfallDataset,
 )
@@ -53,6 +54,7 @@ from Daily_Modeling.data_utils.splits import (
 from Daily_Modeling.models.site_mlp import SiteMLP, SiteGLU, build_model, compute_input_size
 from Daily_Modeling.utils.io_utils import save_json
 from Daily_Modeling.utils.training import get_criterion, train_model
+from Daily_Modeling.utils.device import select_device
 
 # Architecture candidates spanning 1, 2, and 3 hidden layers.
 # Depth is a key HP: shallow nets generalise better for small/noisy stations;
@@ -267,7 +269,7 @@ def _run_one_study(loss_type, tensors, meta, train_stations, stations, years,
     out_dir = base_out_dir / loss_type
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     if loss_type == "tweedie":
         # tweedie_p is tuned inside the Optuna objective (suggest_float), so don't
         # print a misleading fixed p here. The CLI tweedie_p is only a fallback
@@ -381,7 +383,7 @@ def _objective_single_station(trial, tensors, station, stations, years, months, 
 def _run_per_station_tuning(tensors, meta, all_stations, stations, years,
                              metadata, stats, target_scale, base_out_dir, args):
     """Run a separate Optuna study per station × loss_type combination."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     months = meta["months"]
     days = meta["days"]
     tweedie_p = args.tweedie_p
@@ -530,12 +532,11 @@ def main():
                         help="Time-based expanding-window CV folds per station during tuning (1 disables CV; default: 1)")
     args = parser.parse_args()
 
-    if not torch.cuda.is_available():
-        print("WARNING: CUDA not available — tuning will be slow on CPU.")
+    device = select_device()
+    if device.type != "cuda":
+        print(f"WARNING: CUDA not available — tuning will run on {device}.")
 
-    tensors, meta = load_tensors_from_npz(device=torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    ))
+    tensors, meta = load_tensors_from_npz(device=device)
     stations = meta["stations"]
     years = meta["years"]
 

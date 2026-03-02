@@ -39,6 +39,7 @@ from Daily_Modeling.models.land import create_land_model
 from Daily_Modeling.utils.training import train_model
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
 from Daily_Modeling.utils.io_utils import save_json
+from Daily_Modeling.utils.device import select_device
 
 
 def _get_metadata(tensors, dem_crop_config=None):
@@ -62,7 +63,7 @@ def _get_metadata(tensors, dem_crop_config=None):
 
 
 # Tuning-specific constants (faster than full training)
-_TUNE_MAX_EPOCHS = 50
+_TUNE_MAX_EPOCHS = 75
 _TUNE_PATIENCE = 15
 _TUNE_SUBSET_FRAC = 1.0  # train on 50% of data per fold for speed
 _TUNE_N_CV_FOLDS = 3
@@ -106,9 +107,11 @@ def _predict_mm(model, loader, device, target_scale, output_head):
 def _build_criterion(loss_type, hp):
     """Build the loss criterion for a given loss_type."""
     if loss_type == "tweedie":
-        return get_criterion("tweedie", p=hp.get("tweedie_p", 1.5))
+        from Daily_Modeling.models.losses import TweedieDeviance
+        return TweedieDeviance(p=hp.get("tweedie_p", 1.5))
     elif loss_type == "bernoulli_gamma":
-        return get_criterion("bernoulli_gamma")
+        from Daily_Modeling.models.losses import BernoulliGammaNLL
+        return BernoulliGammaNLL()
     elif loss_type == "gamma":
         from Daily_Modeling.models.losses import GammaNLL
         return GammaNLL()
@@ -413,7 +416,7 @@ def main():
     if args.study_name is None:
         args.study_name = f"land_daily_{args.loss_type}"
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     print(f"Device: {device}")
 
     tensors, meta = load_tensors_from_npz(device=device)

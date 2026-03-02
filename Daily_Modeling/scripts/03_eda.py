@@ -19,6 +19,7 @@ import torch
 
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.dataset import load_tensors_from_npz
+from Daily_Modeling.utils.device import select_device
 from Daily_Modeling.data_utils.load_raw import load_station_metadata
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, compute_station_year_ranges,
@@ -43,7 +44,7 @@ def main():
     out = config.EDA_DIR
     out.mkdir(parents=True, exist_ok=True)
 
-    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
+    tensors, meta = load_tensors_from_npz(device=select_device())
 
     stations = meta["stations"]
     years = meta["years"]

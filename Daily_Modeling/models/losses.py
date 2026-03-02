@@ -44,6 +44,34 @@ class GammaNLL(nn.Module):
         return nll.mean()
 
 
+class TweedieDeviance(nn.Module):
+    """Tweedie deviance loss for compound Poisson-Gamma models.
+
+    The Tweedie distribution is useful for modeling data with exact zeros
+    and continuous positive values (like rainfall).
+
+    Parameters:
+        p: Tweedie power parameter (1 < p < 2 for compound Poisson-Gamma).
+           p=1.5 is a common choice for rainfall data.
+    """
+
+    def __init__(self, p: float = 1.5):
+        super().__init__()
+        assert 1 < p < 2, "Tweedie p must be in (1, 2) for compound Poisson-Gamma"
+        self.p = p
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        preds = preds.float().view(-1).clamp(min=1e-6)
+        y = targets.float().view(-1)
+
+        # Tweedie deviance: 2 * (y^(2-p)/((1-p)*(2-p)) - y*mu^(1-p)/(1-p) + mu^(2-p)/(2-p))
+        # Simplified form for gradient-based optimization:
+        # loss = -y * mu^(1-p) / (1-p) + mu^(2-p) / (2-p)
+        p = self.p
+        loss = -y * preds.pow(1 - p) / (1 - p) + preds.pow(2 - p) / (2 - p)
+        return loss.mean()
+
+
 class BernoulliGammaNLL(nn.Module):
     """Combined Bernoulli (rain/no-rain) + Gamma (amount | rain > 0) NLL.
 

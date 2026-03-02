@@ -40,7 +40,7 @@ from Daily_Modeling.utils.visualization import (
     plot_training_history, plot_scatter, plot_model_comparison_table,
 )
 from Daily_Modeling.utils.io_utils import save_json, save_model, save_predictions
-
+from Daily_Modeling.utils.device import select_device
 
 def _get_metadata(tensors):
     c = tensors["climate"]
@@ -256,7 +256,7 @@ def main():
                         help="Override dropout rate from tuned HPs")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     print(f"Device: {device}")
 
     # --- Load data ---

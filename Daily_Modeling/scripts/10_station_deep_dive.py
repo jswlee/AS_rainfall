@@ -47,6 +47,7 @@ from Daily_Modeling.data_utils.splits import (
     assign_station_groups, compute_station_year_ranges, compute_year_boundaries,
     spatiotemporal_split, station_proportional_split,
 )
+from Daily_Modeling.utils.device import select_device
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -457,7 +458,7 @@ def main():
 
     # ── Load dataset ───────────────────────────────────────────────────────
     print("\nLoading dataset tensors (CPU)...")
-    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
+    tensors, meta = load_tensors_from_npz(device=select_device())
     unique_stations = sorted(set(str(s) for s in meta["stations"]))
     variable_names = list(meta["variables"]) if len(meta["variables"]) > 0 else []
     print(f"  {len(unique_stations)} unique stations, {len(tensors['targets'])} samples")

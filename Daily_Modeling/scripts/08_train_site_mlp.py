@@ -20,8 +20,8 @@ from pathlib import Path
 from threading import Lock
 
 import numpy as np
+import pandas as pd
 import torch
-from torch.utils.data import DataLoader
 
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.dataset import (
@@ -38,8 +38,10 @@ from Daily_Modeling.data_utils.splits import (
 from Daily_Modeling.models.site_mlp import (
     SiteMLP, SiteGLU, build_model, compute_input_size, adaptive_hidden_sizes,
 )
-from Daily_Modeling.utils.training import train_model, get_criterion
-from Daily_Modeling.utils.metrics import compute_metrics, baseline_mean_metrics
+from Daily_Modeling.utils.io_utils import save_json, load_json
+from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
+from Daily_Modeling.utils.training import get_criterion, train_model
+from Daily_Modeling.utils.device import select_device
 from Daily_Modeling.utils.visualization import plot_model_architecture, plot_scatter, plot_training_history
 from Daily_Modeling.utils.io_utils import save_json, save_model, save_predictions
 
@@ -177,7 +179,7 @@ def main():
         args.pretrain = False
         args.freeze_layers = 0
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     print(f"Device: {device}")
 
     tensors, meta = load_tensors_from_npz(device=device)

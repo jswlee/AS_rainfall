@@ -29,12 +29,11 @@ import pandas as pd
 import torch
 
 from Daily_Modeling import config
-from Daily_Modeling.data_utils.dataset import (
-    load_tensors_from_npz, normalize_tensors, print_normalization_report,
-)
+from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, normalize_tensors, print_normalization_report
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, compute_station_year_ranges,
 )
+from Daily_Modeling.utils.device import select_device
 from Daily_Modeling.utils.visualization import (
     plot_sample_dem_patches,
     plot_sample_reanalysis_patches,
@@ -165,7 +164,7 @@ def main():
 
     # === 9. Normalisation verification ===
     print("\n--- Normalisation Verification ---")
-    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
+    tensors, meta = load_tensors_from_npz(device=select_device())
     yr_ranges = compute_station_year_ranges(meta["stations"], meta["years"])
     unique = sorted(set(str(s) for s in meta["stations"]))
     groups = assign_station_groups(unique, station_year_ranges=yr_ranges)

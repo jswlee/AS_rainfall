@@ -26,6 +26,7 @@ from Daily_Modeling.data_utils.splits import (
     plot_split_heatmap, spatiotemporal_split, station_proportional_split,
 )
 from Daily_Modeling.models.bernoulli_gamma import BernoulliGammaGLM, flatten_features_numpy
+from Daily_Modeling.utils.device import select_device
 from Daily_Modeling.utils.io_utils import save_json, save_predictions
 from Daily_Modeling.utils.metrics import compute_metrics, baseline_mean_metrics
 from Daily_Modeling.utils.visualization import plot_scatter
@@ -36,8 +37,8 @@ def main():
     parser.add_argument("--run-name", default="bernoulli_gamma_final")
     args = parser.parse_args()
 
-    # Load data (CPU is fine for GLMs)
-    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
+    device = select_device()
+    tensors, meta = load_tensors_from_npz(device=device)
     stations = meta["stations"]
     years = meta["years"]
 

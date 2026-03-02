@@ -29,7 +29,7 @@ from Daily_Modeling.data_utils.splits import (
 from Daily_Modeling.models.land import create_land_model
 from Daily_Modeling.utils.io_utils import load_json, load_model_state, save_json
 from Daily_Modeling.utils.metrics import compute_metrics
-
+from Daily_Modeling.utils.device import select_device
 
 def _get_metadata(tensors):
     c = tensors["climate"]
@@ -136,7 +136,7 @@ def main():
     out_dir = Path(args.out_dir) if args.out_dir else (run_dir / "inference")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device()
     print(f"Device: {device}")
 
     hp = load_json(run_dir / "hyperparameters.json")

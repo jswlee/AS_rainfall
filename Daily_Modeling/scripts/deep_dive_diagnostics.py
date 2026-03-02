@@ -20,10 +20,11 @@ from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split,
     compute_station_year_ranges, compute_year_boundaries,
 )
+from Daily_Modeling.utils.device import select_device
 
 # ── 1. Load ───────────────────────────────────────────────────────────────────
 print("=" * 70); print("  1. LOADING DATA"); print("=" * 70)
-device = torch.device("cpu")
+device = select_device()
 tensors, meta = load_tensors_from_npz(device=device)
 stations  = meta["stations"]
 years     = meta["years"]
