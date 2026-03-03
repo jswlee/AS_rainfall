@@ -1,7 +1,0 @@
-artifact_location: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/653990129664931023
-creation_time: 1755904912657
-experiment_id: '653990129664931023'
-last_update_time: 1755906103227
-lifecycle_stage: deleted
-name: pytorch_tuning
-tags: {}

@@ -1,6 +1,0 @@
-artifact_location: file:///Users/jlee/Desktop/github/AS_rainfall/mlruns/547931419339990701
-creation_time: 1755976230058
-experiment_id: '547931419339990701'
-last_update_time: 1755976230058
-lifecycle_stage: active
-name: pytorch_tuning_weighted_MSE

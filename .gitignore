@@ -9,3 +9,4 @@ ipynb_checkpoints
 mlruns/
 *venv/
 archived/
+raw_data/

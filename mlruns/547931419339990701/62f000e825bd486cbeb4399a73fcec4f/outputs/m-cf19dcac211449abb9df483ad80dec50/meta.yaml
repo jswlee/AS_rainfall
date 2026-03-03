@@ -1,6 +1,0 @@
-destination_id: m-cf19dcac211449abb9df483ad80dec50
-destination_type: MODEL_OUTPUT
-source_id: m-cf19dcac211449abb9df483ad80dec50
-source_type: RUN_OUTPUT
-step: 0
-tags: {}

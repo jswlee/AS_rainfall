@@ -1,7 +1,0 @@
-Fold 6 Ensemble Summary
-Number of Models: 5
-
-Test Metrics:
-  R²: 0.7859
-  RMSE: 98.6628 mm
-  MAE: 66.2314 mm

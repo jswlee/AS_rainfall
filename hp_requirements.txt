@@ -1,7 +1,0 @@
-numpy
-scikit-learn
-optuna
-plotly
-kaleido
-sqlalchemy
-psycopg2

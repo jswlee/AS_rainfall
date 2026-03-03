@@ -1,7 +1,0 @@
-Fold 14 Ensemble Summary
-Number of Models: 5
-
-Test Metrics:
-  R²: 0.7927
-  RMSE: 97.0731 mm
-  MAE: 63.4748 mm
