@@ -1,0 +1,136 @@
+================================================================================
+NETCDF AUDIT REPORT
+================================================================================
+Total files analyzed: 11
+Files with errors: 0
+
+FILE OVERVIEW
+----------------------------------------
+air.2m.day.mean.nc        ✅ OK       102.2 MB
+air.day.mean.nc           ✅ OK       198.8 MB
+hgt.day.mean.nc           ✅ OK       185.1 MB
+omega.day.mean.nc         ✅ OK       146.6 MB
+pottmp.day.mean.nc        ✅ OK       833.1 MB
+pr_wtr.eatm.day.mean.nc   ✅ OK       125.2 MB
+shum.day.mean.nc          ✅ OK       266.2 MB
+skt.day.mean.nc           ✅ OK       99.5 MB
+slp.day.mean.nc           ✅ OK       81.9 MB
+uwnd.day.mean.nc          ✅ OK       255.5 MB
+vwnd.day.mean.nc          ✅ OK       271.5 MB
+
+TIME COVERAGE ANALYSIS
+----------------------------------------
+Expected date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+
+air.2m.day.mean.nc       
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+air.day.mean.nc          
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+hgt.day.mean.nc          
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+omega.day.mean.nc        
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+pottmp.day.mean.nc       
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+pr_wtr.eatm.day.mean.nc  
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+shum.day.mean.nc         
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+skt.day.mean.nc          
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+slp.day.mean.nc          
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+uwnd.day.mean.nc         
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+vwnd.day.mean.nc         
+  Time steps: 16,437 / 16,437
+  Date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+  Missing: 0 days (0.0%)
+
+VARIABLE COMPARISON
+----------------------------------------
+Total unique variables found: 11
+
+msl                       in 1 files:
+  - slp.day.mean.nc
+
+pt                        in 1 files:
+  - pottmp.day.mean.nc
+
+q                         in 1 files:
+  - shum.day.mean.nc
+
+skt                       in 1 files:
+  - skt.day.mean.nc
+
+t                         in 1 files:
+  - air.day.mean.nc
+
+t2m                       in 1 files:
+  - air.2m.day.mean.nc
+
+tcwv                      in 1 files:
+  - pr_wtr.eatm.day.mean.nc
+
+u                         in 1 files:
+  - uwnd.day.mean.nc
+
+v                         in 1 files:
+  - vwnd.day.mean.nc
+
+w                         in 1 files:
+  - omega.day.mean.nc
+
+z                         in 1 files:
+  - hgt.day.mean.nc
+
+PRESSURE LEVEL ANALYSIS
+----------------------------------------
+Levels [1000.0, 500.0] found in 3 files:
+  - air.day.mean.nc
+  - hgt.day.mean.nc
+  - pottmp.day.mean.nc
+
+Levels [500.0] found in 1 files:
+  - omega.day.mean.nc
+
+Levels [925.0, 750.0] found in 3 files:
+  - shum.day.mean.nc
+  - uwnd.day.mean.nc
+  - vwnd.day.mean.nc
+
+DATA QUALITY ISSUES
+----------------------------------------
+RECOMMENDATIONS
+----------------------------------------
+Audit complete.

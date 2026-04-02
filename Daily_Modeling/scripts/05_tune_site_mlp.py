@@ -23,7 +23,7 @@ Outputs per loss type (under <study_name>/<loss_type>/):
   - all_trials.csv
   - top10_trials.csv  (printed + saved)
   - hp_distribution_top10.png
-  - hp_importance.png, optimization_history.png, parallel_coordinate.png
+  - hp_importance.png, optimization_history.png
 
 Usage:
     python -m Daily_Modeling.scripts.05_tune_site_mlp [--n-trials 30] [--n-stations 8]
@@ -32,9 +32,6 @@ Usage:
 
 import argparse
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import pandas as pd
@@ -46,15 +43,19 @@ from torch.utils.data import DataLoader
 
 from Daily_Modeling.data_utils.dataset import (
     load_tensors_from_npz, normalize_tensors, RainfallDataset,
+    FlatDataset, get_dataset_metadata,
 )
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, compute_station_year_ranges, compute_year_boundaries,
     spatiotemporal_split, station_proportional_split,
+    sorted_sample_indices, expanding_time_folds,
 )
 from Daily_Modeling.models.site_mlp import SiteMLP, SiteGLU, build_model, compute_input_size
 from Daily_Modeling.utils.io_utils import save_json
-from Daily_Modeling.utils.training import get_criterion, train_model
+from Daily_Modeling.utils.training import train_model
+from Daily_Modeling.models.losses import get_criterion
 from Daily_Modeling.utils.device import select_device
+from Daily_Modeling.utils.visualization import save_optuna_visualizations, save_top_trials_plots
 
 # Architecture candidates spanning 1, 2, and 3 hidden layers.
 # Depth is a key HP: shallow nets generalise better for small/noisy stations;
@@ -88,54 +89,11 @@ _TUNE_MAX_EPOCHS = 80
 _TUNE_PATIENCE = 12
 
 
-class _FlatDataset(torch.utils.data.Dataset):
-    """Wraps RainfallDataset to return flattened feature vector."""
-    def __init__(self, base: RainfallDataset):
-        self.base = base
-    def __len__(self):
-        return len(self.base)
-    def __getitem__(self, idx):
-        feats, target = self.base[idx]
-        parts = [feats[k].view(-1) for k in ("climate", "local_dem", "regional_dem", "temporal")]
-        return torch.cat(parts), target
-
-
-def _get_metadata(tensors):
-    c = tensors["climate"]
-    return {
-        "climate_shape": tuple(c.shape[1:]),
-        "local_dem_shape": tuple(tensors["local_dem"].shape[1:]),
-        "regional_dem_shape": tuple(tensors["regional_dem"].shape[1:]),
-        "num_month_features": int(tensors["temporal"].shape[1]),
-    }
-
-
-def _sorted_indices(indices, years, months, days):
-    return sorted(indices, key=lambda i: (int(years[i]), int(months[i]), int(days[i])))
-
-
-def _expanding_time_folds(indices_sorted, n_folds: int):
-    """Forward-chaining (expanding-window) folds.
-
-    Fold k trains on the earliest chunk and validates on the next contiguous
-    chunk, so validation is always later in time than the training data.
-    """
-    if n_folds <= 1:
-        return []
-    n = len(indices_sorted)
-    val_size = max(n // (n_folds + 1), 1)
-    folds = []
-    for k in range(1, n_folds + 1):
-        train_end = k * val_size
-        val_end = min((k + 1) * val_size, n)
-        if train_end >= n or train_end >= val_end:
-            break
-        folds.append((indices_sorted[:train_end], indices_sorted[train_end:val_end]))
-    return folds
-
 
 def _train_one_station(st, tensors, stations, years, months, days, target_scale,
-                       dem_crop, input_size, hp, criterion, device, cv_folds: int = 1):
+                       dem_crop, input_size, hp, criterion, device, cv_folds: int = 1,
+                       num_workers: int = 0, pin_memory: bool = False,
+                       persistent_workers: bool = False, prefetch_factor: int = 2):
     """Train a single station model and return mean val RMSE (mm) or None if skipped.
 
     The model is trained with *criterion* (which may be Tweedie, MSE, etc.),
@@ -150,8 +108,8 @@ def _train_one_station(st, tensors, stations, years, months, days, target_scale,
 
     # Build CV folds over train+val; if disabled, use the original split
     if cv_folds and cv_folds > 1:
-        tv_sorted = _sorted_indices(trainval_idx, years, months, days)
-        folds = _expanding_time_folds(tv_sorted, cv_folds)
+        tv_sorted = sorted_sample_indices(trainval_idx, years, months, days)
+        folds = expanding_time_folds(tv_sorted, cv_folds)
     else:
         folds = [(sp["train"], sp["val"])]
 
@@ -161,13 +119,21 @@ def _train_one_station(st, tensors, stations, years, months, days, target_scale,
         if n_train < 50 or n_val < 10:
             continue
 
-        train_ds = _FlatDataset(RainfallDataset(tensors, tr_idx, target_scale,
+        train_ds = FlatDataset(RainfallDataset(tensors, tr_idx, target_scale,
                                                 dem_crop_config=dem_crop))
-        val_ds = _FlatDataset(RainfallDataset(tensors, va_idx, target_scale,
+        val_ds = FlatDataset(RainfallDataset(tensors, va_idx, target_scale,
                                               dem_crop_config=dem_crop))
+        use_persistent = bool(persistent_workers) and int(num_workers) > 0
         tl = DataLoader(train_ds, batch_size=hp["batch_size"], shuffle=True, drop_last=True,
-                        pin_memory=False)
-        vl = DataLoader(val_ds, batch_size=hp["batch_size"], pin_memory=False)
+                        num_workers=num_workers,
+                        pin_memory=pin_memory,
+                        persistent_workers=use_persistent,
+                        prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None))
+        vl = DataLoader(val_ds, batch_size=hp["batch_size"],
+                        num_workers=num_workers,
+                        pin_memory=pin_memory,
+                        persistent_workers=use_persistent,
+                        prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None))
 
         model = build_model(
             hp.get("arch_type", "mlp"), input_size, hp["hidden_sizes"], hp["dropout_rate"]
@@ -196,7 +162,9 @@ def _train_one_station(st, tensors, stations, years, months, days, target_scale,
 
 def objective(trial, tensors, train_stations, stations, years, months, days,
               metadata, device, target_scale, n_stations, loss_type, tweedie_p,
-              tune_arch_type=False, cv_folds: int = 1):
+              tune_arch_type=False, cv_folds: int = 1,
+              num_workers: int = 0, pin_memory: bool = False,
+              persistent_workers: bool = False, prefetch_factor: int = 2):
     local_candidates = config.DEM_LOCAL_CANDIDATES
     regional_candidates = config.DEM_REGIONAL_CANDIDATES
     local_idx = trial.suggest_int("local_dem_cfg", 0, len(local_candidates) - 1)
@@ -211,7 +179,7 @@ def objective(trial, tensors, train_stations, stations, years, months, days,
     arch_idx = trial.suggest_int("arch_idx", 0, len(_ARCH_CANDIDATES) - 1)
     hidden_sizes = _ARCH_CANDIDATES[arch_idx]
 
-    # Optionally tune arch_type (mlp vs lstm) as a HP
+    # Optionally tune arch_type (mlp vs glu) as a HP
     if tune_arch_type:
         arch_type = trial.suggest_categorical("arch_type", ["mlp", "glu"])
     else:
@@ -253,6 +221,10 @@ def objective(trial, tensors, train_stations, stations, years, months, days,
             st, tensors, stations, years, months, days,
             target_scale, dem_crop, input_size, hp, criterion, device,
             cv_folds=cv_folds,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
         )
         if result is not None:
             val_losses.append(result)
@@ -290,8 +262,11 @@ def _run_one_study(loss_type, tensors, meta, train_stations, stations, years,
             t, tensors, train_stations, stations, years,
             meta["months"], meta["days"], metadata, device, target_scale,
             n_stations=args.n_stations, loss_type=loss_type, tweedie_p=tweedie_p,
-            tune_arch_type=args.tune_arch_type,
-            cv_folds=args.cv_folds,
+            tune_arch_type=args.tune_arch_type, cv_folds=args.cv_folds,
+            num_workers=args.num_workers,
+            pin_memory=(args.pin_memory and device.type == "cuda"),
+            persistent_workers=args.persistent_workers,
+            prefetch_factor=args.prefetch_factor,
         ),
         n_trials=args.n_trials, show_progress_bar=True,
     )
@@ -322,8 +297,8 @@ def _run_one_study(loss_type, tensors, meta, train_stations, stations, years,
     all_df = pd.DataFrame(rows)
     all_df.to_csv(out_dir / "all_trials.csv", index=False)
 
-    _save_top10(all_df, out_dir, title_suffix=f" [{loss_type}]")
-    _save_tuning_visuals(study, out_dir)
+    save_top_trials_plots(all_df, out_dir, title_suffix=f" [{loss_type}]")
+    save_optuna_visualizations(study, out_dir)
 
     print(f"[{loss_type}] Saved to {out_dir}")
     return study.best_value, best_hp
@@ -437,7 +412,7 @@ def _run_per_station_tuning(tensors, meta, all_stations, stations, years,
                 for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         all_df = pd.DataFrame(rows)
         all_df.to_csv(out_dir / "all_trials.csv", index=False)
-        _save_top10(all_df, out_dir, title_suffix=f" [{station} | {loss_type}]")
+        save_top_trials_plots(all_df, out_dir, title_suffix=f" [{station} | {loss_type}]")
 
         return (station, loss_type, float(study.best_value), str(out_dir))
 
@@ -530,13 +505,21 @@ def main():
                              "Adds ~2x trial cost but lets Optuna discover if GLU gating helps.")
     parser.add_argument("--cv-folds", type=int, default=1,
                         help="Time-based expanding-window CV folds per station during tuning (1 disables CV; default: 1)")
+    parser.add_argument("--num-workers", type=int, default=config.DATALOADER_NUM_WORKERS,
+                        help=f"DataLoader num_workers (default: {config.DATALOADER_NUM_WORKERS}).")
+    parser.add_argument("--pin-memory", action="store_true", default=config.DATALOADER_PIN_MEMORY,
+                        help=f"Enable pinned memory (default: {config.DATALOADER_PIN_MEMORY}).")
+    parser.add_argument("--persistent-workers", action="store_true", default=config.DATALOADER_PERSISTENT_WORKERS,
+                        help=f"Keep DataLoader workers alive (default: {config.DATALOADER_PERSISTENT_WORKERS}).")
+    parser.add_argument("--prefetch-factor", type=int, default=config.DATALOADER_PREFETCH_FACTOR,
+                        help=f"DataLoader prefetch_factor (default: {config.DATALOADER_PREFETCH_FACTOR}).")
     args = parser.parse_args()
 
     device = select_device()
     if device.type != "cuda":
         print(f"WARNING: CUDA not available — tuning will run on {device}.")
 
-    tensors, meta = load_tensors_from_npz(device=device)
+    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
     stations = meta["stations"]
     years = meta["years"]
 
@@ -551,7 +534,7 @@ def main():
                                   train_years=train_yr, val_years=val_yr, test_years=test_yr)
     tensors, stats = normalize_tensors(tensors, splits["train"])
     target_scale = stats["target_std_mm"]
-    metadata = _get_metadata(tensors)
+    metadata = get_dataset_metadata(tensors)
     train_stations = sorted([s for s, r in groups.items() if r == "train"])
     all_stations = sorted(set(str(s) for s in stations))
 
@@ -588,88 +571,6 @@ def main():
               f"bs={info.get('bs')}  lr={info.get('lr', 0):.2e}")
     print(f"\nResults saved under {base_out_dir}/<loss_type>/")
     print("Pass --hp-dir to 08_train_site_mlp.py to use a specific loss type's HPs.")
-
-
-def _save_top10(all_df: pd.DataFrame, out_dir, title_suffix: str = "") -> None:
-    """Save top-10 trials table and HP distribution violin/bar plots."""
-    if all_df.empty:
-        return
-
-    top10 = all_df.nsmallest(10, "value").reset_index(drop=True)
-    top10.to_csv(out_dir / "top10_trials.csv", index=False)
-    print(f"\n--- Top 10 Trials{title_suffix} ---")
-    print(top10.to_string(index=False))
-
-    hp_cols = [c for c in top10.columns if c not in ("trial", "value")]
-    if not hp_cols:
-        return
-
-    n_cols = min(4, len(hp_cols))
-    n_rows = (len(hp_cols) + n_cols - 1) // n_cols
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows))
-    axes = np.array(axes).ravel()
-    colours = plt.cm.viridis_r(np.linspace(0.1, 0.9, len(top10)))
-
-    for i, col in enumerate(hp_cols):
-        ax = axes[i]
-        vals = top10[col].dropna()
-        try:
-            numeric_vals = vals.astype(float).values
-            ax.violinplot(numeric_vals, positions=[0], showmedians=True)
-            jitter = np.random.RandomState(0).uniform(-0.05, 0.05, len(numeric_vals))
-            for j, (v, c) in enumerate(zip(numeric_vals, colours)):
-                ax.scatter(jitter[j], v, color=c, s=40, zorder=3)
-            ax.set_xticks([])
-        except (ValueError, TypeError):
-            vc = vals.value_counts()
-            ax.bar(range(len(vc)), vc.values, tick_label=vc.index.tolist(),
-                   color="steelblue")
-            ax.tick_params(axis="x", rotation=30)
-        ax.set_title(col, fontsize=9)
-
-    for j in range(len(hp_cols), len(axes)):
-        axes[j].set_visible(False)
-
-    fig.suptitle(f"HP Distribution — Top 10 Trials{title_suffix}", fontsize=11, y=1.01)
-    plt.tight_layout()
-    fig.savefig(out_dir / "hp_distribution_top10.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  Saved hp_distribution_top10.png")
-
-
-def _save_tuning_visuals(study, out_dir) -> None:
-    """Save Optuna HP importance, optimization history, and parallel coordinate plots."""
-    try:
-        from optuna.visualization.matplotlib import (
-            plot_optimization_history,
-            plot_parallel_coordinate,
-            plot_param_importances,
-            plot_slice,
-        )
-
-        fig = plot_param_importances(study)
-        fig.figure.savefig(str(out_dir / "hp_importance.png"), dpi=150, bbox_inches="tight")
-        plt.close(fig.figure)
-        print("  Saved hp_importance.png")
-
-        fig = plot_optimization_history(study)
-        fig.figure.savefig(str(out_dir / "optimization_history.png"), dpi=150, bbox_inches="tight")
-        plt.close(fig.figure)
-        print("  Saved optimization_history.png")
-
-        fig = plot_parallel_coordinate(study)
-        fig.figure.savefig(str(out_dir / "parallel_coordinate.png"), dpi=150, bbox_inches="tight")
-        plt.close(fig.figure)
-        print("  Saved parallel_coordinate.png")
-
-        fig = plot_slice(study)
-        target_fig = fig.figure if hasattr(fig, "figure") else fig
-        target_fig.savefig(str(out_dir / "slice_plots.png"), dpi=150, bbox_inches="tight")
-        plt.close(target_fig)
-        print("  Saved slice_plots.png")
-
-    except Exception as e:
-        print(f"  WARNING: Could not generate tuning visuals: {e}")
 
 
 if __name__ == "__main__":

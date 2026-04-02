@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
-import pandas as pd
 
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.load_raw import (
@@ -37,9 +36,9 @@ def assemble(
     Returns the path to the saved file.
     """
     if out_path is None:
-        out_path = config.ASSEMBLED_DIR / "daily_dataset.npz"
+        out_path = config.ASSEMBLED_DIR / "daily_dataset_station_centered.npz"
     if reanalysis_npz is None:
-        reanalysis_npz = config.FEATURES_DIR / "reanalysis_patches_daily.npz"
+        reanalysis_npz = config.FEATURES_DIR / "reanalysis_patches_daily_station_centered.npz"
     if dem_npz is None:
         dem_npz = config.FEATURES_DIR / "dem_patches.npz"
     out_path = Path(out_path)

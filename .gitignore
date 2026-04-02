@@ -10,3 +10,8 @@ mlruns/
 *venv/
 archived/
 raw_data/
+other_LAND_files/
+*.pt
+*.pth
+*.npz
+ideas.txt

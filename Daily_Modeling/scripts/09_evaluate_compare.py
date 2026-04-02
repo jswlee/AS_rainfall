@@ -14,9 +14,6 @@ Usage:
 import argparse
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -30,7 +27,7 @@ from Daily_Modeling.utils.metrics import (
     baseline_mean_metrics, compute_metrics, compute_wasserstein, per_station_metrics,
 )
 from Daily_Modeling.utils.visualization import (
-    plot_model_comparison_table, plot_per_station_comparison, plot_scatter,
+    plot_model_comparison_table, plot_multi_model_scatter, plot_per_station_comparison, plot_scatter,
 )
 
 
@@ -110,23 +107,11 @@ def main():
         )
 
     # ---- Combined scatter (overlay) ----
-    fig, ax = plt.subplots(figsize=(7, 7))
-    colours = {"LAND": "steelblue", "Bernoulli-Gamma": "coral", "Site MLP": "seagreen"}
-    for name, data in all_data.items():
-        ax.scatter(data["y_true"], data["y_pred"], s=4, alpha=0.25,
-                   label=name, color=colours.get(name, "gray"), rasterized=True)
-    lo = 0
-    hi = max(np.nanmax(d["y_true"]) for d in all_data.values())
-    ax.plot([lo, hi], [lo, hi], "r--", lw=1)
-    ax.set_xlabel("Observed (mm)")
-    ax.set_ylabel("Predicted (mm)")
-    ax.set_title("All Models - Test Predictions")
-    ax.legend(markerscale=4)
-    ax.set_aspect("equal", "box")
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
-    fig.savefig(out / "scatter_combined.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    plot_multi_model_scatter(
+        all_data,
+        title="Model Comparison - Test Predictions",
+        save_path=out / "scatter_combined.png",
+    )
 
     # ---- Per-station comparison ----
     station_metrics_all = {}

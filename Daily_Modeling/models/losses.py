@@ -1,14 +1,66 @@
 """
 Loss functions for daily rainfall models.
 
-- MSE (standard)
-- Gamma negative log-likelihood
-- Bernoulli-Gamma negative log-likelihood (for daily data with zeros)
+- LogMSELoss          MSE in log-space
+- TweedieLoss         Tweedie deviance (compound Poisson-Gamma)
+- GammaNLL            Gamma negative log-likelihood
+- BernoulliGammaNLL   Bernoulli + Gamma NLL (daily data with zeros)
+
+The ``get_criterion()`` factory maps CLI loss-type strings to classes.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+class LogMSELoss(nn.Module):
+    """MSE in log-space: MSE(log(1 + pred), log(1 + true)).
+
+    Down-weights extreme events relative to raw MSE, giving the model a
+    better signal for the bulk of the (zero-inflated) distribution.
+    """
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return nn.functional.mse_loss(
+            torch.log1p(pred.clamp(min=0)),
+            torch.log1p(target.clamp(min=0)),
+        )
+
+
+class TweedieLoss(nn.Module):
+    """Tweedie deviance loss with power *p* in (1, 2).
+
+    The Tweedie distribution is a natural fit for zero-inflated continuous
+    data like daily rainfall.  p=1.5 is a common default.
+
+    D(y, mu) = 2 * [ y^(2-p)/((1-p)*(2-p)) - y*mu^(1-p)/(1-p) + mu^(2-p)/(2-p) ]
+    """
+    def __init__(self, p: float = 1.5, mu_max: float | None = None, loss_cap: float | None = None):
+        super().__init__()
+        assert 1.0 < p < 2.0, "Tweedie power p must be in (1, 2)"
+        self.p = p
+        self.mu_max = mu_max
+        self.loss_cap = loss_cap
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if self.mu_max is None:
+            mu = pred.clamp(min=1e-6)
+        else:
+            mu = pred.clamp(min=1e-6, max=float(self.mu_max))
+        y = target.clamp(min=0)
+        p = self.p
+        dev = 2 * (
+            torch.pow(y, 2 - p) / ((1 - p) * (2 - p))
+            - y * torch.pow(mu, 1 - p) / (1 - p)
+            + torch.pow(mu, 2 - p) / (2 - p)
+        )
+        if self.loss_cap is not None:
+            dev = dev.clamp(max=float(self.loss_cap))
+            fill = float(self.loss_cap)
+        else:
+            fill = 0.0
+        dev = torch.where(torch.isfinite(dev), dev, torch.full_like(dev, fill))
+        return dev.mean()
 
 
 class GammaNLL(nn.Module):
@@ -44,34 +96,6 @@ class GammaNLL(nn.Module):
         return nll.mean()
 
 
-class TweedieDeviance(nn.Module):
-    """Tweedie deviance loss for compound Poisson-Gamma models.
-
-    The Tweedie distribution is useful for modeling data with exact zeros
-    and continuous positive values (like rainfall).
-
-    Parameters:
-        p: Tweedie power parameter (1 < p < 2 for compound Poisson-Gamma).
-           p=1.5 is a common choice for rainfall data.
-    """
-
-    def __init__(self, p: float = 1.5):
-        super().__init__()
-        assert 1 < p < 2, "Tweedie p must be in (1, 2) for compound Poisson-Gamma"
-        self.p = p
-
-    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        preds = preds.float().view(-1).clamp(min=1e-6)
-        y = targets.float().view(-1)
-
-        # Tweedie deviance: 2 * (y^(2-p)/((1-p)*(2-p)) - y*mu^(1-p)/(1-p) + mu^(2-p)/(2-p))
-        # Simplified form for gradient-based optimization:
-        # loss = -y * mu^(1-p) / (1-p) + mu^(2-p) / (2-p)
-        p = self.p
-        loss = -y * preds.pow(1 - p) / (1 - p) + preds.pow(2 - p) / (2 - p)
-        return loss.mean()
-
-
 class BernoulliGammaNLL(nn.Module):
     """Combined Bernoulli (rain/no-rain) + Gamma (amount | rain > 0) NLL.
 
@@ -81,17 +105,27 @@ class BernoulliGammaNLL(nn.Module):
     inputs while exp overflows float16 at ~11.1.
 
     Loss is computed entirely in float32 regardless of AMP dtype.
+    
+    Numerical stability notes:
+    - alpha and beta are clamped to [EPS, MAX_PARAM] to prevent lgamma explosion
+    - lgamma(alpha) explodes as alpha -> 0 and grows slowly for large alpha
+    - y/beta explodes if beta -> 0
+    - Logits are clamped to prevent BCE overflow
     """
-    EPS = 1e-6
+    EPS = 1e-4  # Increased from 1e-6 for better stability
+    MAX_PARAM = 100.0  # Prevent extreme alpha/beta values
+    MAX_LOGIT = 10.0  # Clamp logits to prevent BCE overflow
 
     def forward(self, outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         # Force float32 -- lgamma / log are unstable in float16
         outputs = outputs.float()
         y = targets.float().view(-1)
 
-        logit_p  = outputs[:, 0]
-        alpha    = F.softplus(outputs[:, 1]) + self.EPS  # shape > 0
-        beta     = F.softplus(outputs[:, 2]) + self.EPS  # scale > 0
+        # Clamp logits to prevent BCE overflow
+        logit_p  = outputs[:, 0].clamp(-self.MAX_LOGIT, self.MAX_LOGIT)
+        # Clamp alpha/beta to reasonable range to prevent lgamma/division explosion
+        alpha    = F.softplus(outputs[:, 1]).clamp(self.EPS, self.MAX_PARAM)
+        beta     = F.softplus(outputs[:, 2]).clamp(self.EPS, self.MAX_PARAM)
 
         is_rain = (y > 0).float()
 
@@ -113,6 +147,28 @@ class BernoulliGammaNLL(nn.Module):
         # Only apply Gamma loss on wet days
         total = loss_prob + is_rain * loss_gamma
 
-        # Failsafe: zero out any inf/nan that might slip through
-        total = torch.where(torch.isfinite(total), total, torch.zeros_like(total))
+        # Failsafe: clamp extreme values instead of zeroing (preserves gradients)
+        total = total.clamp(max=50.0)  # Cap individual sample loss
+        total = torch.where(torch.isfinite(total), total, torch.full_like(total, 10.0))
         return total.mean()
+
+
+def get_criterion(loss_type: str = "mse", **kwargs) -> nn.Module:
+    """Factory for loss functions.
+
+    Args:
+        loss_type: one of 'mse', 'log_mse', 'tweedie', 'gamma', 'bernoulli_gamma'.
+        **kwargs: passed to the loss constructor (e.g. p=1.5 for Tweedie).
+    """
+    if loss_type == "mse":
+        return nn.MSELoss()
+    elif loss_type == "log_mse":
+        return LogMSELoss()
+    elif loss_type == "tweedie":
+        return TweedieLoss(**kwargs)
+    elif loss_type == "gamma":
+        return GammaNLL()
+    elif loss_type == "bernoulli_gamma":
+        return BernoulliGammaNLL()
+    else:
+        raise ValueError(f"Unknown loss_type: {loss_type!r}")

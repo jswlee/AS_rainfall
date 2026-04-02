@@ -82,8 +82,8 @@ class SiteGLU(nn.Module):
 
     The first layer is a Gated Linear Unit (hidden_sizes[0] output dim) which
     provides adaptive, data-dependent feature selection — the same benefit as
-    LSTM gating but without recurrent overhead (no forget gate, no cell state,
-    no hidden state transfer).  The remaining layers (hidden_sizes[1:]) are a
+    LSTM gating but without recurrent overhead.  The remaining layers
+    (hidden_sizes[1:]) are a
     standard MLP head with LayerNorm + ReLU + Dropout.
 
     When hidden_sizes has only one element the GLU output feeds directly into
@@ -130,10 +130,6 @@ class SiteGLU(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-# Keep SiteLSTM as a deprecated alias so old saved HP files with
-# arch_type="lstm" still work at training time.
-SiteLSTM = SiteGLU
-
 
 def build_model(
     arch_type: str,
@@ -142,7 +138,7 @@ def build_model(
     dropout_rate: float,
 ) -> nn.Module:
     """Factory: return SiteMLP or SiteGLU based on *arch_type*."""
-    if arch_type in ("glu", "lstm"):
+    if arch_type == "glu":
         return SiteGLU(input_size, hidden_sizes, dropout_rate)
     return SiteMLP(input_size, hidden_sizes, dropout_rate)
 

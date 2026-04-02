@@ -22,229 +22,124 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.dataset import (
     load_tensors_from_npz, normalize_tensors, make_dataloaders,
-    print_normalization_report,
+    print_normalization_report, get_dataset_metadata,
 )
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, compute_station_year_ranges,
-    compute_year_boundaries, plot_split_heatmap,
+    compute_year_boundaries, make_cv_folds, validate_test_separation,
 )
 from Daily_Modeling.models.land import create_land_model
-from Daily_Modeling.utils.training import train_model, get_criterion
+from Daily_Modeling.utils.training import train_model
+from Daily_Modeling.models.losses import get_criterion
+from Daily_Modeling.utils.inference import predict, predict_mm, make_metric_fn
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics, baseline_mean_metrics, per_station_metrics
 from Daily_Modeling.utils.visualization import (
-    plot_training_history, plot_scatter, plot_model_comparison_table,
+    plot_model_comparison_table, plot_scatter, plot_split_heatmap, plot_training_history,
 )
 from Daily_Modeling.utils.io_utils import save_json, save_model, save_predictions
 from Daily_Modeling.utils.device import select_device
 
-def _get_metadata(tensors):
-    c = tensors["climate"]
-    return {
-        "climate_shape": tuple(c.shape[1:]),
-        "local_dem_shape": tuple(tensors["local_dem"].shape[1:]),
-        "regional_dem_shape": tuple(tensors["regional_dem"].shape[1:]),
-        "num_month_features": int(tensors["temporal"].shape[1]),
-        "num_climate_vars": int(c.shape[1]),
-    }
 
+def _load_hp_from_dir(hp_dir: Path) -> dict:
+    hp_json = hp_dir / "best_hyperparameters.json"
+    if hp_json.exists():
+        return json.loads(hp_json.read_text())
 
-@torch.no_grad()
-def predict(model: nn.Module, loader, device, output_head: str = "softplus") -> tuple:
-    """Run inference.  Returns (preds, targets) in normalised units.
+    db_path = hp_dir / "optuna_study.db"
+    if not db_path.exists():
+        raise FileNotFoundError(
+            f"Could not find best_hyperparameters.json or optuna_study.db under: {hp_dir}"
+        )
 
-    For bernoulli_gamma head, predictions are E[Y] = p_rain * alpha * beta.
-    """
-    model.eval()
-    preds, targets = [], []
-    for features, tgt in loader:
-        features = {k: torch.nan_to_num(v.to(device)) for k, v in features.items()}
-        out = model(features)
-        if output_head == "bernoulli_gamma":
-            p_rain = torch.sigmoid(out[:, 0])
-            alpha = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6)
-            beta  = torch.nn.functional.softplus(out[:, 2]).clamp(min=1e-6)
-            pred = p_rain * alpha * beta
-        elif output_head == "gamma":
-            alpha = torch.nn.functional.softplus(out[:, 0]).clamp(min=1e-6)
-            beta  = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6)
-            pred  = alpha * beta  # E[Y] = alpha * beta
-        else:
-            pred = out.squeeze(-1)
-        preds.append(pred.cpu().numpy().ravel())
-        targets.append(tgt.cpu().numpy().ravel())
-    return np.concatenate(preds), np.concatenate(targets)
+    try:
+        import optuna
+    except Exception as e:
+        raise RuntimeError(
+            "optuna is required to load hyperparameters from optuna_study.db, but could not be imported. "
+            f"Original error: {e}"
+        )
 
+    storage = optuna.storages.RDBStorage(
+        url=f"sqlite:///{db_path}",
+        engine_kwargs={"connect_args": {"timeout": 30}},
+    )
 
-def _make_metric_fn(loss_type: str, output_head: str, target_scale: float):
-    if loss_type not in ("tweedie", "bernoulli_gamma", "gamma"):
-        return None
+    # Prefer study name inferred from directory name (matches 04_tune_land.py default)
+    study = None
+    try:
+        study = optuna.load_study(study_name=hp_dir.name, storage=storage)
+    except Exception:
+        summaries = optuna.study.get_all_study_summaries(storage)
+        if len(summaries) == 0:
+            raise RuntimeError(f"No studies found in Optuna DB: {db_path}")
+        study = optuna.load_study(study_name=summaries[0].study_name, storage=storage)
 
-    def _val_mae_mm(outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        y = targets.view(-1)
-        if output_head == "bernoulli_gamma":
-            p_rain = torch.sigmoid(outputs[:, 0])
-            alpha = torch.nn.functional.softplus(outputs[:, 1]).clamp(min=1e-6)
-            beta  = torch.nn.functional.softplus(outputs[:, 2]).clamp(min=1e-6)
-            pred  = p_rain * alpha * beta
-        elif output_head == "gamma":
-            alpha = torch.nn.functional.softplus(outputs[:, 0]).clamp(min=1e-6)
-            beta  = torch.nn.functional.softplus(outputs[:, 1]).clamp(min=1e-6)
-            pred  = alpha * beta
-        else:
-            pred = outputs.view(-1)
-        return (pred - y).abs().mean() * float(target_scale)
+    hp = dict(study.best_params)
 
-    return _val_mae_mm
+    # Reconstruct derived hyperparameters that may not be present in best_params.
+    if "base_lr" in hp and "batch_size" in hp and "learning_rate" not in hp:
+        _LR_REF_BATCH = 32
+        lr_scale = float(hp["batch_size"]) / float(_LR_REF_BATCH)
+        hp["learning_rate"] = float(hp["base_lr"]) * (lr_scale ** 0.5)
 
-
-def _validate_test_separation(splits, stations, years, train_yr, val_yr, test_yr):
-    """Validate that test sets are temporally and spatially distinct from train/val."""
-    train_idx = splits.get("train", np.array([], dtype=int))
-    val_temporal = splits.get("val_temporal", np.array([], dtype=int))
-    val_spatial = splits.get("val_spatial", np.array([], dtype=int))
-    test_temporal = splits.get("test_temporal", np.array([], dtype=int))
-    test_spatial = splits.get("test_spatial", np.array([], dtype=int))
-
-    # Check temporal test: should only contain years >= test_yr[0]
-    if len(test_temporal) > 0:
-        test_temp_years = years[test_temporal]
-        if np.any(test_temp_years < test_yr[0]):
-            raise ValueError(f"test_temporal contains years before {test_yr[0]}")
-
-    # Check spatial test: should only contain stations not in train
-    if len(test_spatial) > 0 and len(train_idx) > 0:
-        test_spatial_stations = set(stations[test_spatial])
-        train_stations = set(stations[train_idx])
-        overlap = test_spatial_stations & train_stations
-        if overlap:
-            raise ValueError(f"test_spatial shares {len(overlap)} stations with train: {overlap}")
-
-    print("✓ Test sets are temporally and spatially distinct from train/val")
-
-
-def _make_cv_folds(splits, n_folds, cv_mode, rng_seed):
-    """Build CV folds based on mode: temporal, spatial, both, or mixed.
-
-    - temporal: folds split val_temporal only (train stations, held-out years)
-    - spatial: folds split val_spatial only (held-out stations)
-    - both: folds alternate between temporal and spatial validation
-    - mixed: pool train+val_temporal+val_spatial, shuffle, and split (legacy)
-    """
-    rng = np.random.RandomState(rng_seed)
-    train_idx = splits.get("train", np.array([], dtype=int))
-    val_temporal = splits.get("val_temporal", np.array([], dtype=int))
-    val_spatial = splits.get("val_spatial", np.array([], dtype=int))
-
-    if n_folds <= 1:
-        if cv_mode == "spatial":
-            val_idx = val_spatial if len(val_spatial) > 0 else val_temporal
-        else:
-            val_idx = val_temporal if len(val_temporal) > 0 else val_spatial
-        return [(train_idx.astype(int), val_idx.astype(int))]
-
-    if cv_mode == "temporal":
-        if len(val_temporal) == 0:
-            raise ValueError("cv_mode=temporal but val_temporal is empty")
-        if len(val_temporal) < n_folds:
-            print(f"Warning: val_temporal has only {len(val_temporal)} samples for {n_folds} folds; using single fold")
-            return [(train_idx.astype(int), val_temporal.astype(int))]
-        shuffled = rng.permutation(val_temporal)
-        fold_indices = np.array_split(shuffled, n_folds)
-        folds = []
-        for i in range(n_folds):
-            val_fold = fold_indices[i]
-            folds.append((train_idx.astype(int), val_fold.astype(int)))
-        return folds
-
-    elif cv_mode == "spatial":
-        if len(val_spatial) == 0:
-            raise ValueError("cv_mode=spatial but val_spatial is empty")
-        if len(val_spatial) < n_folds:
-            print(f"Warning: val_spatial has only {len(val_spatial)} samples for {n_folds} folds; using single fold")
-            return [(train_idx.astype(int), val_spatial.astype(int))]
-        shuffled = rng.permutation(val_spatial)
-        fold_indices = np.array_split(shuffled, n_folds)
-        folds = []
-        for i in range(n_folds):
-            val_fold = fold_indices[i]
-            folds.append((train_idx.astype(int), val_fold.astype(int)))
-        return folds
-
-    elif cv_mode == "both":
-        if len(val_temporal) == 0 or len(val_spatial) == 0:
-            raise ValueError("cv_mode=both requires both val_temporal and val_spatial to be non-empty")
-        n_temp = n_folds // 2
-        n_spat = n_folds - n_temp
-        folds = []
-        if n_temp > 0:
-            if len(val_temporal) < n_temp:
-                n_temp = 1
-            temp_shuffled = rng.permutation(val_temporal)
-            temp_folds = np.array_split(temp_shuffled, n_temp)
-            for val_fold in temp_folds:
-                folds.append((train_idx.astype(int), val_fold.astype(int)))
-        if n_spat > 0:
-            if len(val_spatial) < n_spat:
-                n_spat = 1
-            spat_shuffled = rng.permutation(val_spatial)
-            spat_folds = np.array_split(spat_shuffled, n_spat)
-            for val_fold in spat_folds:
-                folds.append((train_idx.astype(int), val_fold.astype(int)))
-        return folds
-
-    elif cv_mode == "mixed":
-        all_non_test = np.concatenate([train_idx, val_temporal, val_spatial]).astype(int)
-        all_non_test = np.unique(all_non_test)
-        n = len(all_non_test)
-        if n < n_folds * 20:
-            val_idx = val_temporal if len(val_temporal) > 0 else val_spatial
-            return [(train_idx.astype(int), val_idx.astype(int))]
-        shuffled = rng.permutation(all_non_test)
-        fold_indices = np.array_split(shuffled, n_folds)
-        folds = []
-        for i in range(n_folds):
-            val_fold = fold_indices[i]
-            others = [fold_indices[j] for j in range(n_folds) if j != i]
-            train_fold = np.concatenate(others) if len(others) > 0 else np.array([], dtype=int)
-            folds.append((train_fold.astype(int), val_fold.astype(int)))
-        return folds
-
-    else:
-        raise ValueError(f"Unknown cv_mode: {cv_mode}")
+    return hp
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hp-dir", default=None,
                         help="Dir with best_hyperparameters.json (default: LAND defaults)")
-    parser.add_argument("--epochs", type=int, default=400,
+    parser.add_argument("--epochs", type=int, default=1000,
                         help="Training epochs per ensemble member (default: 400)")
     parser.add_argument("--patience", type=int, default=config.PATIENCE)
     parser.add_argument("--run-name", default="land_final")
     parser.add_argument("--loss-type", default=None,
                         choices=["mse", "gamma", "tweedie", "bernoulli_gamma"],
                         help="Override loss type (default: read from HP file, else mse)")
-    parser.add_argument("--scheduler", default="cosine", choices=["cosine", "onecycle"],
-                        help="LR scheduler: cosine (default) or onecycle")
+    parser.add_argument("--scheduler", default="none", choices=["cosine", "none"],
+                        help="LR scheduler: none (flat LR, default) or cosine")
     parser.add_argument("--no-early-stopping", action="store_true",
                         help="Disable early stopping; always train all --epochs")
     parser.add_argument("--ensemble-seeds", type=int, default=5,
                         help="Number of ensemble members (different random seeds, default: 5)")
-    parser.add_argument("--cv-folds", type=int, default=1,
+    parser.add_argument("--cv-folds", type=int, default=3,
                         help="Number of CV folds. If >1, trains an ensemble per fold and reports mean/STD metrics.")
-    parser.add_argument("--cv-mode", default="temporal",
-                        choices=["temporal", "spatial", "both", "mixed"],
+    parser.add_argument("--cv-mode", default="both",
+                        choices=["temporal", "spatial", "both"],
                         help="CV fold construction mode: temporal (held-out years), spatial (held-out stations), "
-                             "both (mix of temporal and spatial folds), mixed (shuffled pool, legacy)")
+                             "both (mix of temporal and spatial folds)")
     parser.add_argument("--extreme-percentile", type=float, default=98.0,
                         help="Percentile for extreme bias metric (default: 98)")
     parser.add_argument("--csi-threshold-mm", type=float, default=50.0,
                         help="Threshold in mm for CSI metric (default: 50)")
+    parser.add_argument(
+        "--monitor",
+        default=None,
+        choices=["mse", "rmse", "mae", "pctl_abs_rel_bias", "csi"],
+        help="Metric used to select the best epoch / early stopping. Default: existing behavior (loss for MSE runs, MAE for non-MSE runs).",
+    )
+    parser.add_argument("--num-workers", type=int, default=config.DATALOADER_NUM_WORKERS,
+                        help=f"DataLoader num_workers (default: {config.DATALOADER_NUM_WORKERS}).")
+    parser.add_argument("--pin-memory", action="store_true", default=config.DATALOADER_PIN_MEMORY,
+                        help=f"Enable pinned memory (default: {config.DATALOADER_PIN_MEMORY}).")
+    parser.add_argument("--persistent-workers", action="store_true", default=config.DATALOADER_PERSISTENT_WORKERS,
+                        help=f"Keep DataLoader workers alive (default: {config.DATALOADER_PERSISTENT_WORKERS}).")
+    parser.add_argument("--prefetch-factor", type=int, default=config.DATALOADER_PREFETCH_FACTOR,
+                        help=f"DataLoader prefetch_factor (default: {config.DATALOADER_PREFETCH_FACTOR}).")
+    parser.add_argument("--grad-clip-norm", type=float, default=0,
+                        help="Gradient clipping max norm (default: 0 = disabled). Set >0 to enable.")
+    parser.add_argument("--tweedie-mu-max", type=float, default=None,
+                        help="Optional cap on Tweedie mean (mu) in normalized units (default: None).")
+    parser.add_argument("--tweedie-loss-cap", type=float, default=None,
+                        help="Optional cap on per-sample Tweedie deviance (default: None).")
+    parser.add_argument("--amp", action="store_true", default=False,
+                        help="Enable mixed-precision (AMP) training. Off by default for Gamma/Tweedie stability.")
+    parser.add_argument("--batch-norm", type=str, choices=["true", "false"], default=None,
+                        help="Override BatchNorm setting (true/false). Omit to inherit from HP file.")
     # HP overrides
     parser.add_argument("--batch-size", type=int, default=None,
                         help="Override batch size from tuned HPs")
@@ -260,7 +155,7 @@ def main():
     print(f"Device: {device}")
 
     # --- Load data ---
-    tensors, meta = load_tensors_from_npz(device=device)
+    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
     stations = meta["stations"]
     years = meta["years"]
 
@@ -277,7 +172,7 @@ def main():
                                   train_years=train_yr, val_years=val_yr, test_years=test_yr)
     tensors, stats = normalize_tensors(tensors, splits["train"])
     target_scale = stats["target_std_mm"]
-    metadata = _get_metadata(tensors)
+    metadata = get_dataset_metadata(tensors)
 
     var_names = list(meta["variables"]) if len(meta["variables"]) > 0 else None
     print_normalization_report(tensors, stats, splits, variable_names=var_names)
@@ -289,7 +184,7 @@ def main():
 
     # --- Load HP ---
     if args.hp_dir:
-        hp = json.loads((Path(args.hp_dir) / "best_hyperparameters.json").read_text())
+        hp = _load_hp_from_dir(Path(args.hp_dir))
     else:
         hp = dict(config.LAND_DEFAULT_HP)
     # Apply CLI overrides
@@ -308,17 +203,14 @@ def main():
     if args.dropout_rate is not None:
         hp["dropout_rate"] = args.dropout_rate
         print(f"Overriding dropout_rate: {args.dropout_rate}")
+    if args.batch_norm is not None:
+        hp["use_batch_norm"] = (args.batch_norm == "true")
+        print(f"Overriding use_batch_norm: {hp['use_batch_norm']}")
 
-    # Map loss_type -> output_head
-    _LOSS_TO_HEAD = {
-        "mse": "softplus",
-        "gamma": "gamma",
-        "tweedie": "softplus",
-        "bernoulli_gamma": "bernoulli_gamma",
-    }
-    hp["output_head"] = _LOSS_TO_HEAD[hp["loss_type"]]
+    hp["output_head"] = config.LOSS_TO_HEAD[hp["loss_type"]]
     hp.setdefault("climate_processing", "conv2d")
     hp.setdefault("tweedie_p", 1.5)
+    hp.setdefault("use_batch_norm", False)
     print(f"Hyperparameters: {json.dumps(hp, indent=2)}")
 
     # Build DEM crop config from HPs (handles both index and explicit keys)
@@ -335,26 +227,83 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Validate test set separation ---
-    _validate_test_separation(splits, stations, years, train_yr, val_yr, test_yr)
+    validate_test_separation(splits, stations, years, train_yr, val_yr, test_yr)
 
     # --- CV folds ---
-    cv_folds = _make_cv_folds(splits, args.cv_folds, args.cv_mode, rng_seed=config.RANDOM_SEED)
+    cv_folds = make_cv_folds(splits, args.cv_folds, args.cv_mode, rng_seed=config.RANDOM_SEED)
     print(f"CV mode: {args.cv_mode}  |  {len(cv_folds)} fold(s)")
 
     # Build criterion
     loss_type = hp["loss_type"]
-    if loss_type == "tweedie":
-        criterion = get_criterion("tweedie", p=hp["tweedie_p"])
-    elif loss_type == "bernoulli_gamma":
-        criterion = get_criterion("bernoulli_gamma")
-    elif loss_type == "gamma":
-        from Daily_Modeling.models.losses import GammaNLL
-        criterion = GammaNLL()
+    if loss_type == "mse":
+        criterion = None  # default MSE inside train_model
+    elif loss_type == "tweedie":
+        criterion = get_criterion("tweedie", p=hp["tweedie_p"],
+                                  mu_max=args.tweedie_mu_max,
+                                  loss_cap=args.tweedie_loss_cap)
     else:
-        criterion = None  # default MSE
+        criterion = get_criterion(loss_type)
 
-    metric_fn = _make_metric_fn(loss_type, hp["output_head"], target_scale)
+    metric_fn = make_metric_fn(loss_type, hp["output_head"], target_scale)
+
+    grad_clip = None if float(args.grad_clip_norm) <= 0 else float(args.grad_clip_norm)
+
     monitor = "val_metric" if metric_fn is not None else "val_loss"
+    monitor_fn = None
+    monitor_name = "monitor"
+
+    def _make_monitor(reducer):
+        """Build a monitor_fn that runs predict_mm then applies *reducer(yp_mm, yt_mm)*."""
+        def _fn(_model, _val_loader, _device):
+            yp_mm, yt_mm = predict_mm(
+                _model, _val_loader, _device, target_scale, hp["output_head"],
+            )
+            return reducer(yp_mm, yt_mm)
+        return _fn
+
+    def _extreme(yp, yt):
+        return compute_extreme_metrics(
+            yt, yp,
+            percentile=args.extreme_percentile,
+            csi_threshold_mm=args.csi_threshold_mm,
+        )
+
+    if args.monitor is not None:
+        m = args.monitor
+        if m == "mse":
+            if metric_fn is None:
+                # For MSE training runs, validation loss is already MSE (in normalized units).
+                monitor = "val_loss"
+            else:
+                # For non-MSE losses, val_loss is deviance/NLL — compute true MSE in mm².
+                monitor_name = "mse_mm2"
+                monitor_fn = _make_monitor(
+                    lambda yp, yt: float(np.mean((np.float64(yp) - np.float64(yt)) ** 2)))
+        elif m == "mae":
+            if metric_fn is not None:
+                # Non-MSE losses already have a metric_fn that returns MAE in mm.
+                monitor = "val_metric"
+            else:
+                # MSE loss: compute MAE in mm.
+                monitor_name = "mae_mm"
+                monitor_fn = _make_monitor(
+                    lambda yp, yt: float(np.mean(np.abs(np.float64(yp) - np.float64(yt)))))
+        elif m == "rmse":
+            monitor_name = "rmse_mm"
+            monitor_fn = _make_monitor(
+                lambda yp, yt: float(np.sqrt(np.mean((yp - yt) ** 2))))
+        elif m == "pctl_abs_rel_bias":
+            monitor_name = f"p{int(args.extreme_percentile)}_abs_rel_bias"
+            monitor_fn = _make_monitor(
+                lambda yp, yt: float(_extreme(yp, yt).get("pctl_abs_rel_bias", float("inf"))))
+        elif m == "csi":
+            monitor_name = f"1-csi@{args.csi_threshold_mm:g}mm"
+            def _csi_reducer(yp, yt):
+                csi = float(_extreme(yp, yt).get("csi", float("nan")))
+                return float(1.0 - csi) if np.isfinite(csi) else float("inf")
+            monitor_fn = _make_monitor(_csi_reducer)
+        else:
+            raise ValueError(f"Unknown --monitor: {m}")
 
     n_seeds = args.ensemble_seeds
     print(f"\nTraining with cv_folds={args.cv_folds} and ensemble_seeds={n_seeds}  "
@@ -376,6 +325,10 @@ def main():
         loaders = make_dataloaders(
             tensors, fold_splits, target_scale=target_scale,
             batch_size=hp.get("batch_size", 256),
+            num_workers=args.num_workers,
+            pin_memory=(args.pin_memory and device.type == "cuda"),
+            persistent_workers=args.persistent_workers,
+            prefetch_factor=args.prefetch_factor,
             dem_crop_config=dem_crop,
         )
 
@@ -416,6 +369,8 @@ def main():
                     print(f"WARNING: architecture diagram failed: {e}")
 
             print(f"\n--- Fold {fold_i+1}/{len(cv_folds)}  Seed {seed_i+1}/{n_seeds} (seed={seed}) ---")
+            # Checkpoint directory for this fold/seed
+            ckpt_dir = fold_dir / f"checkpoints_seed{seed_i}"
             history = train_model(
                 model, loaders["train"], loaders["cv_val"], device,
                 epochs=args.epochs, patience=args.patience,
@@ -427,6 +382,12 @@ def main():
                 scheduler_type=args.scheduler,
                 no_early_stopping=args.no_early_stopping,
                 monitor=monitor,
+                monitor_fn=monitor_fn,
+                monitor_name=monitor_name,
+                grad_clip_norm=grad_clip,
+                use_amp=args.amp,
+                checkpoint_dir=str(ckpt_dir),
+                checkpoint_every=20,
             )
             ensemble_models.append(model)
             all_histories.append(history)
@@ -462,7 +423,6 @@ def main():
         )
         fold_summaries.append(m)
         save_json(m, fold_dir / "metrics_cv_val.json")
-        pctl_key = "pctl" if "pctl" in m else None
         p_bias = m.get("pctl_rel_bias", float("nan"))
         csi = m.get("csi", float("nan"))
         print(

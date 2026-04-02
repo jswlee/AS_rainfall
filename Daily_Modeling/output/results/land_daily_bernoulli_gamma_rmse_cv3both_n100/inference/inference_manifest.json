@@ -1,0 +1,24 @@
+{
+  "run_dir": "Daily_Modeling\\output\\results\\land_daily_bernoulli_gamma_rmse_cv3both_n100",
+  "n_models": 15,
+  "splits": "both",
+  "output_head": "softplus",
+  "target_scale_mm": 22.624799728393555,
+  "checkpoints": [
+    "fold_0\\model_seed0.pth",
+    "fold_0\\model_seed1.pth",
+    "fold_0\\model_seed2.pth",
+    "fold_0\\model_seed3.pth",
+    "fold_0\\model_seed4.pth",
+    "fold_1\\model_seed0.pth",
+    "fold_1\\model_seed1.pth",
+    "fold_1\\model_seed2.pth",
+    "fold_1\\model_seed3.pth",
+    "fold_1\\model_seed4.pth",
+    "fold_2\\model_seed0.pth",
+    "fold_2\\model_seed1.pth",
+    "fold_2\\model_seed2.pth",
+    "fold_2\\model_seed3.pth",
+    "fold_2\\model_seed4.pth"
+  ]
+}

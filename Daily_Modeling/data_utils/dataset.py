@@ -83,6 +83,57 @@ class RainfallDataset(Dataset):
         return features, target
 
 
+class FlatDataset(Dataset):
+    """Wraps RainfallDataset to return a single flattened feature vector.
+
+    Used by site-specific MLP/GLU models that expect a 1-D input.
+    """
+
+    def __init__(self, base: RainfallDataset):
+        self.base = base
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        feats, target = self.base[idx]
+        parts = [feats[k].view(-1) for k in ("climate", "local_dem", "regional_dem", "temporal")]
+        return torch.cat(parts), target
+
+
+def get_dataset_metadata(
+    tensors: Dict[str, torch.Tensor],
+    dem_crop_config: Optional[dict] = None,
+) -> dict:
+    """Extract shape metadata from loaded tensors.
+
+    Args:
+        tensors: dict of torch tensors from :func:`load_tensors_from_npz`.
+        dem_crop_config: optional DEM crop configuration; if provided,
+            overrides local/regional DEM shapes in the returned metadata.
+
+    Returns:
+        dict with keys: climate_shape, local_dem_shape, regional_dem_shape,
+        num_month_features, num_climate_vars.
+    """
+    c = tensors["climate"]
+    meta = {
+        "climate_shape": tuple(c.shape[1:]),
+        "local_dem_shape": tuple(tensors["local_dem"].shape[1:]),
+        "regional_dem_shape": tuple(tensors["regional_dem"].shape[1:]),
+        "num_month_features": int(tensors["temporal"].shape[1]),
+        "num_climate_vars": int(c.shape[1]),
+    }
+    if dem_crop_config is not None:
+        if "local_patch_size" in dem_crop_config:
+            lp = dem_crop_config["local_patch_size"]
+            meta["local_dem_shape"] = (lp, lp)
+        if "regional_patch_size" in dem_crop_config:
+            rp = dem_crop_config["regional_patch_size"]
+            meta["regional_dem_shape"] = (rp, rp)
+    return meta
+
+
 def load_tensors_from_npz(
     npz_path: Optional[Path] = None,
     device: torch.device = torch.device("cpu"),
@@ -93,7 +144,8 @@ def load_tensors_from_npz(
         tensors: dict of torch tensors {climate, local_dem, regional_dem, temporal, targets}
         metadata: dict of numpy arrays {stations, years, months, days, variables}
     """
-    npz_path = npz_path or (config.ASSEMBLED_DIR / "daily_dataset.npz")
+    if npz_path is None:
+        npz_path = config.ASSEMBLED_DIR / "daily_dataset_station_centered.npz"
     z = np.load(str(npz_path), allow_pickle=True)
 
     tensors = {
@@ -119,10 +171,10 @@ def normalize_tensors(
 ) -> Tuple[Dict[str, torch.Tensor], dict]:
     """Normalize features using train-only statistics.  Returns updated tensors + stats dict."""
     stats: dict = {}
-    device = tensors["climate"].device
 
     # Climate: per-channel z-score
     climate = tensors["climate"]
+    device = climate.device
     c = climate.shape[1]
     means = torch.zeros(c, device=device)
     stds = torch.ones(c, device=device)
@@ -132,20 +184,20 @@ def normalize_tensors(
         mask = torch.isfinite(vals)
         if mask.any():
             means[i] = vals[mask].mean()
-            s = vals[mask].std()
-            stds[i] = s if s > 0 else 1.0
+            stds[i] = vals[mask].std()
     tensors["climate"] = (climate - means[None, :, None, None]) / stds[None, :, None, None]
     stats["climate_mean"] = means.cpu().numpy()
     stats["climate_std"] = stds.cpu().numpy()
 
     # DEM: global z-score per scale
+    # IMPORTANT: Exclude ocean (-1) values from normalization (match paper's land_mean/land_std)
     for key in ("local_dem", "regional_dem"):
         dem = tensors[key]
         train_vals = dem[train_indices].reshape(-1)
-        mask = torch.isfinite(train_vals)
+        # Only use land pixels (> 0) for mean/std, matching paper's approach
+        mask = train_vals > 0
         m = train_vals[mask].mean() if mask.any() else torch.tensor(0.0)
         s = train_vals[mask].std() if mask.any() else torch.tensor(1.0)
-        s = s if s > 0 else torch.tensor(1.0)
         tensors[key] = (dem - m) / s
         stats[f"{key}_mean"] = float(m)
         stats[f"{key}_std"] = float(s)
@@ -248,6 +300,9 @@ def make_dataloaders(
     target_scale: Optional[float] = None,
     batch_size: int = 256,
     num_workers: int = 0,
+    pin_memory: bool = False,
+    persistent_workers: bool = False,
+    prefetch_factor: int = 2,
     dem_crop_config: Optional[dict] = None,
 ) -> Dict[str, DataLoader]:
     """Create DataLoaders for each split.
@@ -261,11 +316,15 @@ def make_dataloaders(
             continue
         ds = RainfallDataset(tensors, idx, target_scale=target_scale,
                              dem_crop_config=dem_crop_config)
+
+        use_persistent = bool(persistent_workers) and int(num_workers) > 0
         loaders[name] = DataLoader(
             ds,
             batch_size=batch_size,
             shuffle=(name == "train"),
             num_workers=num_workers,
-            pin_memory=False,
+            pin_memory=pin_memory,
+            persistent_workers=use_persistent,
+            prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None),
         )
     return loaders

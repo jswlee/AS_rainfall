@@ -24,26 +24,34 @@ import pandas as pd
 import torch
 
 from Daily_Modeling import config
+from torch.utils.data import DataLoader
+
 from Daily_Modeling.data_utils.dataset import (
     load_tensors_from_npz, normalize_tensors, RainfallDataset,
-    print_normalization_report,
+    print_normalization_report, FlatDataset,
 )
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, station_proportional_split,
-    compute_station_year_ranges, compute_year_boundaries, plot_split_heatmap,
-    plot_station_proportional_split_heatmap,
-    plot_station_proportional_split_daily_raster,
-    plot_station_proportional_cv_folds_heatmap,
+    compute_station_year_ranges, compute_year_boundaries,
+    sorted_sample_indices, expanding_time_folds,
 )
 from Daily_Modeling.models.site_mlp import (
     SiteMLP, SiteGLU, build_model, compute_input_size, adaptive_hidden_sizes,
 )
-from Daily_Modeling.utils.io_utils import save_json, load_json
+from Daily_Modeling.utils.io_utils import load_json, save_json, save_model, save_predictions
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
-from Daily_Modeling.utils.training import get_criterion, train_model
+from Daily_Modeling.utils.training import train_model
+from Daily_Modeling.models.losses import get_criterion
 from Daily_Modeling.utils.device import select_device
-from Daily_Modeling.utils.visualization import plot_model_architecture, plot_scatter, plot_training_history
-from Daily_Modeling.utils.io_utils import save_json, save_model, save_predictions
+from Daily_Modeling.utils.visualization import (
+    plot_model_architecture,
+    plot_scatter,
+    plot_split_heatmap,
+    plot_station_proportional_cv_folds_heatmap,
+    plot_station_proportional_split_daily_raster,
+    plot_station_proportional_split_heatmap,
+    plot_training_history,
+)
 
 
 _ARCH_VIZ_LOCK = Lock()
@@ -56,35 +64,6 @@ def _set_seed(seed: int):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-
-def _sorted_station_indices(indices: list, years: np.ndarray, months: np.ndarray, days: np.ndarray) -> list:
-    return sorted(indices, key=lambda i: (int(years[i]), int(months[i]), int(days[i])))
-
-
-def _expanding_time_folds(indices_sorted: list, n_folds: int) -> list:
-    """Forward-chaining (expanding-window) folds.
-
-    For fold k:
-      train = [0 : b_k]
-      val   = [b_k : b_{k+1}]
-    where b are evenly spaced boundaries.
-    """
-    if n_folds <= 1:
-        return []
-    n = len(indices_sorted)
-    # Use deterministic integer sizing to avoid early empty folds caused by
-    # int rounding in linspace for small n.
-    val_size = max(n // (n_folds + 1), 1)
-    folds = []
-    for k in range(1, n_folds + 1):
-        train_end = k * val_size
-        val_end = min((k + 1) * val_size, n)
-        if train_end >= n or train_end >= val_end:
-            break
-        tr = indices_sorted[:train_end]
-        va = indices_sorted[train_end:val_end]
-        folds.append((tr, va))
-    return folds
 
 
 @torch.no_grad()
@@ -101,28 +80,20 @@ def _predict_mm(model: torch.nn.Module, loader: DataLoader, device: torch.device
     return yt, yp
 
 
-class _FlatDataset(torch.utils.data.Dataset):
-    def __init__(self, base: RainfallDataset):
-        self.base = base
-    def __len__(self):
-        return len(self.base)
-    def __getitem__(self, idx):
-        feats, target = self.base[idx]
-        parts = [feats[k].view(-1) for k in ("climate", "local_dem", "regional_dem", "temporal")]
-        return torch.cat(parts), target
-
 
 def _pretrain_backbone(
     tensors, all_train_indices, target_scale, input_size,
     hidden, dropout, lr, wd, bs, loss_type, device,
     epochs=80, patience=20, dem_crop_config=None, tweedie_p=1.5,
+    num_workers: int = 0, pin_memory: bool = False,
+    persistent_workers: bool = False, prefetch_factor: int = 2,
 ):
     """Pretrain a shared MLP on all stations' training data combined."""
     n = len(all_train_indices)
     if n == 0:
         return None
     print(f"\n=== Pretraining shared backbone on {n:,d} samples ===")
-    ds = _FlatDataset(RainfallDataset(tensors, all_train_indices, target_scale,
+    ds = FlatDataset(RainfallDataset(tensors, all_train_indices, target_scale,
                                       dem_crop_config=dem_crop_config))
     # 90/10 split for pretrain val
     n_val = max(1, int(0.1 * n))
@@ -131,8 +102,25 @@ def _pretrain_backbone(
         ds, [n_train, n_val],
         generator=torch.Generator().manual_seed(config.RANDOM_SEED),
     )
-    tl = DataLoader(train_ds, batch_size=bs, shuffle=True, drop_last=True)
-    vl = DataLoader(val_ds, batch_size=bs)
+    use_persistent = bool(persistent_workers) and int(num_workers) > 0
+    tl = DataLoader(
+        train_ds,
+        batch_size=bs,
+        shuffle=True,
+        drop_last=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=use_persistent,
+        prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None),
+    )
+    vl = DataLoader(
+        val_ds,
+        batch_size=bs,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=use_persistent,
+        prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None),
+    )
 
     model = SiteMLP(input_size, hidden, dropout).to(device)
     criterion = get_criterion(loss_type, p=tweedie_p) if loss_type == "tweedie" else get_criterion(loss_type)
@@ -166,6 +154,15 @@ def main():
     parser.add_argument("--parallel", type=int, default=1,
                         help="Number of stations to train concurrently (1=sequential)")
 
+    parser.add_argument("--num-workers", type=int, default=config.DATALOADER_NUM_WORKERS,
+                        help=f"DataLoader num_workers (default: {config.DATALOADER_NUM_WORKERS}).")
+    parser.add_argument("--pin-memory", action="store_true", default=config.DATALOADER_PIN_MEMORY,
+                        help=f"Enable pinned memory (default: {config.DATALOADER_PIN_MEMORY}).")
+    parser.add_argument("--persistent-workers", action="store_true", default=config.DATALOADER_PERSISTENT_WORKERS,
+                        help=f"Keep DataLoader workers alive (default: {config.DATALOADER_PERSISTENT_WORKERS}).")
+    parser.add_argument("--prefetch-factor", type=int, default=config.DATALOADER_PREFETCH_FACTOR,
+                        help=f"DataLoader prefetch_factor (default: {config.DATALOADER_PREFETCH_FACTOR}).")
+
     # Optional: time-based CV and seed ensemble
     parser.add_argument("--cv-folds", type=int, default=1,
                         help="Time-based expanding-window CV folds per station (1 disables CV; default: 1)")
@@ -182,7 +179,10 @@ def main():
     device = select_device()
     print(f"Device: {device}")
 
-    tensors, meta = load_tensors_from_npz(device=device)
+    pin_memory = bool(args.pin_memory) and device.type == "cuda"
+    use_persistent = bool(args.persistent_workers) and int(args.num_workers) > 0
+
+    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
     stations = meta["stations"]
     years = meta["years"]
 
@@ -392,13 +392,20 @@ def main():
         if len(test_idx) == 0:
             print(f"  [{station_name}] SKIP: no test indices")
             return None
-        test_ds = _FlatDataset(RainfallDataset(tensors, test_idx, target_scale, dem_crop_config=stn_dem_crop))
-        test_loader = DataLoader(test_ds, batch_size=min(stn_bs, len(test_idx)))
+        test_ds = FlatDataset(RainfallDataset(tensors, test_idx, target_scale, dem_crop_config=stn_dem_crop))
+        test_loader = DataLoader(
+            test_ds,
+            batch_size=min(stn_bs, len(test_idx)),
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=use_persistent,
+            prefetch_factor=(args.prefetch_factor if int(args.num_workers) > 0 else None),
+        )
 
         # Build time-based CV folds over train+val (forward-chaining)
         trainval_idx = list(sp["train"]) + list(sp["val"])
-        trainval_sorted = _sorted_station_indices(trainval_idx, years, meta["months"], meta["days"])
-        folds = _expanding_time_folds(trainval_sorted, args.cv_folds)
+        trainval_sorted = sorted_sample_indices(trainval_idx, years, meta["months"], meta["days"])
+        folds = expanding_time_folds(trainval_sorted, args.cv_folds)
         if args.cv_folds > 1 and len(folds) == 0:
             print(f"  [{station_name}] SKIP: cv-folds requested but could not build folds")
             return None
@@ -407,10 +414,26 @@ def main():
 
         def _train_one_model(train_idx, val_idx, seed: int):
             _set_seed(seed)
-            train_ds = _FlatDataset(RainfallDataset(tensors, train_idx, target_scale, dem_crop_config=stn_dem_crop))
-            val_ds = _FlatDataset(RainfallDataset(tensors, val_idx, target_scale, dem_crop_config=stn_dem_crop))
-            tl = DataLoader(train_ds, batch_size=min(stn_bs, len(train_idx)), shuffle=True, drop_last=True)
-            vl = DataLoader(val_ds, batch_size=min(stn_bs, len(val_idx)))
+            train_ds = FlatDataset(RainfallDataset(tensors, train_idx, target_scale, dem_crop_config=stn_dem_crop))
+            val_ds = FlatDataset(RainfallDataset(tensors, val_idx, target_scale, dem_crop_config=stn_dem_crop))
+            tl = DataLoader(
+                train_ds,
+                batch_size=min(stn_bs, len(train_idx)),
+                shuffle=True,
+                drop_last=True,
+                num_workers=args.num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=use_persistent,
+                prefetch_factor=(args.prefetch_factor if int(args.num_workers) > 0 else None),
+            )
+            vl = DataLoader(
+                val_ds,
+                batch_size=min(stn_bs, len(val_idx)),
+                num_workers=args.num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=use_persistent,
+                prefetch_factor=(args.prefetch_factor if int(args.num_workers) > 0 else None),
+            )
 
             model = build_model(stn_arch_type, stn_input_size, stn_hidden, stn_dropout).to(device)
             stn_criterion = get_criterion(stn_loss_type, p=stn_tweedie_p) if stn_loss_type == "tweedie" else get_criterion(stn_loss_type)

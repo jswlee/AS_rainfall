@@ -5,11 +5,11 @@ Split modes
 1. **spatiotemporal** (LAND): hold out entire stations *and* use different
    year ranges.  Produces five named splits:
 
-   - ``train``          – train stations × train years
-   - ``val_spatial``    – held-out val stations × val years  (spatial + temporal)
-   - ``test_spatial``   – held-out test stations × test years
-   - ``val_temporal``   – train stations × val years  (temporal only)
-   - ``test_temporal``  – train stations × test years
+   - ``train``           train stations x train years
+   - ``val_spatial``     held-out val stations x val years  (spatial + temporal)
+   - ``test_spatial``    held-out test stations x test years
+   - ``val_temporal``    train stations x val years  (temporal only)
+   - ``test_temporal``   train stations x test years
 
 2. **station_proportional** (site-specific models): per-station chronological
    70/20/10 split.
@@ -83,8 +83,8 @@ def assign_station_groups(
     n_test: int = config.N_TEST_STATIONS,
     seed: int = config.RANDOM_SEED,
     station_year_ranges: Optional[Dict[str, Tuple[int, int]]] = None,
-    val_years: Tuple[int, int] = config.VAL_YEAR_RANGE,
-    test_years: Tuple[int, int] = config.TEST_YEAR_RANGE,
+    val_years: Tuple[int, int] = (0, 0),
+    test_years: Tuple[int, int] = (0, 0),
 ) -> Dict[str, str]:
     """Deterministically assign each station to 'train', 'val', or 'test'.
 
@@ -135,21 +135,21 @@ def spatiotemporal_split(
     stations: np.ndarray,
     years: np.ndarray,
     station_groups: Dict[str, str],
-    train_years: Tuple[int, int] = config.TRAIN_YEAR_RANGE,
-    val_years: Tuple[int, int] = config.VAL_YEAR_RANGE,
-    test_years: Tuple[int, int] = config.TEST_YEAR_RANGE,
+    train_years: Tuple[int, int] = (0, 0),
+    val_years: Tuple[int, int] = (0, 0),
+    test_years: Tuple[int, int] = (0, 0),
 ) -> Dict[str, np.ndarray]:
     """Return index arrays for a spatio-temporal split.
 
     Five splits are returned:
 
-    - **train**          – train stations in train years
-    - **val_spatial**    – held-out *val* stations in val years
-                           (tests spatial + temporal generalisation)
-    - **test_spatial**   – held-out *test* stations in test years
-    - **val_temporal**   – *train* stations in val years
+    - **train**           train stations in train years
+    - **val_spatial**     held-out *val* stations in val years
+                          (tests spatial + temporal generalisation)
+    - **test_spatial**    held-out *test* stations in test years
+    - **val_temporal**    *train* stations in val years
                            (tests temporal-only generalisation)
-    - **test_temporal**  – *train* stations in test years
+    - **test_temporal**   *train* stations in test years
     """
     n = len(stations)
     idx = np.arange(n)
@@ -181,9 +181,9 @@ def spatiotemporal_split(
 
 def temporal_split(
     years: np.ndarray,
-    train_years: Tuple[int, int] = config.TRAIN_YEAR_RANGE,
-    val_years: Tuple[int, int] = config.VAL_YEAR_RANGE,
-    test_years: Tuple[int, int] = config.TEST_YEAR_RANGE,
+    train_years: Tuple[int, int] = (0, 0),
+    val_years: Tuple[int, int] = (0, 0),
+    test_years: Tuple[int, int] = (0, 0),
 ) -> Dict[str, np.ndarray]:
     """Simple year-based split (for site-specific models)."""
     yr = years.astype(int)
@@ -204,9 +204,9 @@ def station_temporal_split(
     stations: np.ndarray,
     years: np.ndarray,
     target_station: str,
-    train_years: Tuple[int, int] = config.TRAIN_YEAR_RANGE,
-    val_years: Tuple[int, int] = config.VAL_YEAR_RANGE,
-    test_years: Tuple[int, int] = config.TEST_YEAR_RANGE,
+    train_years: Tuple[int, int] = (0, 0),
+    val_years: Tuple[int, int] = (0, 0),
+    test_years: Tuple[int, int] = (0, 0),
 ) -> Dict[str, np.ndarray]:
     """Return indices for a single station, split only by year."""
     mask = np.array([str(s) == target_station for s in stations])
@@ -219,6 +219,8 @@ def station_temporal_split(
     }
     return splits
 
+
+# ── per-station chronological split (site-specific) ───────────────────────
 
 def station_proportional_split(
     stations: np.ndarray,
@@ -260,398 +262,117 @@ def station_proportional_split(
     }
 
 
-# ── visualisation ──────────────────────────────────────────────────────────
+# ── CV fold construction ───────────────────────────────────────────────────
 
-def plot_split_heatmap(
-    stations: np.ndarray,
-    years: np.ndarray,
-    station_groups: Dict[str, str],
-    train_years: Tuple[int, int],
-    val_years: Tuple[int, int],
-    test_years: Tuple[int, int],
-    save_path=None,
-    title: str = "Spatiotemporal Split",
-):
-    """Generate a station × year heatmap showing which cells belong to which split.
+def _shuffle_into_folds(val_indices, n_folds, train_idx, rng):
+    """Shuffle *val_indices*, split into *n_folds* chunks, pair each with *train_idx*."""
+    shuffled = rng.permutation(val_indices)
+    chunks = np.array_split(shuffled, n_folds)
+    return [(train_idx.astype(int), chunk.astype(int)) for chunk in chunks]
 
-    Colours:
-      0 = no data (white), 1 = train (blue), 2 = val_spatial (green),
-      3 = test_spatial (red), 4 = val_temporal (light green),
-      5 = test_temporal (orange), 6 = unused (grey)
+
+def make_cv_folds(splits, n_folds, cv_mode, rng_seed):
+    """Build CV folds based on mode: temporal, spatial, or both.
+
+    - temporal: folds split val_temporal only (train stations, held-out years)
+    - spatial: folds split val_spatial only (held-out stations)
+    - both: folds alternate between temporal and spatial validation
     """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import ListedColormap, BoundaryNorm
-    import matplotlib.patches as mpatches
+    rng = np.random.RandomState(rng_seed)
+    train_idx = splits.get("train", np.array([], dtype=int))
+    val_temporal = splits.get("val_temporal", np.array([], dtype=int))
+    val_spatial = splits.get("val_spatial", np.array([], dtype=int))
 
-    unique_stations = sorted(set(str(s) for s in stations))
-    yr_int = years.astype(int)
-    unique_years = sorted(set(yr_int))
-    s2i = {s: i for i, s in enumerate(unique_stations)}
-    y2j = {y: j for j, y in enumerate(unique_years)}
-
-    grid = np.zeros((len(unique_stations), len(unique_years)), dtype=int)
-    # Track whether any sample in a given (station, year) belongs to each split.
-    has_train = np.zeros_like(grid, dtype=bool)
-    has_val = np.zeros_like(grid, dtype=bool)
-    has_test = np.zeros_like(grid, dtype=bool)
-
-    for k in range(len(stations)):
-        si = s2i[str(stations[k])]
-        yj = y2j[int(yr_int[k])]
-        role = station_groups.get(str(stations[k]), "train")
-        yr_val = int(yr_int[k])
-
-        in_train_yr = train_years[0] <= yr_val <= train_years[1]
-        in_val_yr = val_years[0] <= yr_val <= val_years[1]
-        in_test_yr = test_years[0] <= yr_val <= test_years[1]
-
-        if role == "train" and in_train_yr:
-            grid[si, yj] = 1  # train
-        elif role == "val" and in_val_yr:
-            grid[si, yj] = 2  # val_spatial
-        elif role == "test" and in_test_yr:
-            grid[si, yj] = 3  # test_spatial
-        elif role == "train" and in_val_yr:
-            grid[si, yj] = 4  # val_temporal
-        elif role == "train" and in_test_yr:
-            grid[si, yj] = 5  # test_temporal
+    if n_folds <= 1:
+        if cv_mode == "spatial":
+            val_idx = val_spatial if len(val_spatial) > 0 else val_temporal
         else:
-            if grid[si, yj] == 0:
-                grid[si, yj] = 6  # unused (val/test station in train years)
+            val_idx = val_temporal if len(val_temporal) > 0 else val_spatial
+        return [(train_idx.astype(int), val_idx.astype(int))]
 
-    colours = ["white", "#4c72b0", "#55a868", "#c44e52",
-               "#b5cf6b", "#f4a460", "#cccccc"]
-    cmap = ListedColormap(colours)
-    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5], cmap.N)
+    if cv_mode == "temporal":
+        if len(val_temporal) == 0:
+            raise ValueError("cv_mode=temporal but val_temporal is empty")
+        if len(val_temporal) < n_folds:
+            print(f"Warning: val_temporal has only {len(val_temporal)} samples for {n_folds} folds; using single fold")
+            return [(train_idx.astype(int), val_temporal.astype(int))]
+        return _shuffle_into_folds(val_temporal, n_folds, train_idx, rng)
 
-    fig, ax = plt.subplots(figsize=(max(14, len(unique_years) * 0.22),
-                                    max(5, len(unique_stations) * 0.35)))
-    ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+    elif cv_mode == "spatial":
+        if len(val_spatial) == 0:
+            raise ValueError("cv_mode=spatial but val_spatial is empty")
+        if len(val_spatial) < n_folds:
+            print(f"Warning: val_spatial has only {len(val_spatial)} samples for {n_folds} folds; using single fold")
+            return [(train_idx.astype(int), val_spatial.astype(int))]
+        return _shuffle_into_folds(val_spatial, n_folds, train_idx, rng)
 
-    # Axis labels
-    ax.set_yticks(range(len(unique_stations)))
-    ax.set_yticklabels(unique_stations, fontsize=7)
-    # Show every 5th year
-    step = max(1, len(unique_years) // 15)
-    ax.set_xticks(range(0, len(unique_years), step))
-    ax.set_xticklabels([unique_years[i] for i in range(0, len(unique_years), step)],
-                       fontsize=7, rotation=45, ha="right")
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Station")
-    ax.set_title(title)
-
-    # Legend
-    labels = ["No data", "Train", "Val spatial", "Test spatial",
-              "Val temporal", "Test temporal", "Unused"]
-    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colours, labels)]
-    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left",
-             fontsize=7, frameon=True)
-
-    plt.tight_layout()
-    if save_path:
-        fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
-        print(f"  Split heatmap saved to {save_path}")
-    plt.close(fig)
-    return fig
-
-
-def plot_station_proportional_split_daily_raster(
-    stations: np.ndarray,
-    years: np.ndarray,
-    months: np.ndarray,
-    days: np.ndarray,
-    train_frac: float = config.SITE_TRAIN_FRAC,
-    val_frac: float = config.SITE_VAL_FRAC,
-    save_path=None,
-    title: str = "Site Model Station-Proportional Split (per-day)",
-):
-    import datetime as _dt
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.dates as mdates
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-
-    unique_stations = sorted(set(str(s) for s in stations))
-    idx_all = np.arange(len(stations))
-
-    xs = []
-    ys = []
-    cs = []
-
-    c_train = "#4c72b0"
-    c_val = "#55a868"
-    c_test = "#c44e52"
-    c_none = "white"
-
-    for si, st in enumerate(unique_stations):
-        mask = np.array([str(s) == st for s in stations])
-        idx = idx_all[mask]
-        if len(idx) == 0:
-            continue
-
-        yr = years[idx].astype(int)
-        mo = months[idx].astype(int)
-        dy = days[idx].astype(int)
-        order = np.lexsort((dy, mo, yr))
-        sorted_idx = idx[order]
-
-        n = len(sorted_idx)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
-        tr_idx = sorted_idx[:n_train]
-        va_idx = sorted_idx[n_train:n_train + n_val]
-        te_idx = sorted_idx[n_train + n_val:]
-
-        for k in tr_idx:
-            xs.append(mdates.date2num(_dt.date(int(years[k]), int(months[k]), int(days[k]))))
-            ys.append(si)
-            cs.append(c_train)
-        for k in va_idx:
-            xs.append(mdates.date2num(_dt.date(int(years[k]), int(months[k]), int(days[k]))))
-            ys.append(si)
-            cs.append(c_val)
-        for k in te_idx:
-            xs.append(mdates.date2num(_dt.date(int(years[k]), int(months[k]), int(days[k]))))
-            ys.append(si)
-            cs.append(c_test)
-
-    fig, ax = plt.subplots(figsize=(16, max(5, len(unique_stations) * 0.35)))
-    if len(xs) > 0:
-        ax.scatter(xs, ys, c=cs, marker="s", s=6, linewidths=0)
-
-    ax.set_yticks(range(len(unique_stations)))
-    ax.set_yticklabels(unique_stations, fontsize=7)
-    ax.set_ylim(-0.5, len(unique_stations) - 0.5)
-
-    ax.xaxis.set_major_locator(mdates.YearLocator(base=2))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    ax.tick_params(axis="x", labelsize=7, rotation=45)
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Station")
-    ax.set_title(title)
-
-    patches = [
-        mpatches.Patch(color=c_none, label="No data"),
-        mpatches.Patch(color=c_train, label="Train"),
-        mpatches.Patch(color=c_val, label="Val"),
-        mpatches.Patch(color=c_test, label="Test"),
-    ]
-    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left",
-              fontsize=7, frameon=True)
-
-    plt.tight_layout()
-    if save_path:
-        fig.savefig(str(save_path), dpi=200, bbox_inches="tight")
-        print(f"  Daily split raster saved to {save_path}")
-    plt.close(fig)
-    return fig
-
-
-def plot_station_proportional_cv_folds_heatmap(
-    stations: np.ndarray,
-    years: np.ndarray,
-    months: np.ndarray,
-    days: np.ndarray,
-    cv_folds: int,
-    train_frac: float = config.SITE_TRAIN_FRAC,
-    val_frac: float = config.SITE_VAL_FRAC,
-    save_path=None,
-    title: str = "Site Model CV Folds (expanding-window)",
-):
-    """Visualize expanding-window folds per station based on actual timestamps.
-
-    Produces a heatmap with rows = station×fold and columns = year.
-    Colours: 0 no data, 1 train, 2 val.
-
-    Notes:
-    - This is computed from the station's *train+val* timeline (i.e., excluding test)
-      so that folds are forward-chaining and data-driven.
-    - Test is not shown here because folds are about how train/val are formed.
-    """
-    if cv_folds <= 1:
-        return None
-
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import ListedColormap, BoundaryNorm
-    import matplotlib.patches as mpatches
-
-    unique_stations = sorted(set(str(s) for s in stations))
-    yr_int = years.astype(int)
-    unique_years = sorted(set(yr_int))
-    y2j = {y: j for j, y in enumerate(unique_years)}
-
-    def _sorted_station_idx(st: str):
-        mask = np.array([str(s) == st for s in stations])
-        idx = np.where(mask)[0]
-        if len(idx) == 0:
-            return np.array([], dtype=int)
-        yr = years[idx].astype(int)
-        mo = months[idx].astype(int)
-        dy = days[idx].astype(int)
-        order = np.lexsort((dy, mo, yr))
-        return idx[order]
-
-    def _expanding_folds(indices_sorted: np.ndarray, k: int):
-        n = len(indices_sorted)
-        val_size = max(n // (k + 1), 1)
+    elif cv_mode == "both":
+        if len(val_temporal) == 0 or len(val_spatial) == 0:
+            raise ValueError("cv_mode=both requires both val_temporal and val_spatial to be non-empty")
+        n_temp = n_folds // 2
+        n_spat = n_folds - n_temp
         folds = []
-        for i in range(1, k + 1):
-            tr_end = i * val_size
-            va_end = min((i + 1) * val_size, n)
-            if tr_end >= n or tr_end >= va_end:
-                break
-            folds.append((indices_sorted[:tr_end], indices_sorted[tr_end:va_end]))
+        if n_temp > 0:
+            if len(val_temporal) < n_temp:
+                n_temp = 1
+            folds.extend(_shuffle_into_folds(val_temporal, n_temp, train_idx, rng))
+        if n_spat > 0:
+            if len(val_spatial) < n_spat:
+                n_spat = 1
+            folds.extend(_shuffle_into_folds(val_spatial, n_spat, train_idx, rng))
         return folds
 
-    n_rows = len(unique_stations) * cv_folds
-    grid = np.zeros((n_rows, len(unique_years)), dtype=int)
-
-    row_labels = []
-    for si, st in enumerate(unique_stations):
-        sorted_idx = _sorted_station_idx(st)
-        if len(sorted_idx) == 0:
-            for f in range(1, cv_folds + 1):
-                row_labels.append(f"{st}  [fold {f}]")
-            continue
-
-        n = len(sorted_idx)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
-        trainval_sorted = sorted_idx[: n_train + n_val]
-
-        folds = _expanding_folds(trainval_sorted, cv_folds)
-        for f in range(1, cv_folds + 1):
-            row_labels.append(f"{st}  [fold {f}]")
-        for f_idx, (tr, va) in enumerate(folds, start=1):
-            r = si * cv_folds + (f_idx - 1)
-            for k in tr:
-                grid[r, y2j[int(yr_int[k])]] = max(grid[r, y2j[int(yr_int[k])]], 1)
-            for k in va:
-                grid[r, y2j[int(yr_int[k])]] = 2
-
-    colours = ["white", "#4c72b0", "#55a868"]
-    labels = ["No data", "Train", "Val"]
-    cmap = ListedColormap(colours)
-    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
-
-    fig, ax = plt.subplots(figsize=(max(14, len(unique_years) * 0.22),
-                                    max(7, n_rows * 0.18)))
-    ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
-
-    ax.set_yticks(range(n_rows))
-    ax.set_yticklabels(row_labels, fontsize=6)
-    step = max(1, len(unique_years) // 15)
-    ax.set_xticks(range(0, len(unique_years), step))
-    ax.set_xticklabels([unique_years[i] for i in range(0, len(unique_years), step)],
-                       fontsize=7, rotation=45, ha="right")
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Station × Fold")
-    ax.set_title(title)
-
-    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colours, labels)]
-    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left",
-              fontsize=7, frameon=True)
-
-    plt.tight_layout()
-    if save_path:
-        fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
-        print(f"  CV fold heatmap saved to {save_path}")
-    plt.close(fig)
-    return fig
+    else:
+        raise ValueError(f"Unknown cv_mode: {cv_mode}")
 
 
-def plot_station_proportional_split_heatmap(
-    stations: np.ndarray,
-    years: np.ndarray,
-    months: np.ndarray,
-    days: np.ndarray,
-    train_frac: float = config.SITE_TRAIN_FRAC,
-    val_frac: float = config.SITE_VAL_FRAC,
-    save_path=None,
-    title: str = "Site Model Station-Proportional Split",
-):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import ListedColormap, BoundaryNorm
-    import matplotlib.patches as mpatches
+# ── index sorting & expanding-window folds ─────────────────────────────────
 
-    unique_stations = sorted(set(str(s) for s in stations))
-    yr_int = years.astype(int)
-    unique_years = sorted(set(yr_int))
-    s2i = {s: i for i, s in enumerate(unique_stations)}
-    y2j = {y: j for j, y in enumerate(unique_years)}
+def sorted_sample_indices(indices, years, months, days):
+    """Sort sample indices chronologically by (year, month, day)."""
+    return sorted(indices, key=lambda i: (int(years[i]), int(months[i]), int(days[i])))
 
-    grid = np.zeros((len(unique_stations), len(unique_years)), dtype=int)
-    has_train = np.zeros_like(grid, dtype=bool)
-    has_val = np.zeros_like(grid, dtype=bool)
-    has_test = np.zeros_like(grid, dtype=bool)
-    idx_all = np.arange(len(stations))
-    for st in unique_stations:
-        mask = np.array([str(s) == st for s in stations])
-        idx = idx_all[mask]
-        if len(idx) == 0:
-            continue
-        yr = years[idx].astype(int)
-        mo = months[idx].astype(int)
-        dy = days[idx].astype(int)
-        date_order = np.lexsort((dy, mo, yr))
-        sorted_idx = idx[date_order]
-        n = len(sorted_idx)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
-        tr = set(sorted_idx[:n_train].tolist())
-        va = set(sorted_idx[n_train:n_train + n_val].tolist())
-        te = set(sorted_idx[n_train + n_val:].tolist())
 
-        for k in sorted_idx:
-            si = s2i[str(stations[k])]
-            yj = y2j[int(yr_int[k])]
-            if k in tr:
-                has_train[si, yj] = True
-            elif k in va:
-                has_val[si, yj] = True
-            elif k in te:
-                has_test[si, yj] = True
+def expanding_time_folds(indices_sorted, n_folds: int):
+    """Forward-chaining (expanding-window) folds.
 
-    # Reduce presence flags into a single label per year.
-    # Priority is chosen to avoid the misleading "no train" appearance when a year
-    # contains both train+test samples (common when the split boundary falls within a year).
-    grid[has_test] = 3
-    grid[has_val] = 2
-    grid[has_train] = 1
+    For fold k:
+      train = [0 : b_k]
+      val   = [b_k : b_{k+1}]
+    where b are evenly spaced boundaries.
+    """
+    if n_folds <= 1:
+        return []
+    n = len(indices_sorted)
+    val_size = max(n // (n_folds + 1), 1)
+    folds = []
+    for k in range(1, n_folds + 1):
+        train_end = k * val_size
+        val_end = min((k + 1) * val_size, n)
+        if train_end >= n or train_end >= val_end:
+            break
+        folds.append((indices_sorted[:train_end], indices_sorted[train_end:val_end]))
+    return folds
 
-    colours = ["white", "#4c72b0", "#55a868", "#c44e52"]
-    labels = ["No data", "Train", "Val", "Test"]
-    cmap = ListedColormap(colours)
-    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
 
-    fig, ax = plt.subplots(figsize=(max(14, len(unique_years) * 0.22),
-                                    max(5, len(unique_stations) * 0.35)))
-    ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+# ── split validation ───────────────────────────────────────────────────────
 
-    ax.set_yticks(range(len(unique_stations)))
-    ax.set_yticklabels(unique_stations, fontsize=7)
-    step = max(1, len(unique_years) // 15)
-    ax.set_xticks(range(0, len(unique_years), step))
-    ax.set_xticklabels([unique_years[i] for i in range(0, len(unique_years), step)],
-                       fontsize=7, rotation=45, ha="right")
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Station")
-    ax.set_title(title)
+def validate_test_separation(splits, stations, years, train_yr, val_yr, test_yr):
+    """Validate that test sets are temporally and spatially distinct from train/val."""
+    train_idx = splits.get("train", np.array([], dtype=int))
+    test_temporal = splits.get("test_temporal", np.array([], dtype=int))
+    test_spatial = splits.get("test_spatial", np.array([], dtype=int))
 
-    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colours, labels)]
-    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left",
-              fontsize=7, frameon=True)
+    if len(test_temporal) > 0:
+        test_temp_years = years[test_temporal]
+        if np.any(test_temp_years < test_yr[0]):
+            raise ValueError(f"test_temporal contains years before {test_yr[0]}")
 
-    plt.tight_layout()
-    if save_path:
-        fig.savefig(str(save_path), dpi=150, bbox_inches="tight")
-        print(f"  Split heatmap saved to {save_path}")
-    plt.close(fig)
-    return fig
+    if len(test_spatial) > 0 and len(train_idx) > 0:
+        test_spatial_stations = set(stations[test_spatial])
+        train_stations = set(stations[train_idx])
+        overlap = test_spatial_stations & train_stations
+        if overlap:
+            raise ValueError(f"test_spatial shares {len(overlap)} stations with train: {overlap}")
+
+    print("\u2713 Test sets are temporally and spatially distinct from train/val")

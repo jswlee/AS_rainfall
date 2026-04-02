@@ -20,9 +20,6 @@ Usage:
 
 import argparse
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import pandas as pd
@@ -30,207 +27,46 @@ import json
 import torch
 
 from Daily_Modeling import config
-from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, normalize_tensors, make_dataloaders
+from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, normalize_tensors, make_dataloaders, get_dataset_metadata
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, compute_station_year_ranges,
-    compute_year_boundaries, plot_split_heatmap,
+    compute_year_boundaries, make_cv_folds,
 )
 from Daily_Modeling.models.land import create_land_model
 from Daily_Modeling.utils.training import train_model
+from Daily_Modeling.models.losses import get_criterion
+from Daily_Modeling.utils.inference import predict_mm, make_metric_fn
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
 from Daily_Modeling.utils.io_utils import save_json
 from Daily_Modeling.utils.device import select_device
+from Daily_Modeling.utils.visualization import plot_split_heatmap, save_optuna_visualizations
 
 
-def _get_metadata(tensors, dem_crop_config=None):
-    c = tensors["climate"]
-    meta = {
-        "climate_shape": tuple(c.shape[1:]),
-        "local_dem_shape": tuple(tensors["local_dem"].shape[1:]),
-        "regional_dem_shape": tuple(tensors["regional_dem"].shape[1:]),
-        "num_month_features": int(tensors["temporal"].shape[1]),
-        "num_climate_vars": int(c.shape[1]),
-    }
-    # Override DEM shapes if cropping is configured
-    if dem_crop_config is not None:
-        if "local_patch_size" in dem_crop_config:
-            lp = dem_crop_config["local_patch_size"]
-            meta["local_dem_shape"] = (lp, lp)
-        if "regional_patch_size" in dem_crop_config:
-            rp = dem_crop_config["regional_patch_size"]
-            meta["regional_dem_shape"] = (rp, rp)
-    return meta
+def _dist_to_dict(d):
+    try:
+        from optuna.distributions import CategoricalDistribution, FloatDistribution, IntDistribution
+    except Exception:
+        return {"type": type(d).__name__, "repr": repr(d)}
 
-
-# Tuning-specific constants (faster than full training)
-_TUNE_MAX_EPOCHS = 75
-_TUNE_PATIENCE = 15
-_TUNE_SUBSET_FRAC = 1.0  # train on 50% of data per fold for speed
-_TUNE_N_CV_FOLDS = 3
-
-
-# Maps loss_type -> required output_head
-_LOSS_TO_HEAD = {
-    "mse": "softplus",
-    "gamma": "gamma",
-    "tweedie": "softplus",
-    "bernoulli_gamma": "bernoulli_gamma",
-}
-
-
-def _predict_mm(model, loader, device, target_scale, output_head):
-    """Run inference and return (preds_mm, targets_mm) numpy arrays."""
-    model.eval()
-    preds, targets = [], []
-    with torch.no_grad():
-        for feats, tgt in loader:
-            feats = {k: torch.nan_to_num(v.to(device)) for k, v in feats.items()}
-            out = model(feats)
-            if output_head == "bernoulli_gamma":
-                p_rain = torch.sigmoid(out[:, 0])
-                alpha = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6)
-                beta  = torch.nn.functional.softplus(out[:, 2]).clamp(min=1e-6)
-                pred = p_rain * alpha * beta  # E[Y] = p * alpha * beta
-            elif output_head == "gamma":
-                alpha = torch.nn.functional.softplus(out[:, 0]).clamp(min=1e-6)
-                beta  = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6)
-                pred  = alpha * beta  # E[Y] = alpha * beta
-            else:
-                pred = out.squeeze(-1)
-            preds.append(pred.cpu().numpy().ravel())
-            targets.append(tgt.cpu().numpy().ravel())
-    preds_mm = np.concatenate(preds) * target_scale
-    targets_mm = np.concatenate(targets) * target_scale
-    return preds_mm, targets_mm
-
-
-def _build_criterion(loss_type, hp):
-    """Build the loss criterion for a given loss_type."""
-    if loss_type == "tweedie":
-        from Daily_Modeling.models.losses import TweedieDeviance
-        return TweedieDeviance(p=hp.get("tweedie_p", 1.5))
-    elif loss_type == "bernoulli_gamma":
-        from Daily_Modeling.models.losses import BernoulliGammaNLL
-        return BernoulliGammaNLL()
-    elif loss_type == "gamma":
-        from Daily_Modeling.models.losses import GammaNLL
-        return GammaNLL()
-    else:
-        return None  # default MSE inside train_model
-
-
-def _make_metric_fn(loss_type, output_head, target_scale):
-    """Return a per-batch MAE-in-mm metric function, or None for MSE."""
-    if loss_type not in ("tweedie", "bernoulli_gamma", "gamma"):
-        return None
-
-    def _val_mae_mm(outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        y = targets.view(-1)
-        if output_head == "bernoulli_gamma":
-            p_rain = torch.sigmoid(outputs[:, 0])
-            alpha = torch.nn.functional.softplus(outputs[:, 1]).clamp(min=1e-6)
-            beta  = torch.nn.functional.softplus(outputs[:, 2]).clamp(min=1e-6)
-            pred  = p_rain * alpha * beta
-        elif output_head == "gamma":
-            alpha = torch.nn.functional.softplus(outputs[:, 0]).clamp(min=1e-6)
-            beta  = torch.nn.functional.softplus(outputs[:, 1]).clamp(min=1e-6)
-            pred  = alpha * beta
-        else:
-            pred = outputs.view(-1)
-        return (pred - y).abs().mean() * float(target_scale)
-
-    return _val_mae_mm
-
-
-def _make_cv_folds(splits, n_folds, cv_mode, rng_seed):
-    """Build CV folds based on mode: temporal, spatial, both, or mixed.
-
-    - temporal: folds split val_temporal only (train stations, held-out years)
-    - spatial: folds split val_spatial only (held-out stations)
-    - both: folds alternate between temporal and spatial validation
-    - mixed: pool train+val_temporal+val_spatial, shuffle, and split (legacy)
-    """
-    rng = np.random.RandomState(rng_seed)
-    train_idx = splits.get("train", np.array([], dtype=int))
-    val_temporal = splits.get("val_temporal", np.array([], dtype=int))
-    val_spatial = splits.get("val_spatial", np.array([], dtype=int))
-
-    if n_folds <= 1:
-        if cv_mode == "spatial":
-            val_idx = val_spatial if len(val_spatial) > 0 else val_temporal
-        else:
-            val_idx = val_temporal if len(val_temporal) > 0 else val_spatial
-        return [(train_idx.astype(int), val_idx.astype(int))]
-
-    if cv_mode == "temporal":
-        if len(val_temporal) == 0:
-            raise ValueError("cv_mode=temporal but val_temporal is empty")
-        if len(val_temporal) < n_folds:
-            print(f"Warning: val_temporal has only {len(val_temporal)} samples for {n_folds} folds; using single fold")
-            return [(train_idx.astype(int), val_temporal.astype(int))]
-        shuffled = rng.permutation(val_temporal)
-        fold_indices = np.array_split(shuffled, n_folds)
-        folds = []
-        for i in range(n_folds):
-            val_fold = fold_indices[i]
-            folds.append((train_idx.astype(int), val_fold.astype(int)))
-        return folds
-
-    elif cv_mode == "spatial":
-        if len(val_spatial) == 0:
-            raise ValueError("cv_mode=spatial but val_spatial is empty")
-        if len(val_spatial) < n_folds:
-            print(f"Warning: val_spatial has only {len(val_spatial)} samples for {n_folds} folds; using single fold")
-            return [(train_idx.astype(int), val_spatial.astype(int))]
-        shuffled = rng.permutation(val_spatial)
-        fold_indices = np.array_split(shuffled, n_folds)
-        folds = []
-        for i in range(n_folds):
-            val_fold = fold_indices[i]
-            folds.append((train_idx.astype(int), val_fold.astype(int)))
-        return folds
-
-    elif cv_mode == "both":
-        if len(val_temporal) == 0 or len(val_spatial) == 0:
-            raise ValueError("cv_mode=both requires both val_temporal and val_spatial to be non-empty")
-        n_temp = n_folds // 2
-        n_spat = n_folds - n_temp
-        folds = []
-        if n_temp > 0:
-            if len(val_temporal) < n_temp:
-                n_temp = 1
-            temp_shuffled = rng.permutation(val_temporal)
-            temp_folds = np.array_split(temp_shuffled, n_temp)
-            for val_fold in temp_folds:
-                folds.append((train_idx.astype(int), val_fold.astype(int)))
-        if n_spat > 0:
-            if len(val_spatial) < n_spat:
-                n_spat = 1
-            spat_shuffled = rng.permutation(val_spatial)
-            spat_folds = np.array_split(spat_shuffled, n_spat)
-            for val_fold in spat_folds:
-                folds.append((train_idx.astype(int), val_fold.astype(int)))
-        return folds
-
-    elif cv_mode == "mixed":
-        all_non_test = np.concatenate([train_idx, val_temporal, val_spatial]).astype(int)
-        all_non_test = np.unique(all_non_test)
-        n = len(all_non_test)
-        if n < n_folds * 20:
-            val_idx = val_temporal if len(val_temporal) > 0 else val_spatial
-            return [(train_idx.astype(int), val_idx.astype(int))]
-        shuffled = rng.permutation(all_non_test)
-        fold_indices = np.array_split(shuffled, n_folds)
-        folds = []
-        for i in range(n_folds):
-            val_fold = fold_indices[i]
-            others = [fold_indices[j] for j in range(n_folds) if j != i]
-            train_fold = np.concatenate(others) if len(others) > 0 else np.array([], dtype=int)
-            folds.append((train_fold.astype(int), val_fold.astype(int)))
-        return folds
-
-    else:
-        raise ValueError(f"Unknown cv_mode: {cv_mode}")
+    if isinstance(d, CategoricalDistribution):
+        return {"type": "categorical", "choices": list(d.choices)}
+    if isinstance(d, FloatDistribution):
+        return {
+            "type": "float",
+            "low": float(d.low),
+            "high": float(d.high),
+            "log": bool(d.log),
+            "step": None if d.step is None else float(d.step),
+        }
+    if isinstance(d, IntDistribution):
+        return {
+            "type": "int",
+            "low": int(d.low),
+            "high": int(d.high),
+            "log": bool(d.log),
+            "step": int(d.step),
+        }
+    return {"type": type(d).__name__, "repr": repr(d)}
 
 
 def objective(
@@ -240,143 +76,164 @@ def objective(
     base_metadata,
     device,
     target_scale,
-    loss_type="mse",
-    n_cv_folds=3,
-    cv_mode="temporal",
-    opt_metric: str = "auto",
-    extreme_percentile: float = 98.0,
-    csi_threshold_mm: float = 50.0,
-    no_early_stopping=False,
+    args,
 ):
     num_cv = base_metadata["num_climate_vars"]
 
-    # --- DEM patch size HPs ---
-    local_candidates = config.DEM_LOCAL_CANDIDATES
-    regional_candidates = config.DEM_REGIONAL_CANDIDATES
-    local_idx = trial.suggest_int("local_dem_cfg", 0, len(local_candidates) - 1)
-    regional_idx = trial.suggest_int("regional_dem_cfg", 0, len(regional_candidates) - 1)
-    lp, lk = local_candidates[local_idx]
-    rp, rk = regional_candidates[regional_idx]
-    dem_crop = {
-        "local_patch_size": lp, "local_km": lk,
-        "regional_patch_size": rp, "regional_km": rk,
-    }
-    metadata = _get_metadata(tensors, dem_crop_config=dem_crop)
+    # Precompute DEM patches for all candidates once per trial
+    if not hasattr(trial, 'precomputed_dem_patches'):
+        trial.precomputed_dem_patches = {}
+        local_candidates = config.DEM_LOCAL_CANDIDATES
+        regional_candidates = config.DEM_REGIONAL_CANDIDATES
+        
+        for local_idx, (lp, lk) in enumerate(local_candidates):
+            for regional_idx, (rp, rk) in enumerate(regional_candidates):
+                dem_crop = {
+                    "local_patch_size": lp, "local_km": lk,
+                    "regional_patch_size": rp, "regional_km": rk,
+                }
+                key = f"{local_idx}_{regional_idx}"
+                # Precompute metadata for this DEM configuration
+                trial.precomputed_dem_patches[key] = {
+                    "metadata": get_dataset_metadata(tensors, dem_crop_config=dem_crop),
+                    "dem_crop": dem_crop
+                }
+    
+    # Select DEM configuration
+    local_idx = trial.suggest_int("local_dem_cfg", 0, len(config.DEM_LOCAL_CANDIDATES) - 1)
+    regional_idx = trial.suggest_int("regional_dem_cfg", 0, len(config.DEM_REGIONAL_CANDIDATES) - 1)
+    key = f"{local_idx}_{regional_idx}"
+    dem_data = trial.precomputed_dem_patches[key]
+    dem_crop = dem_data["dem_crop"]
+    metadata = dem_data["metadata"]
 
-    output_head = _LOSS_TO_HEAD[loss_type]
+    output_head = config.LOSS_TO_HEAD[args.loss_type]
 
     hp = {
-        "climate_units": trial.suggest_int("climate_units", num_cv * 34, num_cv * 102, step=num_cv),
-        "dem_units":     trial.suggest_int("dem_units", 16, 128, step=16),
-        "temporal_units": trial.suggest_int("temporal_units", 4, 32, step=4),
+        "climate_units": trial.suggest_int("climate_units", num_cv * 140, num_cv * 250, step=num_cv),
+        "dem_units": trial.suggest_int("dem_units", 16, 256, step=16),
+        "dem_patch_size": trial.suggest_int("dem_patch_size", 3, 12),
+        "temporal_units": trial.suggest_int("temporal_units", 4, 64, step=4),
         "na": trial.suggest_int("na", 64, 512, step=64),
-        "nb": trial.suggest_int("nb", 32, 128, step=32),
-        "dropout_rate": trial.suggest_float("dropout_rate", 0.3, 0.6, step=0.05),
-        # Tune LR at a reference batch size, then scale based on chosen batch_size.
-        # For AdamW, sqrt scaling is a reasonable default when varying batch size.
-        "base_lr": trial.suggest_float("base_lr", 1e-5, 5e-4, log=True),
-        "weight_decay": trial.suggest_float("weight_decay", 1e-4, 1e-1, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", [256, 512, 1024]),
+        "nb": trial.suggest_int("nb", 16, 128, step=16),
+        "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.3, step=0.05),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-2, log=True),
+        "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-3, log=True),
+        "batch_size": trial.suggest_categorical("batch_size", [512, 1024, 2048]),
         "climate_processing": "conv2d",
         "output_head": output_head,
-        "loss_type": loss_type,
+        "loss_type": args.loss_type,
+        "use_batch_norm": args.use_batch_norm,
         "local_dem_patch": lp, "local_dem_km": lk,
         "regional_dem_patch": rp, "regional_dem_km": rk,
     }
 
-    _LR_REF_BATCH = 32
-    lr_scale = float(hp["batch_size"]) / float(_LR_REF_BATCH)
-    hp["learning_rate"] = float(hp["base_lr"]) * (lr_scale ** 0.5)
-
     # Tweedie-specific: tune the p-value
-    if loss_type == "tweedie":
-        hp["tweedie_p"] = trial.suggest_float("tweedie_p", 1.1, 1.9, step=0.05)
+    if args.loss_type == "tweedie":
+        hp["tweedie_p"] = trial.suggest_float("tweedie_p", 1.6, 1.9, step=0.05)
+
+    if args.loss_type == "tweedie":
+        hp["tweedie_mu_max"] = args.tweedie_mu_max
+        hp["tweedie_loss_cap"] = args.tweedie_loss_cap
 
     if hp["climate_units"] % num_cv != 0:
         hp["climate_units"] = (hp["climate_units"] // num_cv) * num_cv
 
-    criterion = _build_criterion(loss_type, hp)
-    metric_fn  = _make_metric_fn(loss_type, output_head, target_scale)
+    if args.loss_type == "mse":
+        criterion = None  # default MSE inside train_model
+    elif args.loss_type == "tweedie":
+        criterion = get_criterion("tweedie", p=hp.get("tweedie_p", 1.5),
+                                  mu_max=hp.get("tweedie_mu_max"),
+                                  loss_cap=hp.get("tweedie_loss_cap"))
+    else:
+        criterion = get_criterion(args.loss_type)
+    metric_fn  = make_metric_fn(args.loss_type, output_head, target_scale, opt_metric=args.opt_metric)
 
     # --- Build CV folds ---
-    cv_folds = _make_cv_folds(splits, n_cv_folds, cv_mode, rng_seed=config.RANDOM_SEED + trial.number)
+    cv_folds = make_cv_folds(splits, args.cv_folds, args.cv_mode, rng_seed=config.RANDOM_SEED + trial.number)
 
     print(
         f"\nTrial {trial.number}: params≈{hp['na']}+{hp['nb']}  dem={hp['dem_units']}  "
         f"DEM local={lp}x{lp}@{lk}km  regional={rp}x{rp}@{rk}km  "
-        f"loss={loss_type}  folds={len(cv_folds)}"
-        + (f"  tweedie_p={hp['tweedie_p']:.2f}" if loss_type == "tweedie" else "")
+        f"loss={args.loss_type}  folds={len(cv_folds)}"
+        + (f"  tweedie_p={hp['tweedie_p']:.2f}" if args.loss_type == "tweedie" else "")
     )
     print("Tuned HPs:\n" + json.dumps(hp, indent=2, sort_keys=True))
+
+    # Build metric label once (used for fold-level printing)
+    if args.opt_metric == "pctl_abs_rel_bias":
+        metric_label = f"P{int(args.extreme_percentile)}_abs_rel_bias"
+    elif args.opt_metric == "csi":
+        metric_label = f"1-CSI@{args.csi_threshold_mm:g}mm"
+    else:
+        metric_label = args.opt_metric.upper()
 
     fold_scores = []
     for fold_i, (train_fold_idx, val_fold_idx) in enumerate(cv_folds):
         # Subsample training data for speed
         rng = np.random.RandomState(config.RANDOM_SEED + trial.number * 100 + fold_i)
-        if _TUNE_SUBSET_FRAC < 1.0 and len(train_fold_idx) > 200:
-            n_sub = max(100, int(len(train_fold_idx) * _TUNE_SUBSET_FRAC))
+        if args.subset_frac < 1.0 and len(train_fold_idx) > 200:
+            n_sub = max(100, int(len(train_fold_idx) * args.subset_frac))
             train_fold_idx = rng.choice(train_fold_idx, n_sub, replace=False)
 
         fold_splits = {"train": train_fold_idx, "val": val_fold_idx}
         loaders = make_dataloaders(tensors, fold_splits, target_scale=target_scale,
                                    batch_size=hp["batch_size"],
+                                   num_workers=args.num_workers,
+                                   pin_memory=args.pin_memory,
+                                   persistent_workers=args.persistent_workers,
+                                   prefetch_factor=args.prefetch_factor,
                                    dem_crop_config=dem_crop)
 
         if "val" not in loaders or len(loaders["val"].dataset) == 0:
             print(f"  Fold {fold_i}: empty val, skipping")
             continue
 
-        model = create_land_model(hp, metadata).to(device)
+        # Create or reset model
+        if fold_i == 0:
+            model = create_land_model(hp, metadata).to(device)
+            initial_state_dict = model.state_dict()
+        else:
+            # Reset model to initial weights for new fold
+            model = create_land_model(hp, metadata).to(device)
+            model.load_state_dict(initial_state_dict)
 
         history = train_model(
             model, loaders["train"], loaders["val"], device,
-            epochs=_TUNE_MAX_EPOCHS, patience=_TUNE_PATIENCE,
+            epochs=args.max_epochs, patience=args.patience,
             min_epochs=40,
             learning_rate=hp["learning_rate"], weight_decay=hp["weight_decay"],
             criterion=criterion,
             metric_fn=metric_fn,
             verbose=1,
             trial=None,  # no Optuna pruning inside CV folds
-            no_early_stopping=no_early_stopping,
-            monitor=("val_metric" if loss_type != "mse" else "val_loss"),
+            no_early_stopping=args.no_early_stopping,
+            monitor=("val_metric" if args.loss_type != "mse" else "val_loss"),
+            scheduler_type=args.scheduler,
+            use_amp=args.amp,
+            debug_early_stopping=True,
         )
 
-        if loss_type == "mse":
-            # Training objective for MSE remains the loss curve
+        # --- Score the fold ---
+        if args.loss_type == "mse" and args.opt_metric == "mse":
+            # Shortcut: use normalised validation loss directly
             fold_score = float(min(history["val_loss"]))
-            metric_label = "MSE"
         else:
-            preds_mm, targets_mm = _predict_mm(
-                model, loaders["val"], device,
-                target_scale, output_head
+            preds_mm, targets_mm = predict_mm(
+                model, loaders["val"], device, target_scale, output_head
             )
             m = compute_metrics(targets_mm, preds_mm)
-            m.update(
-                compute_extreme_metrics(
-                    targets_mm,
-                    preds_mm,
-                    percentile=extreme_percentile,
-                    csi_threshold_mm=csi_threshold_mm,
-                )
-            )
-
-            if opt_metric == "auto":
-                # Default historical behavior
-                fold_score = float(m["mae"])
-                metric_label = "MAE_mm"
-            elif opt_metric == "mae":
-                fold_score = float(m["mae"])
-                metric_label = "MAE_mm"
-            elif opt_metric == "pctl_abs_rel_bias":
-                fold_score = float(m.get("pctl_abs_rel_bias", float("inf")))
-                metric_label = f"P{int(extreme_percentile)}_abs_rel_bias"
-            elif opt_metric == "csi":
-                # Maximise CSI; Optuna minimises so use (1 - CSI)
+            if args.opt_metric in ("pctl_abs_rel_bias", "csi"):
+                m.update(compute_extreme_metrics(
+                    targets_mm, preds_mm,
+                    percentile=args.extreme_percentile,
+                    csi_threshold_mm=args.csi_threshold_mm,
+                ))
+            if args.opt_metric == "csi":
                 csi = float(m.get("csi", float("nan")))
                 fold_score = float(1.0 - csi) if np.isfinite(csi) else float("inf")
-                metric_label = f"1-CSI@{csi_threshold_mm:g}mm"
             else:
-                raise ValueError(f"Unknown opt_metric: {opt_metric}")
+                fold_score = float(m.get(args.opt_metric, float("inf")))
 
         print(f"  Fold {fold_i}: {metric_label}={fold_score:.6f}")
         fold_scores.append(fold_score)
@@ -391,35 +248,75 @@ def objective(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-trials", type=int, default=50)
+    parser.add_argument("--n-trials", type=int, default=100)
     parser.add_argument("--study-name", default=None,
-                        help="Study name (default: land_daily_<loss_type>)")
-    parser.add_argument("--loss-type", default="gamma",
+                        help="Study name (default: land_daily_<loss_type>_<opt_metric>_<cv_folds><cv_mode>_<n_trials>)")
+    parser.add_argument("--loss-type", default="bernoulli_gamma",
                         choices=["mse", "gamma", "tweedie", "bernoulli_gamma"],
                         help="Loss / output-head configuration (default: gamma)")
-    parser.add_argument("--cv-folds", type=int, default=_TUNE_N_CV_FOLDS,
+    parser.add_argument("--cv-folds", type=int, default=3,
                         help="Number of CV folds per trial (default: 3)")
-    parser.add_argument("--cv-mode", default="temporal",
-                        choices=["temporal", "spatial", "both", "mixed"],
+    parser.add_argument("--cv-mode", default="both",
+                        choices=["temporal", "spatial", "both"],
                         help="CV fold construction mode: temporal (held-out years), spatial (held-out stations), "
-                             "both (mix of temporal and spatial folds), mixed (shuffled pool, legacy)")
-    parser.add_argument("--opt-metric", default="auto",
-                        choices=["auto", "mae", "pctl_abs_rel_bias", "csi"],
-                        help="Optuna objective metric for non-MSE losses: auto (MAE), mae, pctl_abs_rel_bias, or csi")
+                             "both (mix of temporal and spatial folds)")
+    parser.add_argument("--opt-metric", default="mae",
+                        choices=["mae", "mse", "pctl_abs_rel_bias", "csi"],
+                        help="Optuna objective metric (default: mae)")
     parser.add_argument("--extreme-percentile", type=float, default=98.0,
                         help="Percentile for extreme bias metric (default: 98)")
     parser.add_argument("--csi-threshold-mm", type=float, default=50.0,
                         help="Threshold in mm for CSI metric (default: 50)")
     parser.add_argument("--no-early-stopping", action="store_true",
                         help="Disable early stopping; train all epochs per fold")
+    parser.add_argument("--num-workers", type=int, default=config.DATALOADER_NUM_WORKERS,
+                        help=f"DataLoader num_workers (default: {config.DATALOADER_NUM_WORKERS}).")
+    parser.add_argument("--pin-memory", action="store_true", default=config.DATALOADER_PIN_MEMORY,
+                        help=f"Enable pinned memory (default: {config.DATALOADER_PIN_MEMORY}).")
+    parser.add_argument("--persistent-workers", action="store_true", default=config.DATALOADER_PERSISTENT_WORKERS,
+                        help=f"Keep DataLoader workers alive (default: {config.DATALOADER_PERSISTENT_WORKERS}).")
+    parser.add_argument("--prefetch-factor", type=int, default=config.DATALOADER_PREFETCH_FACTOR,
+                        help=f"DataLoader prefetch_factor (default: {config.DATALOADER_PREFETCH_FACTOR}).")
+    parser.add_argument("--tweedie-mu-max", type=float, default=None,
+                        help="Optional cap on Tweedie mean (mu) in normalized units (default: None).")
+    parser.add_argument("--tweedie-loss-cap", type=float, default=None,
+                        help="Optional cap on per-sample Tweedie deviance (default: None).")
+    parser.add_argument("--scheduler", default="cosine",
+                        choices=["cosine", "none"],
+                        help="LR scheduler type (default: none = flat LR, matching original paper).")
+    parser.add_argument("--amp", action="store_true", default=False,
+                        help="Enable mixed-precision (AMP) training. Off by default for Gamma/Tweedie stability.")
+    parser.add_argument("--use-batch-norm", action="store_true", default=False,
+                        help="Enable BatchNorm layers in the LAND model for all tuning trials.")
+    parser.add_argument("--max-epochs", type=int, default=300,
+                        help="Maximum epochs per trial (default: 300)")
+    parser.add_argument("--patience", type=int, default=60,
+                        help="Early stopping patience (default: 60)")
+    parser.add_argument("--subset-frac", type=float, default=1.0,
+                        help="Training subset fraction per fold (default: 1.0)")
     args = parser.parse_args()
     if args.study_name is None:
-        args.study_name = f"land_daily_{args.loss_type}"
+        args.study_name = (
+            f"land_daily_{args.loss_type}"
+            f"_{args.opt_metric}"
+            f"_cv{int(args.cv_folds)}{args.cv_mode}"
+            f"_n{int(args.n_trials)}"
+        )
 
     device = select_device()
     print(f"Device: {device}")
 
-    tensors, meta = load_tensors_from_npz(device=device)
+    if device.type == "cuda":
+        try:
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        except Exception:
+            pass
+
+    # Load tensors on CPU so DataLoader workers can prefetch efficiently.
+    # Features/targets are moved to GPU inside the training loop.
+    tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
     stations = meta["stations"]
     years = meta["years"]
 
@@ -436,7 +333,8 @@ def main():
                                   train_years=train_yr, val_years=val_yr, test_years=test_yr)
     tensors, stats = normalize_tensors(tensors, splits["train"])
     target_scale = stats["target_std_mm"]
-    base_metadata = _get_metadata(tensors)
+    base_metadata = get_dataset_metadata(tensors)
+    print(f"Target scale (train target std): {target_scale:.6f} mm")
 
     # Save split heatmap
     plot_split_heatmap(stations, years, groups, train_yr, val_yr, test_yr,
@@ -446,50 +344,70 @@ def main():
     out_dir = config.TUNING_DIR / args.study_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # SQLite storage for persistence - allows resuming interrupted runs
+    db_path = out_dir / "optuna_study.db"
+    storage = optuna.storages.RDBStorage(
+        url=f"sqlite:///{db_path}",
+        engine_kwargs={"connect_args": {"timeout": 30}},
+    )
+    
+    # load_if_exists=True allows resuming an interrupted study
     study = optuna.create_study(
         study_name=args.study_name,
+        storage=storage,
+        load_if_exists=True,
         direction="minimize",
         sampler=optuna.samplers.TPESampler(seed=config.RANDOM_SEED),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=15),
     )
+    print(f"Optuna study stored at: {db_path}")
+    if len(study.trials) > 0:
+        print(f"  Resuming from {len(study.trials)} existing trials")
 
-    if args.loss_type == "mse":
-        metric_name = "val_MSE"
+    hp_space_path = out_dir / "hp_space.json"
+    wrote_hp_space = hp_space_path.exists()
+
+    def _hp_space_callback(study: optuna.Study, trial: optuna.trial.FrozenTrial):
+        nonlocal wrote_hp_space
+        if wrote_hp_space:
+            return
+        space = {k: _dist_to_dict(v) for k, v in trial.distributions.items()}
+        payload = {
+            "study_name": args.study_name,
+            "loss_type": args.loss_type,
+            "opt_metric": args.opt_metric,
+            "cv_folds": int(args.cv_folds),
+            "cv_mode": args.cv_mode,
+            "search_space": space,
+            "dem_local_candidates": list(getattr(config, "DEM_LOCAL_CANDIDATES", [])),
+            "dem_regional_candidates": list(getattr(config, "DEM_REGIONAL_CANDIDATES", [])),
+        }
+        hp_space_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        wrote_hp_space = True
+
+    if args.opt_metric == "pctl_abs_rel_bias":
+        metric_name = f"P{int(args.extreme_percentile)}_abs_rel_bias"
+    elif args.opt_metric == "csi":
+        metric_name = f"1-CSI@{args.csi_threshold_mm:g}mm"
     else:
-        if args.opt_metric in ("auto", "mae"):
-            metric_name = "val_MAE_mm"
-        elif args.opt_metric == "pctl_abs_rel_bias":
-            metric_name = f"P{int(args.extreme_percentile)}_abs_rel_bias"
-        else:
-            metric_name = f"1-CSI@{args.csi_threshold_mm:g}mm"
+        metric_name = f"val_{args.opt_metric.upper()}"
 
     study.optimize(
         lambda trial: objective(
             trial, tensors, splits, base_metadata, device,
-            target_scale,
-            loss_type=args.loss_type,
-            n_cv_folds=args.cv_folds,
-            cv_mode=args.cv_mode,
-            opt_metric=args.opt_metric,
-            extreme_percentile=args.extreme_percentile,
-            csi_threshold_mm=args.csi_threshold_mm,
-            no_early_stopping=args.no_early_stopping,
+            target_scale, args
         ),
         n_trials=args.n_trials,
-        show_progress_bar=True,
+        callbacks=[_hp_space_callback],
     )
+
+    print(f"\nOptimization complete!")
 
     print(f"\nBest trial: {study.best_trial.number}  {metric_name}={study.best_value:.6f}")
     print(f"Best params: {study.best_params}")
 
     # Enrich best params with resolved DEM config + static defaults
     best_hp = dict(study.best_params)
-
-    # Reconstruct derived hyperparameters that were not directly tuned.
-    if "base_lr" in best_hp and "batch_size" in best_hp and "learning_rate" not in best_hp:
-        _LR_REF_BATCH = 32
-        lr_scale = float(best_hp["batch_size"]) / float(_LR_REF_BATCH)
-        best_hp["learning_rate"] = float(best_hp["base_lr"]) * (lr_scale ** 0.5)
 
     dem_crop = config.resolve_dem_crop(best_hp)
     if dem_crop is not None:
@@ -498,8 +416,9 @@ def main():
         best_hp["regional_dem_patch"] = dem_crop["regional_patch_size"]
         best_hp["regional_dem_km"] = dem_crop["regional_km"]
     best_hp.setdefault("climate_processing", "conv2d")
-    best_hp["output_head"] = _LOSS_TO_HEAD[args.loss_type]
+    best_hp["output_head"] = config.LOSS_TO_HEAD[args.loss_type]
     best_hp["loss_type"] = args.loss_type
+    best_hp["use_batch_norm"] = bool(args.use_batch_norm)
     save_json(best_hp, out_dir / "best_hyperparameters.json")
     save_json({"target_std_mm": target_scale, **stats}, out_dir / "normalization_stats.json")
 
@@ -511,51 +430,9 @@ def main():
     pd.DataFrame(rows).to_csv(out_dir / "all_trials.csv", index=False)
 
     # --- HP importance & tuning visualisations ---
-    _save_tuning_visuals(study, out_dir)
+    save_optuna_visualizations(study, out_dir)
 
     print(f"Results saved to {out_dir}")
-
-
-def _save_tuning_visuals(study, out_dir):
-    """Save Optuna HP importance, optimization history, and parallel coordinate plots."""
-    try:
-        from optuna.visualization.matplotlib import (
-            plot_param_importances,
-            plot_optimization_history,
-            plot_parallel_coordinate,
-            plot_slice,
-        )
-
-        # HP importance (fANOVA-based)
-        fig = plot_param_importances(study)
-        fig.figure.savefig(str(out_dir / "hp_importance.png"), dpi=150, bbox_inches="tight")
-        plt.close(fig.figure)
-        print(f"  Saved hp_importance.png")
-
-        # Optimization history
-        fig = plot_optimization_history(study)
-        fig.figure.savefig(str(out_dir / "optimization_history.png"), dpi=150, bbox_inches="tight")
-        plt.close(fig.figure)
-        print(f"  Saved optimization_history.png")
-
-        # Parallel coordinate
-        fig = plot_parallel_coordinate(study)
-        fig.figure.savefig(str(out_dir / "parallel_coordinate.png"), dpi=150, bbox_inches="tight")
-        plt.close(fig.figure)
-        print(f"  Saved parallel_coordinate.png")
-
-        # Slice plots for each HP
-        fig = plot_slice(study)
-        if hasattr(fig, 'figure'):
-            fig.figure.savefig(str(out_dir / "slice_plots.png"), dpi=150, bbox_inches="tight")
-            plt.close(fig.figure)
-        else:
-            fig.savefig(str(out_dir / "slice_plots.png"), dpi=150, bbox_inches="tight")
-            plt.close(fig)
-        print(f"  Saved slice_plots.png")
-
-    except Exception as e:
-        print(f"  WARNING: Could not generate tuning visuals: {e}")
 
 
 if __name__ == "__main__":

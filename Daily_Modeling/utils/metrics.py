@@ -43,6 +43,7 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     sr, sp = sp_stats.spearmanr(yt, yp)
 
     return {
+        "mse": mse,
         "rmse": rmse,
         "mae": mae,
         "mbe": mbe,

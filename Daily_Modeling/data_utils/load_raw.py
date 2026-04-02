@@ -2,11 +2,9 @@
 Load raw rainfall CSVs and station metadata for American Samoa.
 """
 
-import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 from Daily_Modeling import config
@@ -32,7 +30,6 @@ def load_station_metadata(path: Optional[Path] = None) -> Dict[str, dict]:
 def load_daily_rainfall(
     station_name: str,
     rainfall_dir: Optional[Path] = None,
-    source_unit: Optional[str] = None,
 ) -> Optional[pd.DataFrame]:
     """Load a single station's daily rainfall CSV.
 
@@ -50,40 +47,30 @@ def load_daily_rainfall(
     df = pd.read_csv(csv_path)
 
     # --- Locate the datetime column ---
-    dt_col = None
-    for c in df.columns:
-        cl = c.strip().lower()
-        if cl in ("datetime", "date", "time", "dt"):
-            dt_col = c
-            break
-    if dt_col is None:
-        # Fall back: check if year/month/day columns already exist
-        low = {c.strip().lower(): c for c in df.columns}
-        if "year" in low and "month" in low and "day" in low:
-            df = df.rename(columns={low["year"]: "year", low["month"]: "month", low["day"]: "day"})
-        else:
-            return None
-    else:
-        dt = pd.to_datetime(df[dt_col], errors="coerce", dayfirst=False)
-        df["year"] = dt.dt.year
-        df["month"] = dt.dt.month
-        df["day"] = dt.dt.day
+    if "datetime" not in df.columns:
+        raise ValueError(f"Expected 'datetime' column in {csv_path}")
+    dt = pd.to_datetime(df["datetime"], errors="coerce", dayfirst=False)
+    df["year"] = dt.dt.year
+    df["month"] = dt.dt.month
+    df["day"] = dt.dt.day
 
     # --- Locate the precipitation column ---
     precip_col = None
-    for c in df.columns:
-        cl = c.strip().lower()
-        if cl in ("precip_in", "precip", "precipitation", "rainfall",
-                   "rain", "prcp", "precip_mm", "rainfall_mm"):
-            precip_col = c
-            break
-    if precip_col is None:
-        return None
+    precip_unit = None
+    if "precip_in" in df.columns:
+        precip_col = "precip_in"
+        precip_unit = "in"
+    elif "precip_mm" in df.columns:
+        precip_col = "precip_mm"
+        precip_unit = "mm"
+    else:
+        raise ValueError(f"Expected 'precip_in' or 'precip_mm' column in {csv_path}")
 
     df["rainfall_mm"] = pd.to_numeric(df[precip_col], errors="coerce")
 
-    # All files in rainfall_corrected_NEW are in inches -> convert to mm
-    df["rainfall_mm"] = df["rainfall_mm"] * 25.4
+    # Convert to mm if necessary
+    if precip_unit == "in":
+        df["rainfall_mm"] = df["rainfall_mm"] * 25.4
 
     df = df[["year", "month", "day", "rainfall_mm"]].dropna()
     df["year"] = df["year"].astype(int)
@@ -91,13 +78,6 @@ def load_daily_rainfall(
     df["day"] = df["day"].astype(int)
     df["rainfall_mm"] = df["rainfall_mm"].astype(float)
     return df
-
-
-def _get_source_unit(station_metadata: Dict[str, dict], station_name: str) -> Optional[str]:
-    """Read the source_unit field from station metadata (e.g. 'in' or 'mm')."""
-    meta = station_metadata.get(station_name, {})
-    return str(meta.get("source_unit", "in")) if "source_unit" in meta else None
-
 
 def load_all_station_rainfall(
     station_metadata: Optional[Dict[str, dict]] = None,

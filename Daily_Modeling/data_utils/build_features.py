@@ -5,28 +5,24 @@ This module wraps the same logic used in ML_Data_Preprocessing but is
 self-contained so Daily_Modeling can live in its own repo.
 """
 
-import os
 from pathlib import Path
+import math
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 import rasterio
-from rasterio.transform import rowcol
+from rasterio.warp import transform
+from rasterio.windows import from_bounds
 
 from Daily_Modeling import config
-from Daily_Modeling.data_utils.load_raw import (
-    load_station_metadata,
-    discover_station_days,
-)
-
 
 # ===================================================================
 # Reanalysis feature building
 # ===================================================================
 
-def _get_nc_path(variable_key: str, var_cfg: dict) -> Path:
+def _get_nc_path(var_cfg: dict) -> Path:
     """Resolve the NetCDF file path for a variable config entry."""
     if "custom_file_daily" in var_cfg:
         return config.REANALYSIS_DIR / var_cfg["custom_file_daily"]
@@ -49,33 +45,10 @@ def _detect_lat_lon(ds: xr.Dataset) -> Tuple[str, str]:
 
 def _detect_level_dim(ds: xr.Dataset) -> Optional[str]:
     """Detect the vertical / pressure-level dimension name."""
-    for name in ("pressure_level", "level", "lev", "plev", "isobaricInhPa"):
+    for name in ("pressure_level", "level", "lev", "plev"):
         if name in ds.dims:
             return name
     return None
-
-
-def _extract_spatial_patch(
-    arr_2d: np.ndarray,
-    lats: np.ndarray,
-    lons: np.ndarray,
-    lat: float,
-    lon: float,
-    patch_size: int,
-) -> np.ndarray:
-    """Extract a (patch_size x patch_size) patch from a 2-D (lat, lon) array."""
-    ci = int(np.argmin(np.abs(lats - lat)))
-    cj = int(np.argmin(np.abs(lons - lon)))
-    half = patch_size // 2
-    i0 = max(ci - half, 0)
-    j0 = max(cj - half, 0)
-    patch = arr_2d[i0:i0 + patch_size, j0:j0 + patch_size]
-    if patch.shape != (patch_size, patch_size):
-        out = np.full((patch_size, patch_size), np.nan, dtype=np.float32)
-        out[:patch.shape[0], :patch.shape[1]] = patch
-        return out
-    return patch.astype(np.float32)
-
 
 def load_reanalysis_datasets() -> Dict[str, xr.Dataset]:
     """Load all unique daily reanalysis NetCDF files into memory.
@@ -85,15 +58,15 @@ def load_reanalysis_datasets() -> Dict[str, xr.Dataset]:
     """
     loaded: Dict[str, xr.Dataset] = {}
 
-    # Collect all unique NC paths (including wind files needed for multiply)
+    # Collect all unique NC paths (including primary files needed for multiply)
     nc_paths_needed: set = set()
-    for key, cfg in config.DAILY_VARIABLE_CONFIGS.items():
+    for _, cfg in config.DAILY_VARIABLE_CONFIGS.items():
         if "depends_on" in cfg:
-            # Multiply ops need the wind file
-            wind_base = config.VARIABLE_MAPPING[cfg["variable"]]
-            nc_paths_needed.add(str(config.REANALYSIS_DIR / f"{wind_base}.day.mean.nc"))
+            # Multiply ops need the base file
+            base_file_name = config.VARIABLE_MAPPING[cfg["variable"]]
+            nc_paths_needed.add(str(config.REANALYSIS_DIR / f"{base_file_name}.day.mean.nc"))
         else:
-            nc_paths_needed.add(str(_get_nc_path(key, cfg)))
+            nc_paths_needed.add(str(_get_nc_path(cfg)))
 
     for nc_str in sorted(nc_paths_needed):
         nc = Path(nc_str)
@@ -187,22 +160,21 @@ def build_reanalysis_patches(
 
     # Build a channel spec: for each derived variable, record what to do
     # so the inner loop avoids dict lookups and string comparisons
-    ChannelSpec = List  # list of tuples describing each channel
     channel_specs = []
     for vname in var_order:
         cfg = var_cfgs[vname]
         op = cfg.get("operation")
         if op == "diff":
-            nc = str(_get_nc_path(vname, cfg))
+            nc = str(_get_nc_path(cfg))
             channel_specs.append(("diff", nc, cfg["levels"][0], cfg["levels"][1]))
         elif op == "multiply":
-            wind_nc = str(config.REANALYSIS_DIR / f"{config.VARIABLE_MAPPING[cfg['variable']]}.day.mean.nc")
+            primary_nc = str(config.REANALYSIS_DIR / f"{config.VARIABLE_MAPPING[cfg['variable']]}.day.mean.nc")
             hum_cfg = var_cfgs[cfg["multiply_with"]]
-            hum_nc = str(_get_nc_path(cfg["multiply_with"], hum_cfg))
+            hum_nc = str(_get_nc_path(hum_cfg))
             lev = cfg.get("level")
-            channel_specs.append(("multiply", wind_nc, hum_nc, lev))
+            channel_specs.append(("multiply", primary_nc, hum_nc, lev))
         else:
-            nc = str(_get_nc_path(vname, cfg))
+            nc = str(_get_nc_path(cfg))
             lev = cfg.get("level")
             channel_specs.append(("simple", nc, lev))
 
@@ -250,17 +222,17 @@ def build_reanalysis_patches(
                     field = f0 - f1
                     gi, gj = grids[nc]
                 elif spec[0] == "multiply":
-                    _, wind_nc, hum_nc, lev = spec
-                    wcube = cubes.get(wind_nc)
+                    _, primary_nc, hum_nc, lev = spec
+                    primary_cube = cubes.get(primary_nc)
                     hcube = cubes.get(hum_nc)
-                    if wcube is None or hcube is None:
+                    if primary_cube is None or hcube is None:
                         ok = False; break
-                    wf = wcube.get_field(dt, level=lev)
+                    wf = primary_cube.get_field(dt, level=lev)
                     hf = hcube.get_field(dt, level=lev)
                     if wf is None or hf is None:
                         ok = False; break
                     field = wf * hf
-                    gi, gj = grids[wind_nc]
+                    gi, gj = grids[primary_nc]
                 else:
                     _, nc, lev = spec
                     cube = cubes.get(nc)
@@ -311,45 +283,6 @@ def build_reanalysis_patches(
 # DEM patch building
 # ===================================================================
 
-def _latlon_to_metres(km_per_cell: float):
-    """Approximate conversion from km to degrees for American Samoa (~-14 deg S)."""
-    km_per_deg_lat = 111.0
-    km_per_deg_lon = 111.0 * np.cos(np.radians(14.0))
-    return km_per_cell / km_per_deg_lat, km_per_cell / km_per_deg_lon
-
-
-def _fill_nan_nearest(patch: np.ndarray) -> np.ndarray:
-    """Fill NaN cells in a small patch from the nearest valid neighbour.
-
-    Uses a simple expanding-ring search so that coastal stations whose
-    centre pixel falls in ocean still receive the nearest land elevation.
-    If the entire patch is NaN, it remains unchanged.
-    """
-    if not np.any(np.isnan(patch)):
-        return patch
-    filled = patch.copy()
-    nan_mask = np.isnan(filled)
-    if nan_mask.all():
-        return filled  # nothing to fill from
-    h, w = filled.shape
-    for i in range(h):
-        for j in range(w):
-            if not nan_mask[i, j]:
-                continue
-            # Expanding ring search for nearest valid cell
-            best_val, best_dist = np.nan, float("inf")
-            for ii in range(h):
-                for jj in range(w):
-                    if nan_mask[ii, jj]:
-                        continue
-                    d = abs(ii - i) + abs(jj - j)
-                    if d < best_dist:
-                        best_dist = d
-                        best_val = filled[ii, jj]
-            filled[i, j] = best_val
-    return filled
-
-
 def extract_dem_patch(
     dem_src,
     lon: float,
@@ -358,41 +291,67 @@ def extract_dem_patch(
     km_per_cell: float,
 ) -> np.ndarray:
     """Extract a (patch_size x patch_size) DEM patch from an open rasterio src.
-
-    Cells that fall outside the DEM extent (ocean) are set to 0.0, which is
-    the correct ocean elevation.  Only cells that are inside the DEM but carry
-    a nodata value (e.g. inland water bodies marked as nodata) are filled from
-    the nearest valid neighbour so that coastal land stations still receive
-    topographic information.
+    
+    Cells that fall outside the DEM extent (ocean) are set to -1.0 to indicate
+    missing/ocean data. Each cell uses the mean of all valid elevation values
+    within its box area (km_per_cell x km_per_cell). If a cell's center point
+    is ocean, the cell value is set to -1.0 regardless of surrounding land.
     """
-    dlat, dlon = _latlon_to_metres(km_per_cell)
     half = patch_size // 2
-    # Start with 0.0 (ocean) so out-of-DEM cells stay at sea level
-    patch = np.zeros((patch_size, patch_size), dtype=np.float32)
-    # Track which cells are inside the DEM but have nodata (need neighbour fill)
-    nodata_mask = np.zeros((patch_size, patch_size), dtype=bool)
+
+    if dem_src.crs is None:
+        raise ValueError("DEM raster has no CRS; cannot transform station lon/lat")
+
+    step_m = float(km_per_cell) * 1000.0
+
+    patch = np.full((patch_size, patch_size), -1.0, dtype=np.float32)
+
+    x0, y0 = transform("EPSG:4326", dem_src.crs, [lon], [lat])
+    x0 = float(x0[0])
+    y0 = float(y0[0])
+
     for pi in range(patch_size):
         for pj in range(patch_size):
-            plat = lat + (half - pi) * dlat
-            plon = lon + (pj - half) * dlon
+            east_m = (pj - half) * step_m
+            north_m = (half - pi) * step_m
+            if bool(getattr(dem_src.crs, "is_geographic", False)):
+                lat_scale = 111320.0
+                lon_scale = max(111320.0 * math.cos(math.radians(float(lat))), 1e-6)
+                center_lon = float(lon) + (east_m / lon_scale)
+                center_lat = float(lat) + (north_m / lat_scale)
+                x, y = transform("EPSG:4326", dem_src.crs, [center_lon], [center_lat])
+                x = float(x[0])
+                y = float(y[0])
+                half_lon = 0.5 * step_m / lon_scale
+                half_lat = 0.5 * step_m / lat_scale
+                left, bottom = center_lon - half_lon, center_lat - half_lat
+                right, top = center_lon + half_lon, center_lat + half_lat
+                wx, wy = transform("EPSG:4326", dem_src.crs, [left, right], [bottom, top])
+                xmin, xmax = float(min(wx)), float(max(wx))
+                ymin, ymax = float(min(wy)), float(max(wy))
+            else:
+                x = x0 + east_m
+                y = y0 + north_m
+                xmin = x - 0.5 * step_m
+                xmax = x + 0.5 * step_m
+                ymin = y - 0.5 * step_m
+                ymax = y + 0.5 * step_m
             try:
-                r, c = rowcol(dem_src.transform, plon, plat)
+                r, c = dem_src.index(x, y)
                 r, c = int(r), int(c)
                 if 0 <= r < dem_src.height and 0 <= c < dem_src.width:
-                    val = dem_src.read(1, window=((r, r + 1), (c, c + 1)))[0, 0]
-                    if val == dem_src.nodata or not np.isfinite(val):
-                        nodata_mask[pi, pj] = True
+                    window = from_bounds(xmin, ymin, xmax, ymax, transform=dem_src.transform)
+                    data = dem_src.read(1, window=window, boundless=True, masked=True)
+                    values = np.asarray(data.filled(np.nan), dtype=np.float32)
+                    if dem_src.nodata is not None:
+                        values = np.where(values == dem_src.nodata, np.nan, values)
+                    values = np.where(np.isfinite(values) & (values >= 0), values, np.nan)
+                    if np.isfinite(values).any():
+                        patch[pi, pj] = float(np.nanmean(values))
                     else:
-                        patch[pi, pj] = float(val)
-                # else: outside DEM bounds -> stays 0.0 (ocean)
+                        patch[pi, pj] = -1.0
             except Exception:
                 pass
-    # Fill only the in-DEM nodata cells from nearest valid neighbour
-    if nodata_mask.any():
-        patch = np.where(nodata_mask, np.nan, patch)
-        patch = _fill_nan_nearest(patch)
-        # Any remaining NaN (entire patch is nodata) -> 0.0
-        patch = np.nan_to_num(patch, nan=0.0)
     return patch
 
 

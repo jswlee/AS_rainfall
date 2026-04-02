@@ -13,68 +13,6 @@ from torch.utils.data import DataLoader
 
 
 # ---------------------------------------------------------------------------
-# Loss functions
-# ---------------------------------------------------------------------------
-
-class LogMSELoss(nn.Module):
-    """MSE in log-space: MSE(log(1 + pred), log(1 + true)).
-
-    Down-weights extreme events relative to raw MSE, giving the model a
-    better signal for the bulk of the (zero-inflated) distribution.
-    """
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return nn.functional.mse_loss(
-            torch.log1p(pred.clamp(min=0)),
-            torch.log1p(target.clamp(min=0)),
-        )
-
-
-class TweedieLoss(nn.Module):
-    """Tweedie deviance loss with power *p* in (1, 2).
-
-    The Tweedie distribution is a natural fit for zero-inflated continuous
-    data like daily rainfall.  p=1.5 is a common default.
-
-    D(y, mu) = 2 * [ y^(2-p)/((1-p)*(2-p)) - y*mu^(1-p)/(1-p) + mu^(2-p)/(2-p) ]
-    """
-    def __init__(self, p: float = 1.5):
-        super().__init__()
-        assert 1.0 < p < 2.0, "Tweedie power p must be in (1, 2)"
-        self.p = p
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        mu = pred.clamp(min=1e-6)
-        y = target.clamp(min=0)
-        p = self.p
-        dev = 2 * (
-            torch.pow(y, 2 - p) / ((1 - p) * (2 - p))
-            - y * torch.pow(mu, 1 - p) / (1 - p)
-            + torch.pow(mu, 2 - p) / (2 - p)
-        )
-        return dev.mean()
-
-
-def get_criterion(loss_type: str = "mse", **kwargs) -> nn.Module:
-    """Factory for loss functions.
-
-    Args:
-        loss_type: one of 'mse', 'log_mse', 'tweedie', 'bernoulli_gamma'.
-        **kwargs: passed to the loss constructor (e.g. p=1.5 for Tweedie).
-    """
-    if loss_type == "mse":
-        return nn.MSELoss()
-    elif loss_type == "log_mse":
-        return LogMSELoss()
-    elif loss_type == "tweedie":
-        return TweedieLoss(**kwargs)
-    elif loss_type == "bernoulli_gamma":
-        from Daily_Modeling.models.losses import BernoulliGammaNLL
-        return BernoulliGammaNLL()
-    else:
-        raise ValueError(f"Unknown loss_type: {loss_type!r}")
-
-
-# ---------------------------------------------------------------------------
 # Early stopping & LR scheduling
 # ---------------------------------------------------------------------------
 
@@ -126,7 +64,7 @@ class CosineWarmup:
 
 def train_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optimizer,
                 criterion: nn.Module, device: torch.device,
-                scaler=None, flatten_fn=None) -> float:
+                scaler=None, flatten_fn=None, grad_clip_norm: float | None = 1.0) -> float:
     """Run one training epoch.  Returns average loss."""
     model.train()
     total, n = 0.0, 0
@@ -152,7 +90,8 @@ def train_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optimizer
                 continue
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if grad_clip_norm is not None and float(grad_clip_norm) > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
             scaler.step(optimizer)
             scaler.update()
         else:
@@ -161,7 +100,8 @@ def train_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optimizer
             if not torch.isfinite(loss):
                 continue
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if grad_clip_norm is not None and float(grad_clip_norm) > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip_norm))
             optimizer.step()
 
         total += loss.item()
@@ -234,11 +174,18 @@ def train_model(
     scheduler_type: str = "cosine",
     no_early_stopping: bool = False,
     monitor: str = "val_loss",
+    monitor_fn=None,
+    monitor_name: str = "monitor",
+    grad_clip_norm: float | None = 1.0,
+    use_amp: bool = False,
+    debug_early_stopping: bool = False,
+    checkpoint_dir: Optional[str] = None,
+    checkpoint_every: int = 10,
 ) -> Dict[str, list]:
     """Full training loop with early stopping, LR scheduling, and optional AMP.
 
     Args:
-        scheduler_type: 'cosine' (CosineWarmup, default) or 'onecycle' (OneCycleLR).
+        scheduler_type: 'cosine' (CosineWarmup, default) or 'none' (flat LR).
         no_early_stopping: if True, always train for all *epochs* (best weights are
             still tracked and restored at the end, but training is never cut short).
 
@@ -248,26 +195,19 @@ def train_model(
     Returns history dict with train_loss, val_loss lists.
     If metric_fn is not None, also includes val_metric.
     """
-    if monitor not in ("val_loss", "val_metric"):
+    if monitor_fn is None and monitor not in ("val_loss", "val_metric"):
         raise ValueError(f"Unknown monitor: {monitor!r} (expected 'val_loss' or 'val_metric')")
     if criterion is None:
         criterion = nn.MSELoss()
 
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    if scheduler_type == "onecycle":
-        steps_per_epoch = max(len(train_loader), 1)
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=learning_rate * 10,
-            steps_per_epoch=steps_per_epoch, epochs=epochs,
-            pct_start=0.1, anneal_strategy="cos",
-        )
-        _use_onecycle = True
+    if scheduler_type == "none":
+        scheduler = None
     else:
         scheduler = CosineWarmup(optimizer, warmup=5, total=epochs)
-        _use_onecycle = False
     es = EarlyStopping(patience=patience)
 
-    use_amp = device.type == "cuda"
+    use_amp = bool(use_amp) and device.type == "cuda"
     scaler = torch.amp.GradScaler() if use_amp else None
     if use_amp:
         print("Using mixed precision (AMP) training")
@@ -275,18 +215,23 @@ def train_model(
     history: Dict[str, list] = {"train_loss": [], "val_loss": []}
     if metric_fn is not None:
         history["val_metric"] = []
+    if monitor_fn is not None:
+        history[monitor_name] = []
     t0 = time.time()
 
     for epoch in range(1, epochs + 1):
-        if not _use_onecycle:
+        if scheduler is not None:
             scheduler.step(epoch - 1)
-        tl = train_epoch(model, train_loader, optimizer, criterion, device,
-                         scaler=scaler, flatten_fn=flatten_fn)
-        if _use_onecycle:
-            # OneCycleLR steps per batch internally, but we call step() per epoch
-            # if steps_per_epoch was set correctly it auto-advances
-            pass
-
+        tl = train_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            scaler=scaler,
+            flatten_fn=flatten_fn,
+            grad_clip_norm=grad_clip_norm,
+        )
         if metric_fn is None:
             vl = eval_epoch(model, val_loader, criterion, device, flatten_fn=flatten_fn)
             vm = None
@@ -301,12 +246,16 @@ def train_model(
         if metric_fn is not None:
             history["val_metric"].append(vm)
 
-        if monitor == "val_metric":
-            if metric_fn is None:
-                raise ValueError("monitor='val_metric' requires metric_fn to be provided")
-            monitor_value = vm
+        if monitor_fn is not None:
+            monitor_value = float(monitor_fn(model, val_loader, device))
+            history[monitor_name].append(monitor_value)
         else:
-            monitor_value = vl
+            if monitor == "val_metric":
+                if metric_fn is None:
+                    raise ValueError("monitor='val_metric' requires metric_fn to be provided")
+                monitor_value = vm
+            else:
+                monitor_value = vl
 
         if verbose and epoch % verbose == 0:
             lr = optimizer.param_groups[0]["lr"]
@@ -317,6 +266,8 @@ def train_model(
                     f"  Epoch {epoch:>4d}/{epochs} - Train: {tl:.6f}  Val: {vl:.6f}  "
                     f"ValMetric: {vm:.4f}  LR: {lr:.2e}"
                 )
+            if monitor_fn is not None:
+                print(f"           {monitor_name}: {monitor_value:.6f}")
 
         # Optuna epoch-level pruning (only when early stopping is active)
         if trial is not None and not no_early_stopping and epoch >= min_epochs:
@@ -326,15 +277,44 @@ def train_model(
                 import optuna
                 raise optuna.TrialPruned(f"Pruned at epoch {epoch}")
 
-        # Always call es() so it tracks best weights; only break if ES is enabled
+        prev_best = es.best_loss
+        prev_counter = es.counter
         stopped = es(monitor_value, model)
+        if debug_early_stopping:
+            improved = monitor_value < prev_best - es.min_delta
+            print(
+                f"           ES debug - monitor={monitor_value:.6f}  prev_best={prev_best:.6f}  "
+                f"best={es.best_loss:.6f}  improved={improved}  counter={es.counter}/{es.patience}  "
+                f"prev_counter={prev_counter}  min_epochs={min_epochs}  stop={stopped and epoch >= min_epochs and not no_early_stopping}"
+            )
         if not no_early_stopping and epoch >= min_epochs and stopped:
             print(f"  Early stopping at epoch {epoch}")
             break
 
+        # Save checkpoint periodically
+        if checkpoint_dir is not None and epoch % checkpoint_every == 0:
+            import pathlib
+            ckpt_path = pathlib.Path(checkpoint_dir) / f"checkpoint_epoch{epoch}.pt"
+            ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict() if hasattr(scheduler, "state_dict") else None,
+                "best_val": es.best_loss,
+                "history": history,
+            }, ckpt_path)
+            # Keep only last 3 checkpoints to save space
+            ckpts = sorted(pathlib.Path(checkpoint_dir).glob("checkpoint_epoch*.pt"))
+            for old_ckpt in ckpts[:-3]:
+                old_ckpt.unlink()
+
     es.restore(model)
     elapsed = time.time() - t0
     best_val = es.best_loss
-    label = "val loss" if monitor == "val_loss" else "val metric"
+    if monitor_fn is not None:
+        label = monitor_name
+    else:
+        label = "val loss" if monitor == "val_loss" else "val metric"
     print(f"  Training done in {elapsed:.1f}s - best {label}: {best_val:.6f}")
     return history

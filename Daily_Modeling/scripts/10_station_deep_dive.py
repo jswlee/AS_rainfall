@@ -2,15 +2,15 @@
 Step 10: Deep-dive diagnostic for per-station model performance.
 
 Investigates WHY certain stations are consistently hard to model by examining:
-  1. Data quantity  – n_train, n_val, n_test, % zero-rain days
-  2. Target statistics – mean, std, skewness, kurtosis, max event
-  3. Cross-run stability – R2/RMSE variance across multiple result JSONs
-  4. Climate signal strength – Spearman correlation of each climate channel
+  1. Data quantity  - n_train, n_val, n_test, % zero-rain days
+  2. Target statistics - mean, std, skewness, kurtosis, max event
+  3. Cross-run stability - R2/RMSE variance across multiple result JSONs
+  4. Climate signal strength - Spearman correlation of each climate channel
      with station rainfall (using train indices only)
-  5. Temporal coverage – year range, gaps in record
-  6. Spatial context – DEM elevation at station location (local patch mean)
-  7. Residual bias – MBE sign and magnitude (systematic over/under-prediction)
-  8. Rank-correlation vs R2 gap – high Spearman but low R2 → variance mismatch
+  5. Temporal coverage - year range, gaps in record
+  6. Spatial context - DEM elevation at station location (local patch mean)
+  7. Residual bias - MBE sign and magnitude (systematic over/under-prediction)
+  8. Rank-correlation vs R2 gap - high Spearman but low R2 → variance mismatch
 
 Outputs (all in --out-dir):
   - station_diagnostics.csv   (all numeric features per station)

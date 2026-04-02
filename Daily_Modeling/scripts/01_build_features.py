@@ -7,7 +7,6 @@ Usage:
 
 import argparse
 import numpy as np
-from pathlib import Path
 
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.load_raw import load_station_metadata, discover_station_days
@@ -30,7 +29,8 @@ def main(start_date: str = "1980-01-01", end_date: str = "2024-12-31"):
     datasets = load_reanalysis_datasets()
     patches, stations, years, months, days, var_names = \
         build_reanalysis_patches(meta, station_days, datasets)
-    re_path = output_dir / "reanalysis_patches_daily.npz"
+
+    re_path = output_dir / "reanalysis_patches_daily_station_centered.npz"
     np.savez_compressed(
         str(re_path),
         patches=patches, stations=stations, years=years, months=months, days=days,

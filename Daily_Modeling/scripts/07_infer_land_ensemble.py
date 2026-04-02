@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 
 from Daily_Modeling import config
-from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, make_dataloaders
+from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, make_dataloaders, get_dataset_metadata
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups,
     compute_station_year_ranges,
@@ -30,16 +30,7 @@ from Daily_Modeling.models.land import create_land_model
 from Daily_Modeling.utils.io_utils import load_json, load_model_state, save_json
 from Daily_Modeling.utils.metrics import compute_metrics
 from Daily_Modeling.utils.device import select_device
-
-def _get_metadata(tensors):
-    c = tensors["climate"]
-    return {
-        "climate_shape": tuple(c.shape[1:]),
-        "local_dem_shape": tuple(tensors["local_dem"].shape[1:]),
-        "regional_dem_shape": tuple(tensors["regional_dem"].shape[1:]),
-        "num_month_features": int(tensors["temporal"].shape[1]),
-        "num_climate_vars": int(c.shape[1]),
-    }
+from Daily_Modeling.utils.inference import predict
 
 
 def _apply_saved_normalization(tensors: Dict[str, torch.Tensor], stats: dict) -> Tuple[Dict[str, torch.Tensor], float]:
@@ -57,30 +48,6 @@ def _apply_saved_normalization(tensors: Dict[str, torch.Tensor], stats: dict) ->
 
     target_scale = float(stats["target_std_mm"])
     return tensors, target_scale
-
-
-@torch.no_grad()
-def predict(model: nn.Module, loader, device, output_head: str = "softplus") -> tuple:
-    """Run inference. Returns (preds, targets) in normalised units."""
-    model.eval()
-    preds, targets = [], []
-    for features, tgt in loader:
-        features = {k: torch.nan_to_num(v.to(device)) for k, v in features.items()}
-        out = model(features)
-        if output_head == "bernoulli_gamma":
-            p_rain = torch.sigmoid(out[:, 0])
-            alpha = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6)
-            beta = torch.nn.functional.softplus(out[:, 2]).clamp(min=1e-6)
-            pred = p_rain * alpha * beta
-        elif output_head == "gamma":
-            alpha = torch.nn.functional.softplus(out[:, 0]).clamp(min=1e-6)
-            beta = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6)
-            pred = alpha * beta
-        else:
-            pred = out.squeeze(-1)
-        preds.append(pred.cpu().numpy().ravel())
-        targets.append(tgt.cpu().numpy().ravel())
-    return np.concatenate(preds), np.concatenate(targets)
 
 
 def _discover_checkpoints(run_dir: Path) -> List[Path]:
@@ -101,6 +68,13 @@ def _save_ensemble_npz(path: Path, y_true: np.ndarray, y_mean: np.ndarray, y_std
         y_pred_std=y_std,
         stations=stations,
     )
+
+
+def _concat_arrays(arrays: List[np.ndarray]) -> np.ndarray:
+    valid = [np.asarray(a) for a in arrays if a is not None and len(a) > 0]
+    if not valid:
+        return np.array([])
+    return np.concatenate(valid, axis=0)
 
 
 def main():
@@ -172,7 +146,7 @@ def main():
     )
 
     tensors, target_scale = _apply_saved_normalization(tensors, stats)
-    metadata = _get_metadata(tensors)
+    metadata = get_dataset_metadata(tensors)
 
     dem_crop = config.resolve_dem_crop(hp)
     if dem_crop is not None:
@@ -207,6 +181,7 @@ def main():
 
     output_head = hp.get("output_head", "softplus")
 
+    split_outputs = {}
     # Predict per model per split
     for split_name, loader in loaders.items():
         model_preds_mm = []
@@ -242,6 +217,46 @@ def main():
             y_std=yp_std,
             stations=stations[idx] if len(idx) > 0 else np.array([]),
         )
+
+        split_outputs[split_name] = {
+            "y_true": yt_mm_ref,
+            "y_pred_mean": yp_mean,
+            "y_pred_std": yp_std,
+            "stations": stations[idx] if len(idx) > 0 else np.array([]),
+        }
+
+    if {"test_temporal", "test_spatial"}.issubset(split_outputs.keys()):
+        yt_all = _concat_arrays([
+            split_outputs["test_temporal"]["y_true"],
+            split_outputs["test_spatial"]["y_true"],
+        ])
+        yp_all = _concat_arrays([
+            split_outputs["test_temporal"]["y_pred_mean"],
+            split_outputs["test_spatial"]["y_pred_mean"],
+        ])
+        yp_std_all = _concat_arrays([
+            split_outputs["test_temporal"]["y_pred_std"],
+            split_outputs["test_spatial"]["y_pred_std"],
+        ])
+        stations_all = _concat_arrays([
+            split_outputs["test_temporal"]["stations"],
+            split_outputs["test_spatial"]["stations"],
+        ])
+
+        if len(yt_all) > 0:
+            m_all = compute_metrics(yt_all, yp_all)
+            save_json(m_all, out_dir / "metrics_test_all.json")
+            print(
+                f"test_all: RMSE={m_all['rmse']:.2f} mm  MAE={m_all['mae']:.2f} mm  R2={m_all['r2']:.4f}  "
+                f"(n={len(yt_all)})"
+            )
+            _save_ensemble_npz(
+                out_dir / "predictions_test_all.npz",
+                y_true=yt_all,
+                y_mean=yp_all,
+                y_std=yp_std_all,
+                stations=stations_all,
+            )
 
     # Save a small manifest for reproducibility
     manifest = {

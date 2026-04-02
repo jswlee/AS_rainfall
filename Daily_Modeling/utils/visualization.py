@@ -6,16 +6,30 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import matplotlib.patches as mpatches
+from matplotlib.colors import BoundaryNorm, ListedColormap
 import seaborn as sns
+
+import rasterio
+from rasterio.warp import transform_bounds
+
+
+def _save_and_close(fig, path, dpi: int = 150, message: Optional[str] = None):
+    """Save a figure to *path* and close it.  Optionally print *message*."""
+    fig.savefig(str(path), dpi=dpi, bbox_inches="tight")
+    if message:
+        print(message)
+    plt.close(fig)
 
 
 # ===================================================================
 # EDA plots
 # ===================================================================
-
 def plot_rainfall_histograms(
     rain_mm: np.ndarray,
     split_indices: Dict[str, np.ndarray],
@@ -43,8 +57,553 @@ def plot_rainfall_histograms(
     axes[1, 0].set_ylabel("count")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
+    return fig
+
+
+def plot_multi_model_scatter(
+    model_predictions: Dict[str, Dict[str, np.ndarray]],
+    title: str = "Model Comparison Scatter",
+    units: str = "mm",
+    save_path: Optional[Path] = None,
+):
+    """Overlay multiple model prediction scatters on one axis."""
+    fig, ax = plt.subplots(figsize=(7, 7))
+    colours = {"LAND": "steelblue", "Bernoulli-Gamma": "coral", "Site MLP": "seagreen"}
+    lo = 0.0
+    hi = 0.0
+    for name, data in model_predictions.items():
+        yt = np.asarray(data["y_true"]).ravel()
+        yp = np.asarray(data["y_pred"]).ravel()
+        mask = np.isfinite(yt) & np.isfinite(yp)
+        yt, yp = yt[mask], yp[mask]
+        if len(yt) == 0:
+            continue
+        ax.scatter(yt, yp, s=4, alpha=0.25, label=name, color=colours.get(name, None), rasterized=True)
+        lo = min(lo, float(yt.min()), float(yp.min()))
+        hi = max(hi, float(yt.max()), float(yp.max()))
+    ax.plot([lo, hi], [lo, hi], "k--", lw=1, label="1:1")
+    ax.set_xlabel(f"Observed ({units})")
+    ax.set_ylabel(f"Predicted ({units})")
+    ax.set_title(title)
+    ax.legend(markerscale=4)
+    ax.set_aspect("equal", "box")
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path)
+    return fig
+
+
+def plot_split_year_counts(
+    df: pd.DataFrame,
+    save_path: Optional[Path] = None,
+):
+    """Plot sample counts per year for each split label."""
+    pivot = df.groupby(["year", "split"]).size().unstack(fill_value=0)
+    ax = pivot.plot(figsize=(14, 5), marker="o")
+    ax.set_title("Samples per year by split")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Sample count")
+    fig = ax.figure
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path)
+    return fig
+
+
+def plot_station_role_map(
+    station_df: pd.DataFrame,
+    station_meta: Dict[str, dict],
+    save_path: Optional[Path] = None,
+):
+    """Plot station locations colored by assigned train/val/test role."""
+    rows = []
+    for _, row in station_df.iterrows():
+        st = row["station"]
+        meta = station_meta.get(st)
+        if meta is None:
+            continue
+        rows.append(
+            {
+                "station": st,
+                "role": row["role"],
+                "lat": float(meta["latitude"]),
+                "lon": float(meta["longitude"]),
+            }
+        )
+    rdf = pd.DataFrame(rows)
+    if rdf.empty:
+        return None
+
+    colors = {"train": "#4c72b0", "val": "#55a868", "test": "#c44e52"}
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for role, g in rdf.groupby("role"):
+        ax.scatter(g["lon"], g["lat"], s=55, label=role, color=colors.get(role, "gray"), alpha=0.9)
+        for _, r in g.iterrows():
+            ax.text(r["lon"], r["lat"], str(r["station"]), fontsize=7, ha="left", va="bottom")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title("Station roles for split assignment")
+    ax.legend(frameon=True)
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path, dpi=180)
+    return fig
+
+
+def save_optuna_visualizations(study, out_dir: Path) -> None:
+    """Save common Optuna matplotlib visualizations."""
+    try:
+        from optuna.visualization.matplotlib import (
+            plot_optimization_history,
+            plot_param_importances,
+            plot_slice,
+        )
+
+        figures = {
+            "hp_importance.png": plot_param_importances(study),
+            "optimization_history.png": plot_optimization_history(study),
+            "slice_plots.png": plot_slice(study),
+        }
+
+        for filename, fig in figures.items():
+            target_fig = fig.figure if hasattr(fig, "figure") else fig
+            _save_and_close(target_fig, Path(out_dir) / filename, message=f"  Saved {filename}")
+    except Exception as e:
+        print(f"  WARNING: Could not generate tuning visuals: {e}")
+
+
+def save_top_trials_plots(
+    all_df: pd.DataFrame,
+    out_dir: Path,
+    title_suffix: str = "",
+    top_k: int = 10,
+) -> Optional[pd.DataFrame]:
+    """Save top-k trials table and hyperparameter distribution plots."""
+    if all_df.empty:
+        return None
+
+    top_trials = all_df.nsmallest(top_k, "value").reset_index(drop=True)
+    top_trials.to_csv(Path(out_dir) / "top10_trials.csv", index=False)
+    print(f"\n--- Top {min(top_k, len(top_trials))} Trials{title_suffix} ---")
+    print(top_trials.to_string(index=False))
+
+    hp_cols = [c for c in top_trials.columns if c not in ("trial", "value")]
+    if not hp_cols:
+        return top_trials
+
+    n_cols = min(4, len(hp_cols))
+    n_rows = (len(hp_cols) + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows))
+    axes = np.array(axes).ravel()
+    colours = plt.cm.viridis_r(np.linspace(0.1, 0.9, len(top_trials)))
+
+    for i, col in enumerate(hp_cols):
+        ax = axes[i]
+        vals = top_trials[col].dropna()
+        try:
+            numeric_vals = vals.astype(float).values
+            ax.violinplot(numeric_vals, positions=[0], showmedians=True)
+            jitter = np.random.RandomState(0).uniform(-0.05, 0.05, len(numeric_vals))
+            for j, (v, c) in enumerate(zip(numeric_vals, colours)):
+                ax.scatter(jitter[j], v, color=c, s=40, zorder=3)
+            ax.set_xticks([])
+        except (ValueError, TypeError):
+            vc = vals.value_counts()
+            ax.bar(range(len(vc)), vc.values, tick_label=vc.index.tolist(), color="steelblue")
+            ax.tick_params(axis="x", rotation=30)
+        ax.set_title(col, fontsize=9)
+
+    for j in range(len(hp_cols), len(axes)):
+        axes[j].set_visible(False)
+
+    fig.suptitle(f"HP Distribution — Top {top_k} Trials{title_suffix}", fontsize=11, y=1.01)
+    plt.tight_layout()
+    _save_and_close(fig, Path(out_dir) / "hp_distribution_top10.png", message="  Saved hp_distribution_top10.png")
+    return top_trials
+
+
+def plot_split_heatmap(
+    stations: np.ndarray,
+    years: np.ndarray,
+    station_groups: Dict[str, str],
+    train_years: Tuple[int, int],
+    val_years: Tuple[int, int],
+    test_years: Tuple[int, int],
+    save_path: Optional[Path] = None,
+    title: str = "Spatiotemporal Split",
+):
+    unique_stations = sorted(set(str(s) for s in stations))
+    yr_int = years.astype(int)
+    unique_years = sorted(set(yr_int))
+    s2i = {s: i for i, s in enumerate(unique_stations)}
+    y2j = {y: j for j, y in enumerate(unique_years)}
+
+    grid = np.zeros((len(unique_stations), len(unique_years)), dtype=int)
+    for k in range(len(stations)):
+        si = s2i[str(stations[k])]
+        yj = y2j[int(yr_int[k])]
+        role = station_groups.get(str(stations[k]), "train")
+        yr_val = int(yr_int[k])
+
+        in_train_yr = train_years[0] <= yr_val <= train_years[1]
+        in_val_yr = val_years[0] <= yr_val <= val_years[1]
+        in_test_yr = test_years[0] <= yr_val <= test_years[1]
+
+        if role == "train" and in_train_yr:
+            grid[si, yj] = 1
+        elif role == "val" and in_val_yr:
+            grid[si, yj] = 2
+        elif role == "test" and in_test_yr:
+            grid[si, yj] = 3
+        elif role == "train" and in_val_yr:
+            grid[si, yj] = 4
+        elif role == "train" and in_test_yr:
+            grid[si, yj] = 5
+        elif grid[si, yj] == 0:
+            grid[si, yj] = 6
+
+    colours = ["white", "#4c72b0", "#55a868", "#c44e52", "#b5cf6b", "#f4a460", "#cccccc"]
+    labels = ["No data", "Train", "Val spatial", "Test spatial", "Val temporal", "Test temporal", "Unused"]
+    cmap = ListedColormap(colours)
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5], cmap.N)
+
+    fig, ax = plt.subplots(figsize=(max(14, len(unique_years) * 0.22), max(5, len(unique_stations) * 0.35)))
+    ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+    ax.set_yticks(range(len(unique_stations)))
+    ax.set_yticklabels(unique_stations, fontsize=7)
+    step = max(1, len(unique_years) // 15)
+    ax.set_xticks(range(0, len(unique_years), step))
+    ax.set_xticklabels([unique_years[i] for i in range(0, len(unique_years), step)], fontsize=7, rotation=45, ha="right")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Station")
+    ax.set_title(title)
+    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colours, labels)]
+    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7, frameon=True)
+
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path, message=f"  Split heatmap saved to {save_path}")
+    return fig
+
+
+def plot_station_proportional_split_daily_raster(
+    stations: np.ndarray,
+    years: np.ndarray,
+    months: np.ndarray,
+    days: np.ndarray,
+    train_frac: float = 0.7,
+    val_frac: float = 0.2,
+    save_path: Optional[Path] = None,
+    title: str = "Site Model Station-Proportional Split (per-day)",
+):
+    import datetime as dt
+
+    unique_stations = sorted(set(str(s) for s in stations))
+    idx_all = np.arange(len(stations))
+    xs, ys, cs = [], [], []
+    c_train, c_val, c_test, c_none = "#4c72b0", "#55a868", "#c44e52", "white"
+
+    for si, st in enumerate(unique_stations):
+        mask = np.array([str(s) == st for s in stations])
+        idx = idx_all[mask]
+        if len(idx) == 0:
+            continue
+        yr = years[idx].astype(int)
+        mo = months[idx].astype(int)
+        dy = days[idx].astype(int)
+        order = np.lexsort((dy, mo, yr))
+        sorted_idx = idx[order]
+        n = len(sorted_idx)
+        n_train = int(n * train_frac)
+        n_val = int(n * val_frac)
+        split_map = [
+            (sorted_idx[:n_train], c_train),
+            (sorted_idx[n_train:n_train + n_val], c_val),
+            (sorted_idx[n_train + n_val:], c_test),
+        ]
+        for subset, colour in split_map:
+            for k in subset:
+                xs.append(mdates.date2num(dt.date(int(years[k]), int(months[k]), int(days[k]))))
+                ys.append(si)
+                cs.append(colour)
+
+    fig, ax = plt.subplots(figsize=(16, max(5, len(unique_stations) * 0.35)))
+    if xs:
+        ax.scatter(xs, ys, c=cs, marker="s", s=6, linewidths=0)
+    ax.set_yticks(range(len(unique_stations)))
+    ax.set_yticklabels(unique_stations, fontsize=7)
+    ax.set_ylim(-0.5, len(unique_stations) - 0.5)
+    ax.xaxis.set_major_locator(mdates.YearLocator(base=2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax.tick_params(axis="x", labelsize=7, rotation=45)
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Station")
+    ax.set_title(title)
+    patches = [
+        mpatches.Patch(color=c_none, label="No data"),
+        mpatches.Patch(color=c_train, label="Train"),
+        mpatches.Patch(color=c_val, label="Val"),
+        mpatches.Patch(color=c_test, label="Test"),
+    ]
+    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7, frameon=True)
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path, dpi=200, message=f"  Daily split raster saved to {save_path}")
+    return fig
+
+
+def plot_station_proportional_cv_folds_heatmap(
+    stations: np.ndarray,
+    years: np.ndarray,
+    months: np.ndarray,
+    days: np.ndarray,
+    cv_folds: int,
+    train_frac: float = 0.7,
+    val_frac: float = 0.2,
+    save_path: Optional[Path] = None,
+    title: str = "Site Model CV Folds (expanding-window)",
+):
+    if cv_folds <= 1:
+        return None
+
+    unique_stations = sorted(set(str(s) for s in stations))
+    yr_int = years.astype(int)
+    unique_years = sorted(set(yr_int))
+    y2j = {y: j for j, y in enumerate(unique_years)}
+
+    def _sorted_station_idx(st: str):
+        mask = np.array([str(s) == st for s in stations])
+        idx = np.where(mask)[0]
+        if len(idx) == 0:
+            return np.array([], dtype=int)
+        yr = years[idx].astype(int)
+        mo = months[idx].astype(int)
+        dy = days[idx].astype(int)
+        order = np.lexsort((dy, mo, yr))
+        return idx[order]
+
+    def _expanding_folds(indices_sorted: np.ndarray, k: int):
+        n = len(indices_sorted)
+        val_size = max(n // (k + 1), 1)
+        folds = []
+        for i in range(1, k + 1):
+            tr_end = i * val_size
+            va_end = min((i + 1) * val_size, n)
+            if tr_end >= n or tr_end >= va_end:
+                break
+            folds.append((indices_sorted[:tr_end], indices_sorted[tr_end:va_end]))
+        return folds
+
+    n_rows = len(unique_stations) * cv_folds
+    grid = np.zeros((n_rows, len(unique_years)), dtype=int)
+    row_labels = []
+
+    for si, st in enumerate(unique_stations):
+        sorted_idx = _sorted_station_idx(st)
+        for f in range(1, cv_folds + 1):
+            row_labels.append(f"{st}  [fold {f}]")
+        if len(sorted_idx) == 0:
+            continue
+        n = len(sorted_idx)
+        n_train = int(n * train_frac)
+        n_val = int(n * val_frac)
+        trainval_sorted = sorted_idx[: n_train + n_val]
+        folds = _expanding_folds(trainval_sorted, cv_folds)
+        for f_idx, (tr, va) in enumerate(folds, start=1):
+            r = si * cv_folds + (f_idx - 1)
+            for k in tr:
+                grid[r, y2j[int(yr_int[k])]] = max(grid[r, y2j[int(yr_int[k])]], 1)
+            for k in va:
+                grid[r, y2j[int(yr_int[k])]] = 2
+
+    colours = ["white", "#4c72b0", "#55a868"]
+    labels = ["No data", "Train", "Val"]
+    cmap = ListedColormap(colours)
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5], cmap.N)
+    fig, ax = plt.subplots(figsize=(max(14, len(unique_years) * 0.22), max(7, n_rows * 0.18)))
+    ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+    ax.set_yticks(range(n_rows))
+    ax.set_yticklabels(row_labels, fontsize=6)
+    step = max(1, len(unique_years) // 15)
+    ax.set_xticks(range(0, len(unique_years), step))
+    ax.set_xticklabels([unique_years[i] for i in range(0, len(unique_years), step)], fontsize=7, rotation=45, ha="right")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Station × Fold")
+    ax.set_title(title)
+    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colours, labels)]
+    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7, frameon=True)
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path, message=f"  CV fold heatmap saved to {save_path}")
+    return fig
+
+
+def plot_station_proportional_split_heatmap(
+    stations: np.ndarray,
+    years: np.ndarray,
+    months: np.ndarray,
+    days: np.ndarray,
+    train_frac: float = 0.7,
+    val_frac: float = 0.2,
+    save_path: Optional[Path] = None,
+    title: str = "Site Model Station-Proportional Split",
+):
+    unique_stations = sorted(set(str(s) for s in stations))
+    yr_int = years.astype(int)
+    unique_years = sorted(set(yr_int))
+    s2i = {s: i for i, s in enumerate(unique_stations)}
+    y2j = {y: j for j, y in enumerate(unique_years)}
+
+    grid = np.zeros((len(unique_stations), len(unique_years)), dtype=int)
+    has_train = np.zeros_like(grid, dtype=bool)
+    has_val = np.zeros_like(grid, dtype=bool)
+    has_test = np.zeros_like(grid, dtype=bool)
+    idx_all = np.arange(len(stations))
+
+    for st in unique_stations:
+        mask = np.array([str(s) == st for s in stations])
+        idx = idx_all[mask]
+        if len(idx) == 0:
+            continue
+        yr = years[idx].astype(int)
+        mo = months[idx].astype(int)
+        dy = days[idx].astype(int)
+        date_order = np.lexsort((dy, mo, yr))
+        sorted_idx = idx[date_order]
+        n = len(sorted_idx)
+        n_train = int(n * train_frac)
+        n_val = int(n * val_frac)
+        tr = set(sorted_idx[:n_train].tolist())
+        va = set(sorted_idx[n_train:n_train + n_val].tolist())
+        te = set(sorted_idx[n_train + n_val:].tolist())
+
+        for k in sorted_idx:
+            si = s2i[str(stations[k])]
+            yj = y2j[int(yr_int[k])]
+            if k in tr:
+                has_train[si, yj] = True
+            elif k in va:
+                has_val[si, yj] = True
+            elif k in te:
+                has_test[si, yj] = True
+
+    grid[has_test] = 3
+    grid[has_val] = 2
+    grid[has_train] = 1
+
+    colours = ["white", "#4c72b0", "#55a868", "#c44e52"]
+    labels = ["No data", "Train", "Val", "Test"]
+    cmap = ListedColormap(colours)
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
+    fig, ax = plt.subplots(figsize=(max(14, len(unique_years) * 0.22), max(5, len(unique_stations) * 0.35)))
+    ax.imshow(grid, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+    ax.set_yticks(range(len(unique_stations)))
+    ax.set_yticklabels(unique_stations, fontsize=7)
+    step = max(1, len(unique_years) // 15)
+    ax.set_xticks(range(0, len(unique_years), step))
+    ax.set_xticklabels([unique_years[i] for i in range(0, len(unique_years), step)], fontsize=7, rotation=45, ha="right")
+    ax.set_xlabel("Year")
+    ax.set_ylabel("Station")
+    ax.set_title(title)
+    patches = [mpatches.Patch(color=c, label=l) for c, l in zip(colours, labels)]
+    ax.legend(handles=patches, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7, frameon=True)
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path, message=f"  Split heatmap saved to {save_path}")
+    return fig
+
+
+def plot_stations_on_dem_raster(
+    dem_path: Path,
+    station_metadata: dict,
+    station_groups: Optional[Dict[str, str]] = None,
+    save_path: Optional[Path] = None,
+    title: str = "Stations over DEM",
+):
+    """Plot the full DEM raster with correct georeferenced lon/lat extent and overlay stations.
+
+    This is intended as a sanity check for CRS / lat-lon mismatch issues.
+
+    Notes:
+    - Station coordinates are assumed to be lon/lat in EPSG:4326.
+    - DEM is read in its native CRS and bounds are transformed to EPSG:4326.
+    """
+    dem_path = Path(dem_path)
+    if not dem_path.exists():
+        raise FileNotFoundError(dem_path)
+
+    role_colours = {"train": "steelblue", "val": "orange", "test": "crimson"}
+
+    with rasterio.open(str(dem_path)) as src:
+        if src.crs is None:
+            raise ValueError("DEM raster has no CRS; cannot transform to lon/lat")
+
+        # Read DEM and convert nodata to NaN for plotting
+        dem = src.read(1).astype(np.float32)
+        if src.nodata is not None:
+            dem = np.where(dem == float(src.nodata), np.nan, dem)
+        dem = np.where(np.isfinite(dem), dem, np.nan)
+
+        # DEM bounds in lon/lat
+        west, south, east, north = transform_bounds(src.crs, "EPSG:4326", *src.bounds, densify_pts=21)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Robust colour scaling so the ocean (0) doesn't dominate
+    finite = dem[np.isfinite(dem)]
+    if finite.size > 0:
+        vmin, vmax = np.nanpercentile(finite, [2, 98])
+    else:
+        vmin, vmax = 0.0, 1.0
+
+    im = ax.imshow(
+        dem,
+        extent=[west, east, south, north],
+        origin="upper",
+        cmap="terrain",
+        vmin=vmin,
+        vmax=vmax,
+        interpolation="nearest",
+        alpha=0.95,
+    )
+    cb = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cb.set_label("Elevation (m)")
+
+    # Overlay stations
+    for sname, info in station_metadata.items():
+        lat = info.get("latitude", info.get("lat", None))
+        lon = info.get("longitude", info.get("lon", None))
+        if lat is None or lon is None:
+            continue
+        role = station_groups.get(sname, "train") if station_groups else "train"
+        colour = role_colours.get(role, "black")
+        ax.scatter(lon, lat, s=30, c=colour, edgecolors="black", linewidths=0.4, zorder=5)
+        ax.annotate(sname, (lon, lat), fontsize=6, xytext=(3, 3), textcoords="offset points", zorder=6)
+
+    # Legend
+    if station_groups:
+        from matplotlib.lines import Line2D
+        present_roles = sorted(set(station_groups.values()))
+        handles = [
+            Line2D([0], [0], marker="o", color="w", markerfacecolor=role_colours[r],
+                   markeredgecolor="black", markersize=7, label=r)
+            for r in ("train", "val", "test") if r in present_roles
+        ]
+        if handles:
+            ax.legend(handles=handles, loc="upper left", fontsize=9, frameon=True)
+
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.set_aspect("equal", "box")
+    plt.tight_layout()
+
+    if save_path:
+        _save_and_close(fig, save_path, dpi=180)
     return fig
 
 
@@ -69,8 +628,7 @@ def plot_monthly_seasonality(
     ax.grid(alpha=0.3)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -96,8 +654,7 @@ def plot_station_sample_counts(
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -122,8 +679,9 @@ def plot_per_station_histograms(
         ax.grid(alpha=0.3)
         plt.tight_layout()
         if save_dir:
-            fig.savefig(save_dir / f"hist_{st}.png", dpi=100, bbox_inches="tight")
-        plt.close(fig)
+            _save_and_close(fig, save_dir / f"hist_{st}.png", dpi=100)
+        else:
+            plt.close(fig)
 
 
 # ===================================================================
@@ -146,8 +704,7 @@ def plot_training_history(
     ax.grid(alpha=0.3)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -171,8 +728,7 @@ def plot_scatter(
     if len(yt) == 0:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
         if save_path:
-            fig.savefig(save_path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
+            _save_and_close(fig, save_path)
         return fig
 
     ax.scatter(yt, yp, s=4, alpha=0.3, rasterized=True)
@@ -187,8 +743,7 @@ def plot_scatter(
     ax.grid(alpha=0.3)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -213,10 +768,8 @@ def plot_model_comparison_table(
     ax.set_title("Model Comparison", fontsize=12, pad=20)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
-
 
 # ===================================================================
 # Dataset inspection / audit plots
@@ -247,12 +800,40 @@ def plot_sample_dem_patches(
         rd = regional_dem[idx]
         st = str(stations[idx])
 
-        im0 = axes[0, col].imshow(ld, cmap="terrain", interpolation="nearest")
-        axes[0, col].set_title(f"Local DEM\n{st} [#{idx}]", fontsize=8)
+        ld_plot = np.where(ld <= -1, np.nan, ld)
+        rd_plot = np.where(rd <= -1, np.nan, rd)
+
+        ld_valid = ld_plot[np.isfinite(ld_plot)]
+        rd_valid = rd_plot[np.isfinite(rd_plot)]
+
+        if len(ld_valid) > 0:
+            ld_vmin, ld_vmax = np.nanpercentile(ld_valid, [2, 98])
+            if ld_vmin == ld_vmax:
+                ld_vmin -= 1.0
+                ld_vmax += 1.0
+        else:
+            ld_vmin, ld_vmax = 0.0, 1.0
+
+        if len(rd_valid) > 0:
+            rd_vmin, rd_vmax = np.nanpercentile(rd_valid, [2, 98])
+            if rd_vmin == rd_vmax:
+                rd_vmin -= 1.0
+                rd_vmax += 1.0
+        else:
+            rd_vmin, rd_vmax = 0.0, 1.0
+
+        im0 = axes[0, col].imshow(ld_plot, cmap="terrain", interpolation="nearest", vmin=ld_vmin, vmax=ld_vmax)
+        axes[0, col].set_title(
+            f"Local DEM\n{st} [#{idx}]\nvalid={len(ld_valid)}/{ld.size} ({100.0 * len(ld_valid) / ld.size:.1f}%)",
+            fontsize=8,
+        )
         plt.colorbar(im0, ax=axes[0, col], fraction=0.046, pad=0.04)
 
-        im1 = axes[1, col].imshow(rd, cmap="terrain", interpolation="nearest")
-        axes[1, col].set_title(f"Regional DEM\n{st} [#{idx}]", fontsize=8)
+        im1 = axes[1, col].imshow(rd_plot, cmap="terrain", interpolation="nearest", vmin=rd_vmin, vmax=rd_vmax)
+        axes[1, col].set_title(
+            f"Regional DEM\n{st} [#{idx}]\nvalid={len(rd_valid)}/{rd.size} ({100.0 * len(rd_valid) / rd.size:.1f}%)",
+            fontsize=8,
+        )
         plt.colorbar(im1, ax=axes[1, col], fraction=0.046, pad=0.04)
 
     for ax_row in axes:
@@ -262,8 +843,7 @@ def plot_sample_dem_patches(
     fig.suptitle("Sample DEM Patches (raw, metres)", fontsize=12)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -298,8 +878,7 @@ def plot_sample_reanalysis_patches(
     fig.suptitle(f"Reanalysis patch - station {st}  (sample #{sample_idx})", fontsize=11)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -328,8 +907,7 @@ def plot_nan_audit(
     ax.grid(alpha=0.3, axis="x")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -359,8 +937,7 @@ def plot_feature_distributions(
     fig.suptitle(f"Feature Distributions - {tag}", fontsize=12)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -398,8 +975,7 @@ def plot_reanalysis_channel_distributions(
     fig.suptitle(f"Reanalysis Channel Distributions - {tag}", fontsize=11)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -430,8 +1006,7 @@ def plot_reanalysis_correlation(
     ax.set_title(f"Reanalysis Channel Correlation - {tag}", fontsize=11)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -462,8 +1037,7 @@ def plot_normalization_comparison(
     fig.suptitle("Feature Distributions - Raw vs Normalised", fontsize=12)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -495,8 +1069,7 @@ def plot_per_station_dem_summary(
     fig.suptitle("Mean Centre-Pixel DEM by Station", fontsize=12)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -542,8 +1115,7 @@ def plot_station_map(
     ax.set_aspect("equal")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -581,8 +1153,7 @@ def plot_reanalysis_rainfall_correlation(
     ax.grid(alpha=0.3, axis="x")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -644,8 +1215,7 @@ def plot_temporal_autocorrelation(
 
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -675,8 +1245,7 @@ def plot_rainfall_exceedance(
     ax.grid(alpha=0.3, which="both")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -728,8 +1297,7 @@ def plot_dry_wet_spells(
     fig.suptitle("Dry & Wet Spell Distributions Across All Stations", fontsize=12, y=1.02)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -761,8 +1329,7 @@ def plot_rainfall_by_station_boxplot(
     ax.grid(alpha=0.3, axis="y")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -807,8 +1374,7 @@ def plot_annual_rainfall_trends(
 
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -822,6 +1388,8 @@ def plot_dem_on_map(
     stations: np.ndarray,
     station_metadata: dict,
     n_samples: int = 6,
+    local_km_per_cell: float = 1.0,
+    regional_km_per_cell: float = 1.0,
     save_path: Optional[Path] = None,
 ):
     """Overlay DEM patches on a geographic scatter map of station locations.
@@ -833,7 +1401,12 @@ def plot_dem_on_map(
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-    for ax, dem_arr, label in [(axes[0], local_dem, "Local DEM"), (axes[1], regional_dem, "Regional DEM")]:
+    panels = [
+        (axes[0], local_dem, "Local DEM", float(local_km_per_cell)),
+        (axes[1], regional_dem, "Regional DEM", float(regional_km_per_cell)),
+    ]
+
+    for ax, dem_arr, label, km_per_cell in panels:
         # Plot all stations as dots
         for sname, info in station_metadata.items():
             lat = info.get("latitude", info.get("lat", None))
@@ -853,9 +1426,15 @@ def plot_dem_on_map(
                 continue
             patch = dem_arr[idx]
             h, w = patch.shape
-            # Scale patch extent based on approximate km
-            extent_deg = 0.05 * max(h, w)  # rough scaling
-            extent = [lon - extent_deg, lon + extent_deg, lat - extent_deg, lat + extent_deg]
+            # Scale patch extent based on physical size.
+            # Approximate degrees per km (sufficient for small extents around American Samoa).
+            half_km_x = (w / 2.0) * km_per_cell
+            half_km_y = (h / 2.0) * km_per_cell
+            deg_per_km_lat = 1.0 / 110.574
+            deg_per_km_lon = 1.0 / (111.320 * max(np.cos(np.deg2rad(lat)), 1e-6))
+            half_deg_lon = half_km_x * deg_per_km_lon
+            half_deg_lat = half_km_y * deg_per_km_lat
+            extent = [lon - half_deg_lon, lon + half_deg_lon, lat - half_deg_lat, lat + half_deg_lat]
             ax.imshow(patch, extent=extent, cmap="terrain", alpha=0.7, zorder=2,
                       interpolation="bilinear")
             ax.annotate(sname, (lon, lat), fontsize=5, xytext=(3, 3),
@@ -870,8 +1449,7 @@ def plot_dem_on_map(
     fig.suptitle("DEM Patches Overlaid on Station Locations", fontsize=12)
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig
 
 
@@ -895,8 +1473,7 @@ def plot_model_architecture(
     fig = _plot_architecture_matplotlib(model, model_name)
 
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
 
     # Also try torchviz for a computation-graph PDF/PNG
     if input_data is not None:
@@ -1049,6 +1626,5 @@ def plot_per_station_comparison(
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        _save_and_close(fig, save_path)
     return fig

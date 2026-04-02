@@ -23,13 +23,13 @@ from Daily_Modeling import config
 from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, normalize_tensors, print_normalization_report
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, compute_station_year_ranges, compute_year_boundaries,
-    plot_split_heatmap, spatiotemporal_split, station_proportional_split,
+    spatiotemporal_split, station_proportional_split,
 )
 from Daily_Modeling.models.bernoulli_gamma import BernoulliGammaGLM, flatten_features_numpy
 from Daily_Modeling.utils.device import select_device
 from Daily_Modeling.utils.io_utils import save_json, save_predictions
 from Daily_Modeling.utils.metrics import compute_metrics, baseline_mean_metrics
-from Daily_Modeling.utils.visualization import plot_scatter
+from Daily_Modeling.utils.visualization import plot_scatter, plot_split_heatmap
 
 
 def main():

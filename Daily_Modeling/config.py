@@ -3,8 +3,6 @@ Configuration for Daily Rainfall Downscaling - American Samoa.
 
 All paths are relative to the repository root (parent of Daily_Modeling/).
 """
-
-import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -18,7 +16,7 @@ REPO_ROOT = _THIS_DIR.parent
 # ---------------------------------------------------------------------------
 STATION_METADATA_PATH = REPO_ROOT / "raw_data" / "station_locations.csv"
 DEM_PATH = REPO_ROOT / "raw_data" / "DEM" / "DEM_Tut1.tif"
-REANALYSIS_DIR = REPO_ROOT / "raw_data" / "climate_variables_daily_FULL_1980-2024"
+REANALYSIS_DIR = REPO_ROOT / "raw_data" / "climate_variables_daily_1980-2024_updated"
 DAILY_RAINFALL_DIR = REPO_ROOT / "raw_data" / "rainfall_corrected_NEW"
 
 # ---------------------------------------------------------------------------
@@ -52,6 +50,7 @@ DEM_MAX_REGIONAL = {"patch_size": 25, "km_per_cell": 1}  # 25x25 @ 1 km -> 25 km
 # Total box = patch_size * km_per_cell
 DEM_LOCAL_CANDIDATES = [
     (1, 1),   #  1 km  (centre pixel only)
+    (3, 0.5),  #  1.5 km
     (3, 1),   #  3 km
     (3, 2),   #  6 km
     (5, 1),   #  5 km
@@ -60,7 +59,9 @@ DEM_REGIONAL_CANDIDATES = [
     (3, 3),   #  9 km
     (3, 5),   # 15 km
     (3, 8),   # 24 km
+    (5, 2),   # 10 km
     (5, 3),   # 15 km
+    (5, 4),   # 20 km
     (5, 5),   # 25 km
 ]
 
@@ -130,9 +131,21 @@ DAILY_VARIABLE_CONFIGS = {
         "description": "Geopotential height 500 hPa",
         "variable": "Geopotential Height", "level": 500,
     },
+    "hgt_1000": {
+        "description": "Geopotential height 1000 hPa",
+        "variable": "Geopotential Height", "level": 1000,
+    },
     "omega_500": {
         "description": "Omega (vertical velocity) 500 hPa",
         "variable": "Omega", "level": 500,
+    },
+    "pottmp_diff_500_1000": {
+        "description": "Potential temperature difference 500-1000 hPa",
+        "variable": "Potential Temperature", "levels": [500, 1000], "operation": "diff",
+    },
+    "pottmp_diff_850_1000": {
+        "description": "Potential temperature difference 850-1000 hPa",
+        "variable": "Potential Temperature", "levels": [850, 1000], "operation": "diff",
     },
     "pr_wtr": {
         "description": "Precipitable water",
@@ -186,13 +199,9 @@ DAILY_VARIABLE_NAMES = list(DAILY_VARIABLE_CONFIGS.keys())
 # ---------------------------------------------------------------------------
 # Spatio-temporal split defaults
 # ---------------------------------------------------------------------------
-# Year ranges can be set manually here, OR computed from data by passing
-# compute_year_ranges_from_data=True to the split functions.  The data-driven
-# approach finds chronological boundaries so that ~TRAIN_FRAC of samples fall
-# in train years, ~VAL_FRAC in val years, and the rest in test years.
-TRAIN_YEAR_RANGE = (1958, 2003)
-VAL_YEAR_RANGE = (2004, 2008)
-TEST_YEAR_RANGE = (2009, 2024)
+# Year ranges are computed from data by compute_year_boundaries() so that
+# ~TRAIN_FRAC of samples fall in train years, ~VAL_FRAC in val years, and
+# the rest in test years.
 
 # Target fractions (used by data-driven year boundary computation)
 TRAIN_FRAC = 0.70
@@ -215,19 +224,29 @@ SITE_VAL_FRAC = 0.20
 # ---------------------------------------------------------------------------
 # Training defaults
 # ---------------------------------------------------------------------------
+# Maps loss_type -> required output_head for the LAND model
+LOSS_TO_HEAD = {
+    "mse": "softplus",
+    "gamma": "gamma",
+    "tweedie": "softplus",
+    "bernoulli_gamma": "bernoulli_gamma",
+}
+
 LAND_DEFAULT_HP = {
-    "climate_units": 1020,
-    "dem_units": 48,
+    "climate_units": 130,
+    "dem_units": 64,
+    "dem_patch_size": 10,
     "temporal_units": 16,
     "na": 256,
     "nb": 64,
-    "dropout_rate": 0.5,
+    "dropout_rate": 0.3,
     "learning_rate": 5e-5,
-    "weight_decay": 1e-3,
+    "weight_decay": 3e-5,
     "batch_size": 256,
     "climate_processing": "conv2d",
     "output_head": "gamma",
     "loss_type": "gamma",
+    "use_batch_norm": False,
 }
 
 MLP_DEFAULT_HP = {
@@ -239,5 +258,10 @@ MLP_DEFAULT_HP = {
     "loss_type": "mse",  # one of: mse, log_mse, tweedie
 }
 
-MAX_EPOCHS = 300
-PATIENCE = 50
+DATALOADER_NUM_WORKERS = 4
+DATALOADER_PIN_MEMORY = True
+DATALOADER_PERSISTENT_WORKERS = True
+DATALOADER_PREFETCH_FACTOR = 4
+
+MAX_EPOCHS = 1000
+PATIENCE = 100
