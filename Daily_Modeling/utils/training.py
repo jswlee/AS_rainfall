@@ -2,6 +2,8 @@
 Shared training utilities: training loop, early stopping, LR scheduling.
 """
 
+import pathlib
+import shutil
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -181,6 +183,7 @@ def train_model(
     debug_early_stopping: bool = False,
     checkpoint_dir: Optional[str] = None,
     checkpoint_every: int = 10,
+    resume_from: Optional[str] = None,
 ) -> Dict[str, list]:
     """Full training loop with early stopping, LR scheduling, and optional AMP.
 
@@ -219,7 +222,26 @@ def train_model(
         history[monitor_name] = []
     t0 = time.time()
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if resume_from is not None:
+        ckpt = torch.load(resume_from, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        if scaler is not None and ckpt.get("scaler_state_dict") is not None:
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
+        es.best_loss = ckpt.get("best_val", float("inf"))
+        es.counter = ckpt.get("es_counter", 0)
+        if ckpt.get("es_best_weights") is not None:
+            es.best_weights = ckpt["es_best_weights"]
+        resumed_history = ckpt.get("history", {})
+        for k in history:
+            if k in resumed_history:
+                history[k] = resumed_history[k]
+        start_epoch = ckpt["epoch"] + 1
+        print(f"  Resumed from epoch {ckpt['epoch']} "
+              f"(best monitor: {es.best_loss:.6f}, patience: {es.counter}/{patience})")
+
+    for epoch in range(start_epoch, epochs + 1):
         if scheduler is not None:
             scheduler.step(epoch - 1)
         tl = train_epoch(
@@ -293,7 +315,6 @@ def train_model(
 
         # Save checkpoint periodically
         if checkpoint_dir is not None and epoch % checkpoint_every == 0:
-            import pathlib
             ckpt_path = pathlib.Path(checkpoint_dir) / f"checkpoint_epoch{epoch}.pt"
             ckpt_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save({
@@ -301,7 +322,10 @@ def train_model(
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict() if hasattr(scheduler, "state_dict") else None,
+                "scaler_state_dict": scaler.state_dict() if scaler is not None else None,
                 "best_val": es.best_loss,
+                "es_counter": es.counter,
+                "es_best_weights": es.best_weights,
                 "history": history,
             }, ckpt_path)
             # Keep only last 3 checkpoints to save space
@@ -310,6 +334,14 @@ def train_model(
                 old_ckpt.unlink()
 
     es.restore(model)
+
+    # Clean up checkpoints after successful training completion
+    if checkpoint_dir is not None:
+        ckpt_p = pathlib.Path(checkpoint_dir)
+        if ckpt_p.exists():
+            shutil.rmtree(ckpt_p)
+            print(f"  Checkpoints cleaned up: {ckpt_p}")
+
     elapsed = time.time() - t0
     best_val = es.best_loss
     if monitor_fn is not None:

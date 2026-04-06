@@ -233,7 +233,7 @@ LOSS_TO_HEAD = {
 }
 
 LAND_DEFAULT_HP = {
-    "climate_units": 130,
+    "climate_units": 128,
     "dem_units": 64,
     "dem_patch_size": 10,
     "temporal_units": 16,

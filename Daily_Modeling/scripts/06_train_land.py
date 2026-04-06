@@ -26,7 +26,7 @@ import torch
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.dataset import (
     load_tensors_from_npz, normalize_tensors, make_dataloaders,
-    print_normalization_report, get_dataset_metadata,
+    print_normalization_report, get_dataset_metadata, precompute_dem_crops,
 )
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, compute_station_year_ranges,
@@ -94,7 +94,7 @@ def main():
     parser.add_argument("--hp-dir", default=None,
                         help="Dir with best_hyperparameters.json (default: LAND defaults)")
     parser.add_argument("--epochs", type=int, default=1000,
-                        help="Training epochs per ensemble member (default: 400)")
+                        help="Training epochs per ensemble member")
     parser.add_argument("--patience", type=int, default=config.PATIENCE)
     parser.add_argument("--run-name", default="land_final")
     parser.add_argument("--loss-type", default=None,
@@ -140,6 +140,11 @@ def main():
                         help="Enable mixed-precision (AMP) training. Off by default for Gamma/Tweedie stability.")
     parser.add_argument("--batch-norm", type=str, choices=["true", "false"], default=None,
                         help="Override BatchNorm setting (true/false). Omit to inherit from HP file.")
+    parser.add_argument("--small-batch-processing", action="store_true", default=False,
+                        help="Optimise for small batch sizes: pre-stage tensors on GPU and "
+                             "use torch.compile to reduce per-step overhead.")
+    parser.add_argument("--resume", action="store_true", default=False,
+                        help="Resume training from latest checkpoint if available.")
     # HP overrides
     parser.add_argument("--batch-size", type=int, default=None,
                         help="Override batch size from tuned HPs")
@@ -153,6 +158,20 @@ def main():
 
     device = select_device()
     print(f"Device: {device}")
+
+    # Small-batch optimisations: TF32 precision + check torch.compile availability
+    _can_compile = False
+    if args.small_batch_processing:
+        torch.set_float32_matmul_precision("high")
+        if hasattr(torch, "compile"):
+            try:
+                import triton  # noqa: F401
+                _can_compile = True
+                print("small-batch-processing: GPU pre-staging + torch.compile enabled")
+            except ImportError:
+                print("small-batch-processing: GPU pre-staging enabled (torch.compile skipped — Triton not available on Windows)")
+        else:
+            print("small-batch-processing: GPU pre-staging enabled (torch.compile requires PyTorch 2.0+)")
 
     # --- Load data ---
     tensors, meta = load_tensors_from_npz(device=torch.device("cpu"))
@@ -218,10 +237,12 @@ def main():
     if dem_crop is not None:
         lp = dem_crop["local_patch_size"]
         rp = dem_crop["regional_patch_size"]
-        metadata["local_dem_shape"] = (lp, lp)
-        metadata["regional_dem_shape"] = (rp, rp)
         print(f"DEM crop: local={lp}x{lp}@{dem_crop['local_km']}km  "
               f"regional={rp}x{rp}@{dem_crop['regional_km']}km")
+
+    # Batch-crop all DEM samples once (eliminates per-sample cropping in DataLoader)
+    cropped_tensors = precompute_dem_crops(tensors, dem_crop)
+    metadata = get_dataset_metadata(cropped_tensors)
 
     out_dir = config.RESULTS_DIR / args.run_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -323,13 +344,14 @@ def main():
         fold_splits["cv_val"] = val_idx
 
         loaders = make_dataloaders(
-            tensors, fold_splits, target_scale=target_scale,
+            cropped_tensors, fold_splits, target_scale=target_scale,
             batch_size=hp.get("batch_size", 256),
             num_workers=args.num_workers,
             pin_memory=(args.pin_memory and device.type == "cuda"),
             persistent_workers=args.persistent_workers,
             prefetch_factor=args.prefetch_factor,
-            dem_crop_config=dem_crop,
+            dem_crop_config=None,
+            device=(device if args.small_batch_processing else None),
         )
 
         if "cv_val" not in loaders or len(loaders["cv_val"].dataset) == 0:
@@ -346,6 +368,8 @@ def main():
                 torch.cuda.manual_seed_all(seed)
 
             model = create_land_model(hp, metadata).to(device)
+            if _can_compile:
+                model = torch.compile(model)
             if fold_i == 0 and seed_i == 0:
                 print(f"Model parameters: {model.count_parameters():,}")
                 # Save architecture source once
@@ -371,6 +395,14 @@ def main():
             print(f"\n--- Fold {fold_i+1}/{len(cv_folds)}  Seed {seed_i+1}/{n_seeds} (seed={seed}) ---")
             # Checkpoint directory for this fold/seed
             ckpt_dir = fold_dir / f"checkpoints_seed{seed_i}"
+            resume_path = None
+            if args.resume:
+                ckpt_files = sorted(ckpt_dir.glob("checkpoint_epoch*.pt"))
+                if ckpt_files:
+                    resume_path = str(ckpt_files[-1])
+                    print(f"  Resuming from: {resume_path}")
+                else:
+                    print(f"  --resume: no checkpoint found in {ckpt_dir}, starting fresh")
             history = train_model(
                 model, loaders["train"], loaders["cv_val"], device,
                 epochs=args.epochs, patience=args.patience,
@@ -388,6 +420,7 @@ def main():
                 use_amp=args.amp,
                 checkpoint_dir=str(ckpt_dir),
                 checkpoint_every=20,
+                resume_from=resume_path,
             )
             ensemble_models.append(model)
             all_histories.append(history)

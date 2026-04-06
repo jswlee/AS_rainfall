@@ -27,7 +27,7 @@ import json
 import torch
 
 from Daily_Modeling import config
-from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, normalize_tensors, make_dataloaders, get_dataset_metadata
+from Daily_Modeling.data_utils.dataset import load_tensors_from_npz, normalize_tensors, make_dataloaders, get_dataset_metadata, precompute_dem_crops
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, spatiotemporal_split, compute_station_year_ranges,
     compute_year_boundaries, make_cv_folds,
@@ -77,35 +77,23 @@ def objective(
     device,
     target_scale,
     args,
+    can_compile=False,
 ):
     num_cv = base_metadata["num_climate_vars"]
 
-    # Precompute DEM patches for all candidates once per trial
-    if not hasattr(trial, 'precomputed_dem_patches'):
-        trial.precomputed_dem_patches = {}
-        local_candidates = config.DEM_LOCAL_CANDIDATES
-        regional_candidates = config.DEM_REGIONAL_CANDIDATES
-        
-        for local_idx, (lp, lk) in enumerate(local_candidates):
-            for regional_idx, (rp, rk) in enumerate(regional_candidates):
-                dem_crop = {
-                    "local_patch_size": lp, "local_km": lk,
-                    "regional_patch_size": rp, "regional_km": rk,
-                }
-                key = f"{local_idx}_{regional_idx}"
-                # Precompute metadata for this DEM configuration
-                trial.precomputed_dem_patches[key] = {
-                    "metadata": get_dataset_metadata(tensors, dem_crop_config=dem_crop),
-                    "dem_crop": dem_crop
-                }
-    
     # Select DEM configuration
     local_idx = trial.suggest_int("local_dem_cfg", 0, len(config.DEM_LOCAL_CANDIDATES) - 1)
     regional_idx = trial.suggest_int("regional_dem_cfg", 0, len(config.DEM_REGIONAL_CANDIDATES) - 1)
-    key = f"{local_idx}_{regional_idx}"
-    dem_data = trial.precomputed_dem_patches[key]
-    dem_crop = dem_data["dem_crop"]
-    metadata = dem_data["metadata"]
+    lp, lk = config.DEM_LOCAL_CANDIDATES[local_idx]
+    rp, rk = config.DEM_REGIONAL_CANDIDATES[regional_idx]
+    dem_crop = {
+        "local_patch_size": lp, "local_km": lk,
+        "regional_patch_size": rp, "regional_km": rk,
+    }
+
+    # Batch-crop all DEM samples once (eliminates per-sample cropping in DataLoader)
+    cropped_tensors = precompute_dem_crops(tensors, dem_crop)
+    metadata = get_dataset_metadata(cropped_tensors)
 
     output_head = config.LOSS_TO_HEAD[args.loss_type]
 
@@ -117,9 +105,9 @@ def objective(
         "na": trial.suggest_int("na", 64, 512, step=64),
         "nb": trial.suggest_int("nb", 16, 128, step=16),
         "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.3, step=0.05),
-        "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-2, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-7, 1e-2, log=True),
         "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-3, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", [512, 1024, 2048]),
+        "batch_size": trial.suggest_categorical("batch_size", [256, 512, 1024]),
         "climate_processing": "conv2d",
         "output_head": output_head,
         "loss_type": args.loss_type,
@@ -177,13 +165,14 @@ def objective(
             train_fold_idx = rng.choice(train_fold_idx, n_sub, replace=False)
 
         fold_splits = {"train": train_fold_idx, "val": val_fold_idx}
-        loaders = make_dataloaders(tensors, fold_splits, target_scale=target_scale,
+        loaders = make_dataloaders(cropped_tensors, fold_splits, target_scale=target_scale,
                                    batch_size=hp["batch_size"],
                                    num_workers=args.num_workers,
                                    pin_memory=args.pin_memory,
                                    persistent_workers=args.persistent_workers,
                                    prefetch_factor=args.prefetch_factor,
-                                   dem_crop_config=dem_crop)
+                                   dem_crop_config=None,
+                                   device=(device if args.small_batch_processing else None))
 
         if "val" not in loaders or len(loaders["val"].dataset) == 0:
             print(f"  Fold {fold_i}: empty val, skipping")
@@ -192,10 +181,14 @@ def objective(
         # Create or reset model
         if fold_i == 0:
             model = create_land_model(hp, metadata).to(device)
+            if can_compile:
+                model = torch.compile(model)
             initial_state_dict = model.state_dict()
         else:
             # Reset model to initial weights for new fold
             model = create_land_model(hp, metadata).to(device)
+            if can_compile:
+                model = torch.compile(model)
             model.load_state_dict(initial_state_dict)
 
         history = train_model(
@@ -205,13 +198,13 @@ def objective(
             learning_rate=hp["learning_rate"], weight_decay=hp["weight_decay"],
             criterion=criterion,
             metric_fn=metric_fn,
-            verbose=1,
+            verbose=5,
             trial=None,  # no Optuna pruning inside CV folds
             no_early_stopping=args.no_early_stopping,
             monitor=("val_metric" if args.loss_type != "mse" else "val_loss"),
             scheduler_type=args.scheduler,
             use_amp=args.amp,
-            debug_early_stopping=True,
+            debug_early_stopping=False,
         )
 
         # --- Score the fold ---
@@ -283,17 +276,20 @@ def main():
                         help="Optional cap on per-sample Tweedie deviance (default: None).")
     parser.add_argument("--scheduler", default="cosine",
                         choices=["cosine", "none"],
-                        help="LR scheduler type (default: none = flat LR, matching original paper).")
+                        help="LR scheduler type")
     parser.add_argument("--amp", action="store_true", default=False,
                         help="Enable mixed-precision (AMP) training. Off by default for Gamma/Tweedie stability.")
     parser.add_argument("--use-batch-norm", action="store_true", default=False,
                         help="Enable BatchNorm layers in the LAND model for all tuning trials.")
     parser.add_argument("--max-epochs", type=int, default=300,
                         help="Maximum epochs per trial (default: 300)")
-    parser.add_argument("--patience", type=int, default=60,
+    parser.add_argument("--patience", type=int, default=30,
                         help="Early stopping patience (default: 60)")
     parser.add_argument("--subset-frac", type=float, default=1.0,
                         help="Training subset fraction per fold (default: 1.0)")
+    parser.add_argument("--small-batch-processing", action="store_true", default=False,
+                        help="Optimise for small batch sizes: pre-stage tensors on GPU and "
+                             "use torch.compile to reduce per-step overhead.")
     args = parser.parse_args()
     if args.study_name is None:
         args.study_name = (
@@ -305,6 +301,20 @@ def main():
 
     device = select_device()
     print(f"Device: {device}")
+
+    # Small-batch optimisations: TF32 precision + check torch.compile availability
+    _can_compile = False
+    if args.small_batch_processing:
+        torch.set_float32_matmul_precision("high")
+        if hasattr(torch, "compile"):
+            try:
+                import triton  # noqa: F401
+                _can_compile = True
+                print("small-batch-processing: GPU pre-staging + torch.compile enabled")
+            except ImportError:
+                print("small-batch-processing: GPU pre-staging enabled (torch.compile skipped — Triton not available on Windows)")
+        else:
+            print("small-batch-processing: GPU pre-staging enabled (torch.compile requires PyTorch 2.0+)")
 
     if device.type == "cuda":
         try:
@@ -395,7 +405,7 @@ def main():
     study.optimize(
         lambda trial: objective(
             trial, tensors, splits, base_metadata, device,
-            target_scale, args
+            target_scale, args, _can_compile
         ),
         n_trials=args.n_trials,
         callbacks=[_hp_space_callback],

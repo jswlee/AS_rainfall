@@ -39,6 +39,34 @@ def crop_dem_patch(
     return patch[..., rows, :][..., cols]
 
 
+def precompute_dem_crops(
+    tensors: Dict[str, torch.Tensor],
+    dem_crop_config: Optional[dict] = None,
+) -> Dict[str, torch.Tensor]:
+    """Batch-crop DEM tensors upfront so ``__getitem__`` is pure indexing.
+
+    Returns a shallow copy of *tensors* with ``local_dem`` and
+    ``regional_dem`` replaced by their cropped versions.  Pass the result
+    to :func:`make_dataloaders` with ``dem_crop_config=None``.
+    """
+    if dem_crop_config is None:
+        return tensors
+    out = dict(tensors)  # shallow copy; non-DEM keys share storage
+    if "local_patch_size" in dem_crop_config:
+        out["local_dem"] = crop_dem_patch(
+            tensors["local_dem"],
+            dem_crop_config["local_patch_size"],
+            dem_crop_config["local_km"],
+        )
+    if "regional_patch_size" in dem_crop_config:
+        out["regional_dem"] = crop_dem_patch(
+            tensors["regional_dem"],
+            dem_crop_config["regional_patch_size"],
+            dem_crop_config["regional_km"],
+        )
+    return out
+
+
 class RainfallDataset(Dataset):
     """Index-based dataset over shared tensors (avoids data duplication)."""
 
@@ -294,6 +322,65 @@ def print_normalization_report(
     print("\n" + "=" * 70 + "\n")
 
 
+class _DatasetStub:
+    """Minimal stub so ``len(loader.dataset)`` works for :class:`InMemoryLoader`."""
+    def __init__(self, n: int):
+        self._n = n
+    def __len__(self) -> int:
+        return self._n
+
+
+class InMemoryLoader:
+    """Fast batch iterator for in-memory tensors.
+
+    Replaces :class:`DataLoader` when all data already lives in CPU/GPU tensors
+    and no subprocess workers are needed.  Instead of calling ``__getitem__``
+    *batch_size* times and collating, it performs a single
+    ``tensor[batch_indices]`` per feature key — typically 10–50× faster on the
+    main thread.
+    """
+
+    def __init__(
+        self,
+        tensors: Dict[str, torch.Tensor],
+        indices: np.ndarray,
+        batch_size: int = 256,
+        shuffle: bool = False,
+        target_scale: Optional[float] = None,
+        device: Optional[torch.device] = None,
+    ):
+        # When *device* is given, stage all tensors on that device once so
+        # every batch is assembled via on-device indexing (no CPU→GPU copy).
+        if device is not None:
+            tensors = {k: v.to(device) for k, v in tensors.items()}
+        self.tensors = tensors
+        self.indices = torch.from_numpy(np.asarray(indices)).long()
+        if device is not None:
+            self.indices = self.indices.to(device)
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.target_scale = float(target_scale) if target_scale else None
+        self.feature_keys = [k for k in tensors if k != "targets"]
+        self.dataset = _DatasetStub(len(indices))
+
+    def __len__(self) -> int:
+        return (len(self.indices) + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        if self.shuffle:
+            perm = torch.randperm(len(self.indices))
+            idx = self.indices[perm]
+        else:
+            idx = self.indices
+        for start in range(0, len(idx), self.batch_size):
+            bi = idx[start : start + self.batch_size]
+            features = {k: self.tensors[k][bi] for k in self.feature_keys}
+            targets = self.tensors["targets"][bi]
+            if self.target_scale and self.target_scale > 0:
+                targets = targets / self.target_scale
+            yield features, targets
+
+
 def make_dataloaders(
     tensors: Dict[str, torch.Tensor],
     split_indices: Dict[str, np.ndarray],
@@ -304,27 +391,47 @@ def make_dataloaders(
     persistent_workers: bool = False,
     prefetch_factor: int = 2,
     dem_crop_config: Optional[dict] = None,
+    device: Optional[torch.device] = None,
 ) -> Dict[str, DataLoader]:
     """Create DataLoaders for each split.
 
     If *dem_crop_config* is provided, DEM patches will be cropped/subsampled
     at runtime to the specified (patch_size, km_per_cell) combos.
+
+    When ``num_workers=0`` and ``dem_crop_config is None`` (i.e. tensors are
+    already pre-cropped), an :class:`InMemoryLoader` is used instead of
+    :class:`DataLoader` for significantly faster batch iteration.
+
+    If *device* is given (e.g. ``torch.device("cuda")``), tensors are staged
+    on that device inside :class:`InMemoryLoader` so batch assembly is pure
+    on-device indexing with zero CPU→GPU transfer per step.
     """
-    loaders: Dict[str, DataLoader] = {}
+    use_fast = int(num_workers) == 0 and dem_crop_config is None
+
+    loaders = {}
     for name, idx in split_indices.items():
         if len(idx) == 0:
             continue
-        ds = RainfallDataset(tensors, idx, target_scale=target_scale,
-                             dem_crop_config=dem_crop_config)
 
-        use_persistent = bool(persistent_workers) and int(num_workers) > 0
-        loaders[name] = DataLoader(
-            ds,
-            batch_size=batch_size,
-            shuffle=(name == "train"),
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            persistent_workers=use_persistent,
-            prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None),
-        )
+        if use_fast:
+            loaders[name] = InMemoryLoader(
+                tensors, idx,
+                batch_size=batch_size,
+                shuffle=(name == "train"),
+                target_scale=target_scale,
+                device=device,
+            )
+        else:
+            ds = RainfallDataset(tensors, idx, target_scale=target_scale,
+                                 dem_crop_config=dem_crop_config)
+            use_persistent = bool(persistent_workers) and int(num_workers) > 0
+            loaders[name] = DataLoader(
+                ds,
+                batch_size=batch_size,
+                shuffle=(name == "train"),
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                persistent_workers=use_persistent,
+                prefetch_factor=(prefetch_factor if int(num_workers) > 0 else None),
+            )
     return loaders
