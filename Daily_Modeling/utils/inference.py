@@ -104,6 +104,62 @@ def make_metric_fn(loss_type: str, output_head: str, target_scale: float,
 
 
 # ---------------------------------------------------------------------------
+# Wet/dry day evaluation helper
+# ---------------------------------------------------------------------------
+
+def run_wetdry_evaluation(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    out_dir: Path,
+    split_name: str,
+    threshold_mm: float = 1.0,
+) -> dict:
+    """Compute and save wet/dry day metrics + visualization for one split.
+
+    Saves:
+        ``<out_dir>/wetdry_metrics_<split_name>.json``
+        ``<out_dir>/wetdry_eval_<split_name>.png``
+
+    Args:
+        y_true: observed rainfall in mm.
+        y_pred: predicted (ensemble mean) rainfall in mm.
+        out_dir: directory to write outputs into.
+        split_name: label used in filenames and titles (e.g. 'test_temporal').
+        threshold_mm: wet-day threshold in mm (default 1.0).
+
+    Returns:
+        Metrics dict from ``compute_wetdry_metrics``.
+    """
+    from Daily_Modeling.utils.metrics import compute_wetdry_metrics
+    from Daily_Modeling.utils.visualization import plot_wetdry_evaluation
+    from Daily_Modeling.utils.io_utils import save_json
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    m = compute_wetdry_metrics(y_true, y_pred, threshold_mm=threshold_mm)
+    save_json(m, out_dir / f"wetdry_metrics_{split_name}.json")
+
+    n_wet = int(m.get("n_obs_wet", 0) or 0)
+    print(
+        f"  [{split_name}] wet/dry (thr={threshold_mm:.1f}mm):"
+        f"  n_wet={n_wet}  POD={m.get('pod', float('nan')):.3f}"
+        f"  FAR={m.get('far', float('nan')):.3f}  CSI={m.get('csi', float('nan')):.3f}"
+        f"  ETS={m.get('ets', float('nan')):.3f}  HSS={m.get('hss', float('nan')):.3f}"
+        f"  wet_RMSE={m.get('wet_rmse', float('nan')):.2f} mm"
+        f"  wet_R2={m.get('wet_r2', float('nan')):.4f}"
+    )
+
+    plot_wetdry_evaluation(
+        y_true, y_pred,
+        threshold_mm=threshold_mm,
+        title=f"Wet/Dry Evaluation — {split_name}",
+        save_path=out_dir / f"wetdry_eval_{split_name}.png",
+    )
+    return m
+
+
+# ---------------------------------------------------------------------------
 # Ensemble inference helpers
 # ---------------------------------------------------------------------------
 
@@ -163,6 +219,7 @@ def run_ensemble_inference_from_dir(
     out_dir=None,
     splits: str = "both",
     batch_size: int = 512,
+    wet_dry_threshold_mm: float = 1.0,
 ) -> dict:
     """Load all trained models from *run_dir* and evaluate on held-out test splits.
 
@@ -177,6 +234,9 @@ def run_ensemble_inference_from_dir(
         splits: Which test split(s) to evaluate — ``"temporal"``, ``"spatial"``,
             or ``"both"`` (default).
         batch_size: Batch size for inference dataloaders.
+        wet_dry_threshold_mm: Wet-day threshold in mm for wet/dry classification
+            metrics (POD, FAR, CSI, ETS, HSS) and conditional intensity metrics
+            (default: 1.0 mm, standard WMO/hydrology convention).
 
     Returns:
         dict mapping split name → metrics dict (keys: rmse, mae, r2, …).
@@ -341,12 +401,38 @@ def run_ensemble_inference_from_dir(
             )
             all_metrics["test_all"] = m_all
 
+    # --- Wet/dry day evaluation ---
+    print("\n--- Wet/dry day evaluation ---")
+    wetdry_all_metrics: dict = {}
+    for split_name, data in split_outputs.items():
+        wd = run_wetdry_evaluation(
+            data["y_true"],
+            data["y_pred_mean"],
+            out_dir=out_dir,
+            split_name=split_name,
+            threshold_mm=wet_dry_threshold_mm,
+        )
+        wetdry_all_metrics[split_name] = wd
+
+    if "test_all" in all_metrics and {"test_temporal", "test_spatial"}.issubset(split_outputs.keys()):
+        wd_all = run_wetdry_evaluation(
+            _concat_arrays([split_outputs["test_temporal"]["y_true"],
+                            split_outputs["test_spatial"]["y_true"]]),
+            _concat_arrays([split_outputs["test_temporal"]["y_pred_mean"],
+                            split_outputs["test_spatial"]["y_pred_mean"]]),
+            out_dir=out_dir,
+            split_name="test_all",
+            threshold_mm=wet_dry_threshold_mm,
+        )
+        wetdry_all_metrics["test_all"] = wd_all
+
     manifest = {
         "run_dir": str(run_dir),
         "n_models": int(len(ckpts)),
         "splits": splits,
         "output_head": output_head,
         "target_scale_mm": float(target_scale),
+        "wet_dry_threshold_mm": float(wet_dry_threshold_mm),
         "checkpoints": [str(p.relative_to(run_dir)) for p in ckpts],
     }
     save_json(manifest, out_dir / "inference_manifest.json")

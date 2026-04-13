@@ -45,6 +45,12 @@ def main():
         default=512,
         help="Batch size for inference dataloaders (default: 512)",
     )
+    parser.add_argument(
+        "--wet-dry-threshold",
+        type=float,
+        default=1.0,
+        help="Wet-day threshold in mm for wet/dry evaluation (default: 1.0)",
+    )
     args = parser.parse_args()
 
     run_ensemble_inference_from_dir(
@@ -52,6 +58,7 @@ def main():
         out_dir=Path(args.out_dir) if args.out_dir else None,
         splits=args.splits,
         batch_size=args.batch_size,
+        wet_dry_threshold_mm=args.wet_dry_threshold,
     )
 
 

@@ -1604,6 +1604,165 @@ def _plot_architecture_matplotlib(model: "torch.nn.Module", model_name: str):
     return fig
 
 
+def plot_wetdry_evaluation(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    threshold_mm: float = 1.0,
+    title: str = "Wet/Dry Day Evaluation",
+    save_path: Optional[Path] = None,
+) -> "plt.Figure":
+    """Four-panel wet/dry day evaluation figure.
+
+    Panels:
+        1. Confusion matrix (TP/FP/FN/TN counts and rates)
+        2. Scatter plot on observed wet days (y_true ≥ threshold)
+        3. KDE / histogram of wet-day amounts (observed vs predicted)
+        4. Bar chart of classification skill scores (POD, FAR, CSI, ETS, HSS)
+
+    Args:
+        y_true: observed rainfall in mm.
+        y_pred: predicted rainfall in mm.
+        threshold_mm: wet-day threshold in mm (default 1.0).
+        title: figure suptitle.
+        save_path: if provided, save and close the figure.
+
+    Returns:
+        matplotlib Figure.
+    """
+    yt = np.asarray(y_true, dtype=np.float64).ravel()
+    yp = np.asarray(y_pred, dtype=np.float64).ravel()
+    mask = np.isfinite(yt) & np.isfinite(yp)
+    yt, yp = yt[mask], yp[mask]
+
+    obs_wet = yt >= threshold_mm
+    pred_wet = yp >= threshold_mm
+
+    tp = int(np.sum(obs_wet & pred_wet))
+    fn = int(np.sum(obs_wet & ~pred_wet))
+    fp = int(np.sum(~obs_wet & pred_wet))
+    tn = int(np.sum(~obs_wet & ~pred_wet))
+    n = len(yt)
+
+    def _safe(num, denom):
+        return float(num / denom) if denom > 0 else float("nan")
+
+    pod = _safe(tp, tp + fn)
+    far = _safe(fp, tp + fp)
+    freq_bias = _safe(tp + fp, tp + fn)
+    csi = _safe(tp, tp + fp + fn)
+    tc = (tp + fp) * (tp + fn) / n if n > 0 else 0.0
+    ets_denom = tp + fp + fn - tc
+    ets = _safe(tp - tc, ets_denom)
+    hss_num = 2.0 * (tp * tn - fp * fn)
+    hss_denom = (tp + fn) * (fn + tn) + (tp + fp) * (fp + tn)
+    hss = _safe(hss_num, hss_denom)
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 11))
+    fig.suptitle(f"{title}\n(wet-day threshold = {threshold_mm:.1f} mm)", fontsize=13, fontweight="bold")
+
+    # --- Panel 1: Confusion matrix ---
+    ax_cm = axes[0, 0]
+    cm = np.array([[tp, fn], [fp, tn]], dtype=float)
+    labels = np.array([
+        [f"Hit\n{tp:,}", f"Miss\n{fn:,}"],
+        [f"False\nAlarm\n{fp:,}", f"Correct\nNeg\n{tn:,}"],
+    ])
+    im = ax_cm.imshow(cm, cmap="Blues", aspect="auto")
+    ax_cm.set_xticks([0, 1])
+    ax_cm.set_yticks([0, 1])
+    ax_cm.set_xticklabels(["Obs Wet", "Obs Dry"], fontsize=10)
+    ax_cm.set_yticklabels(["Pred Wet", "Pred Dry"], fontsize=10)
+    ax_cm.set_title("Contingency Table", fontsize=11)
+    for r in range(2):
+        for c in range(2):
+            ax_cm.text(c, r, labels[r, c], ha="center", va="center",
+                       fontsize=9, color="white" if cm[r, c] > cm.max() * 0.5 else "black")
+    fig.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
+
+    # --- Panel 2: Scatter on observed wet days ---
+    ax_sc = axes[0, 1]
+    wet_mask = obs_wet
+    if wet_mask.sum() >= 2:
+        yt_w, yp_w = yt[wet_mask], yp[wet_mask]
+        hi = max(float(yt_w.max()), float(yp_w.max())) * 1.05
+        ax_sc.scatter(yt_w, yp_w, s=4, alpha=0.25, color="steelblue", rasterized=True)
+        ax_sc.plot([0, hi], [0, hi], "k--", lw=1, label="1:1")
+        res = yp_w - yt_w
+        r2 = float(1.0 - np.sum(res ** 2) / np.sum((yt_w - yt_w.mean()) ** 2)) if yt_w.std() > 0 else float("nan")
+        ax_sc.set_title(
+            f"Wet-day scatter (n={int(wet_mask.sum()):,})\n"
+            f"MAE={float(np.mean(np.abs(res))):.2f} mm  R²={r2:.3f}",
+            fontsize=10,
+        )
+    else:
+        ax_sc.set_title("Wet-day scatter (insufficient data)")
+    ax_sc.set_xlabel("Observed (mm)", fontsize=9)
+    ax_sc.set_ylabel("Predicted (mm)", fontsize=9)
+    ax_sc.set_xlim(left=0)
+    ax_sc.set_ylim(bottom=0)
+    ax_sc.grid(alpha=0.3)
+
+    # --- Panel 3: KDE of wet-day amounts ---
+    ax_kd = axes[1, 0]
+    if wet_mask.sum() >= 5:
+        yt_w = yt[wet_mask]
+        # Predicted amounts on observed wet days
+        yp_w_obs = yp[wet_mask]
+        # All predicted wet-day amounts (for predicted wet days)
+        yp_w_pred = yp[pred_wet] if pred_wet.sum() >= 2 else np.array([])
+
+        q99 = float(np.nanpercentile(yt_w, 99))
+        bins = np.linspace(threshold_mm, q99, 40)
+        ax_kd.hist(yt_w, bins=bins, alpha=0.55, color="steelblue", density=True,
+                   label=f"Observed wet days (n={int(wet_mask.sum()):,})")
+        ax_kd.hist(yp_w_obs, bins=bins, alpha=0.55, color="coral", density=True,
+                   label=f"Predicted | obs wet (n={int(wet_mask.sum()):,})")
+        ax_kd.set_title(f"Wet-day amount distribution (≥{threshold_mm:.1f} mm)", fontsize=10)
+        ax_kd.legend(fontsize=8)
+    else:
+        ax_kd.set_title("Wet-day distribution (insufficient data)")
+    ax_kd.set_xlabel("Rainfall (mm)", fontsize=9)
+    ax_kd.set_ylabel("Density", fontsize=9)
+    ax_kd.grid(alpha=0.3)
+
+    # --- Panel 4: Skill score bar chart ---
+    ax_bar = axes[1, 1]
+    skill_scores = {
+        "POD": pod,
+        "1-FAR": (1.0 - far) if np.isfinite(far) else float("nan"),
+        "CSI": csi,
+        "ETS": ets,
+        "HSS": hss,
+    }
+    names = list(skill_scores.keys())
+    vals = [v if np.isfinite(v) else 0.0 for v in skill_scores.values()]
+    colours_bar = ["steelblue" if v >= 0 else "tomato" for v in vals]
+    bars = ax_bar.bar(names, vals, color=colours_bar, alpha=0.8, edgecolor="white")
+    ax_bar.axhline(1.0, color="k", lw=0.8, ls="--", alpha=0.5)
+    ax_bar.axhline(0.0, color="k", lw=0.5, alpha=0.4)
+    ax_bar.set_ylim(-0.1, 1.15)
+    ax_bar.set_title(
+        f"Classification skill scores\n"
+        f"Freq Bias={freq_bias:.3f}  n_total={n:,}",
+        fontsize=10,
+    )
+    ax_bar.set_ylabel("Score", fontsize=9)
+    ax_bar.grid(axis="y", alpha=0.3)
+    for bar, val in zip(bars, skill_scores.values()):
+        if np.isfinite(val):
+            ax_bar.text(
+                bar.get_x() + bar.get_width() / 2,
+                max(bar.get_height(), 0) + 0.02,
+                f"{val:.3f}",
+                ha="center", va="bottom", fontsize=8,
+            )
+
+    plt.tight_layout()
+    if save_path:
+        _save_and_close(fig, save_path)
+    return fig
+
+
 def plot_per_station_comparison(
     station_metrics: Dict[str, Dict[str, Dict[str, float]]],
     metric_name: str = "rmse",
