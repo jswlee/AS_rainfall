@@ -98,11 +98,11 @@ def objective(
     output_head = config.LOSS_TO_HEAD[args.loss_type]
 
     hp = {
-        "climate_units": trial.suggest_int("climate_units", num_cv * 140, num_cv * 250, step=num_cv),
+        "climate_units": trial.suggest_int("climate_units", num_cv * 16, num_cv * 64, step=num_cv),
         "dem_units": trial.suggest_int("dem_units", 16, 256, step=16),
         "dem_patch_size": trial.suggest_int("dem_patch_size", 3, 12),
-        "temporal_units": trial.suggest_int("temporal_units", 4, 64, step=4),
-        "na": trial.suggest_int("na", 16, 512, step=16),
+        "temporal_units": trial.suggest_int("temporal_units", 16, 64, step=16),
+        "na": trial.suggest_int("na", 16, 1024, step=16),
         "nb": trial.suggest_int("nb", 16, 128, step=16),
         "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
         "learning_rate": trial.suggest_float("learning_rate", 1e-7, 1e-2, log=True),
