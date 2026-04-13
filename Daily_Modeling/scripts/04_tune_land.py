@@ -242,7 +242,7 @@ def objective(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-trials", type=int, default=100)
+    parser.add_argument("--n-trials", type=int, default=200)
     parser.add_argument("--study-name", default=None,
                         help="Study name (default: land_daily_<loss_type>_<opt_metric>_<cv_folds><cv_mode>_<n_trials>)")
     parser.add_argument("--loss-type", default="bernoulli_gamma",
@@ -254,7 +254,7 @@ def main():
                         choices=["temporal", "spatial", "both"],
                         help="CV fold construction mode: temporal (held-out years), spatial (held-out stations), "
                              "both (mix of temporal and spatial folds)")
-    parser.add_argument("--opt-metric", default="mae",
+    parser.add_argument("--opt-metric", default="mse",
                         choices=["mae", "mse", "pctl_abs_rel_bias", "csi"],
                         help="Optuna objective metric (default: mae)")
     parser.add_argument("--extreme-percentile", type=float, default=98.0,
