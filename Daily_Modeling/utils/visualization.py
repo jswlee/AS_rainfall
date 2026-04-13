@@ -1662,10 +1662,10 @@ def plot_wetdry_evaluation(
 
     # --- Panel 1: Confusion matrix ---
     ax_cm = axes[0, 0]
-    cm = np.array([[tp, fn], [fp, tn]], dtype=float)
+    cm = np.array([[tp, fp], [fn, tn]], dtype=float)
     labels = np.array([
-        [f"Hit\n{tp:,}", f"Miss\n{fn:,}"],
-        [f"False\nAlarm\n{fp:,}", f"Correct\nNeg\n{tn:,}"],
+        [f"Hit\n{tp:,}", f"False\nAlarm\n{fp:,}"],
+        [f"Miss\n{fn:,}", f"Correct\nNeg\n{tn:,}"],
     ])
     im = ax_cm.imshow(cm, cmap="Blues", aspect="auto")
     ax_cm.set_xticks([0, 1])
