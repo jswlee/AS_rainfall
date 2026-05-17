@@ -153,7 +153,7 @@ def main():
     parser.add_argument(
         "input_path",
         type=Path,
-        help="Path to raw rainfall CSV file (e.g., raw_data/rainfall_raw/aasufou90_raw.csv)",
+        help="Path to raw rainfall CSV file (e.g., raw_data/AS/rainfall_raw/aasufou90_raw.csv)",
     )
     parser.add_argument(
         "--interval",
@@ -169,8 +169,8 @@ def main():
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("raw_data/rainfall_aggregated"),
-        help="Directory to write aggregated daily CSV files (default: raw_data/rainfall_aggregated)",
+        default=Path("raw_data/AS/rainfall_aggregated"),
+        help="Directory to write aggregated daily CSV files (default: raw_data/AS/rainfall_aggregated)",
     )
     args = parser.parse_args()
 

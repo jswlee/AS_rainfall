@@ -487,8 +487,8 @@ def main():
     parser.add_argument("--loss-types", nargs="+", default=_ALL_LOSS_TYPES,
                         choices=_ALL_LOSS_TYPES,
                         help="Which loss functions to tune (one study per loss)")
-    parser.add_argument("--tweedie-p", type=float, default=1.5,
-                        help="Tweedie power parameter p in (1, 2) (default: 1.5)")
+    parser.add_argument("--tweedie-p", type=float, default=1.7,
+                        help="Tweedie power parameter p in (1, 2) (default: 1.7)")
     parser.add_argument("--per-station-tuning", action="store_true",
                         help="Run a separate Optuna study per station (ignores --n-stations). "
                              "Saves per-station best HPs under <study>/per_station/<loss>/<station>/")

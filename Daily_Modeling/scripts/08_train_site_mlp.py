@@ -3,7 +3,7 @@ Step 8: Train site-specific MLPs (one per station) with best hyperparameters.
 
 Workflow:
   1. Pretrain a shared backbone on ALL stations' training data combined.
-  2. For each station, initialise from the pretrained backbone and fine-tune
+  2. For each station, initialise from the pretrained backbone and train
      with a reduced learning rate.
   3. Network size is adapted per station (smaller for stations with fewer samples).
   4. Loss is configurable: MSE, log-MSE, or Tweedie.
@@ -39,7 +39,7 @@ from Daily_Modeling.models.site_mlp import (
     SiteMLP, SiteGLU, build_model, compute_input_size, adaptive_hidden_sizes,
 )
 from Daily_Modeling.utils.io_utils import load_json, save_json, save_model, save_predictions
-from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
+from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics, baseline_mean_metrics
 from Daily_Modeling.utils.training import train_model
 from Daily_Modeling.models.losses import get_criterion
 from Daily_Modeling.utils.device import select_device
@@ -145,14 +145,16 @@ def main():
     parser.add_argument("--loss-type", default="mse",
                         choices=["mse", "log_mse", "tweedie"],
                         help="Loss function for training (default: mse, per paper)")
-    parser.add_argument("--tweedie-p", type=float, default=1.5,
-                        help="Tweedie power p in (1, 2) (default: 1.5)")
+    parser.add_argument("--tweedie-p", type=float, default=1.7,
+                        help="Tweedie power p in (1, 2) (default: 1.7)")
     parser.add_argument("--pretrain", action="store_true",
                         help="Enable shared pretraining phase (off by default, per paper)")
     parser.add_argument("--freeze-layers", type=int, default=0,
                         help="Number of backbone layers to freeze during fine-tuning (0=none)")
     parser.add_argument("--parallel", type=int, default=1,
                         help="Number of stations to train concurrently (1=sequential)")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="Skip stations whose model file already exists in the output directory")
 
     parser.add_argument("--num-workers", type=int, default=config.DATALOADER_NUM_WORKERS,
                         help=f"DataLoader num_workers (default: {config.DATALOADER_NUM_WORKERS}).")
@@ -238,31 +240,29 @@ def main():
         "num_month_features": int(tensors["temporal"].shape[1]),
     }
 
-    # Load global HP (used as fallback when per-station HPs are not found)
+    # Validate HP arguments based on usage
+    if args.pretrain and not args.hp_dir:
+        raise ValueError("--hp-dir is required when using --pretrain (shared backbone needs global HPs)")
+    if not args.hp_dir and not args.per_station_hp_dir:
+        raise ValueError("Must provide either --hp-dir or --per-station-hp-dir (or both)")
+
+    # Load global HP
+    hp: dict = {}
     if args.hp_dir:
         hp = json.loads((Path(args.hp_dir) / "best_hyperparameters.json").read_text())
-        # Prefer hidden_sizes list; fall back to legacy h1/h2/h3 keys
-        if "hidden_sizes" in hp:
-            hidden = list(hp["hidden_sizes"])
-        else:
-            hidden = [v for v in [hp.get("h1"), hp.get("h2"), hp.get("h3")] if v is not None] or [512, 512, 512]
-        dropout = hp.get("dropout", 0.3)
-        lr = hp.get("lr", 1e-4)
-        wd = hp.get("wd", 1e-5)
-        bs = hp.get("bs", 256)
-        loss_type = hp.get("loss_type", args.loss_type)
-        tweedie_p = hp.get("tweedie_p", args.tweedie_p)
-        arch_type = hp.get("arch_type", "mlp")
+
+    # Prefer hidden_sizes list; fall back to legacy h1/h2/h3 keys
+    if "hidden_sizes" in hp:
+        hidden = list(hp["hidden_sizes"])
     else:
-        hidden = config.MLP_DEFAULT_HP["hidden_sizes"]
-        dropout = config.MLP_DEFAULT_HP["dropout_rate"]
-        lr = config.MLP_DEFAULT_HP["learning_rate"]
-        wd = config.MLP_DEFAULT_HP["weight_decay"]
-        bs = config.MLP_DEFAULT_HP["batch_size"]
-        loss_type = args.loss_type
-        tweedie_p = args.tweedie_p
-        arch_type = "mlp"
-        hp = {}  # no HP file
+        hidden = [v for v in [hp.get("h1"), hp.get("h2"), hp.get("h3")] if v is not None] or [512, 512, 512]
+    dropout = hp.get("dropout", 0.3)
+    lr = hp.get("lr", 1e-4)
+    wd = hp.get("wd", 1e-5)
+    bs = hp.get("bs", 256)
+    loss_type = hp.get("loss_type", args.loss_type)
+    tweedie_p = hp.get("tweedie_p", args.tweedie_p)
+    arch_type = hp.get("arch_type", "mlp")
 
     per_station_hp_root = Path(args.per_station_hp_dir) if args.per_station_hp_dir else None
     if per_station_hp_root:
@@ -326,22 +326,27 @@ def main():
             )
             save_model(pretrained_backbone, out_dir / "pretrained_backbone.pth")
 
-    # --- Phase 2: Fine-tune per station ---
-    finetune_lr = lr * 0.1  # reduced LR for fine-tuning
-    print(f"\n=== Fine-tuning per station (LR={finetune_lr:.2e}) ===")
+    # --- Phase 2: Train per station ---
+    station_lr = lr  # use the configured learning rate for per-station training
+    print(f"\n=== Training per station (LR={station_lr:.2e}) ===")
 
     all_yt, all_yp, all_st = [], [], []
     station_results = {}
 
     def _train_station(station_name: str):
         """Train and evaluate a single station. Returns (name, metrics, yt, yp) or None."""
+        station_model_path = out_dir / f"model_{station_name}.pth"
+        if args.skip_existing and station_model_path.exists():
+            print(f"  [{station_name}] SKIP: model already exists at {station_model_path}")
+            return None
+
         sp = station_proportional_split(stations, years, meta["months"], meta["days"], station_name)
         n_train = len(sp["train"])
         if n_train < 50 or len(sp["val"]) < 10:
             print(f"  [{station_name}] SKIP: insufficient data (n_train={n_train}, n_val={len(sp['val'])})")
             return None
 
-        # Load per-station HPs if available, else fall back to global HPs
+        # Load HPs: use per-station if provided, else global (per-station-hp-dir requires all stations to have HPs)
         stn_hidden, stn_dropout, stn_lr, stn_wd, stn_bs = hidden, dropout, lr, wd, bs
         stn_loss_type, stn_tweedie_p = loss_type, tweedie_p
         stn_arch_type = arch_type
@@ -356,33 +361,34 @@ def main():
                     candidate = per_station_hp_root / "per_station" / lt / station_name / "best_hyperparameters.json"
                     if candidate.exists():
                         break
-            if candidate.exists():
-                stn_hp = json.loads(candidate.read_text())
-                # Prefer hidden_sizes list; fall back to legacy h1/h2/h3 keys
-                if "hidden_sizes" in stn_hp:
-                    stn_hidden = list(stn_hp["hidden_sizes"])
-                else:
-                    stn_hidden = [v for v in [stn_hp.get("h1"), stn_hp.get("h2"), stn_hp.get("h3")] if v is not None] or list(hidden)
-                stn_dropout = stn_hp.get("dropout", dropout)
-                stn_lr = stn_hp.get("lr", lr)
-                stn_wd = stn_hp.get("wd", wd)
-                stn_bs = stn_hp.get("bs", bs)
-                stn_loss_type = stn_hp.get("loss_type", loss_type)
-                stn_tweedie_p = stn_hp.get("tweedie_p", tweedie_p)
-                stn_arch_type = stn_hp.get("arch_type", arch_type)
-                stn_dem_crop_cfg = config.resolve_dem_crop(stn_hp)
-                if stn_dem_crop_cfg is not None:
-                    stn_dem_crop = stn_dem_crop_cfg
-                    ld = (stn_dem_crop["local_patch_size"], stn_dem_crop["local_patch_size"])
-                    rd = (stn_dem_crop["regional_patch_size"], stn_dem_crop["regional_patch_size"])
-                    stn_input_size = compute_input_size(
-                        climate_shape=metadata["climate_shape"],
-                        local_dem_shape=ld, regional_dem_shape=rd,
-                        num_month=metadata["num_month_features"],
-                    )
-                print(f"  [{station_name}] loaded per-station HPs from {candidate.parent}")
+            if not candidate.exists():
+                raise ValueError(f"Per-station HPs requested but not found for station '{station_name}' "
+                                 f"(tried loss types: mse, log_mse, tweedie). "
+                                 f"Expected file at: {per_station_hp_root}/per_station/<loss_type>/{station_name}/best_hyperparameters.json")
+            stn_hp = json.loads(candidate.read_text())
+            # Prefer hidden_sizes list; fall back to legacy h1/h2/h3 keys
+            if "hidden_sizes" in stn_hp:
+                stn_hidden = list(stn_hp["hidden_sizes"])
             else:
-                print(f"  [{station_name}] no per-station HPs found, using global HPs")
+                stn_hidden = [v for v in [stn_hp.get("h1"), stn_hp.get("h2"), stn_hp.get("h3")] if v is not None]
+            stn_dropout = stn_hp.get("dropout", dropout)
+            stn_lr = stn_hp.get("lr", lr)
+            stn_wd = stn_hp.get("wd", wd)
+            stn_bs = stn_hp.get("bs", bs)
+            stn_loss_type = stn_hp.get("loss_type", loss_type)
+            stn_tweedie_p = stn_hp.get("tweedie_p", tweedie_p)
+            stn_arch_type = stn_hp.get("arch_type", arch_type)
+            stn_dem_crop_cfg = config.resolve_dem_crop(stn_hp)
+            if stn_dem_crop_cfg is not None:
+                stn_dem_crop = stn_dem_crop_cfg
+                ld = (stn_dem_crop["local_patch_size"], stn_dem_crop["local_patch_size"])
+                rd = (stn_dem_crop["regional_patch_size"], stn_dem_crop["regional_patch_size"])
+                stn_input_size = compute_input_size(
+                    climate_shape=metadata["climate_shape"],
+                    local_dem_shape=ld, regional_dem_shape=rd,
+                    num_month=metadata["num_month_features"],
+                )
+            print(f"  [{station_name}] loaded per-station HPs from {candidate.parent}")
 
         # Adaptive sizing
         stn_hidden = adaptive_hidden_sizes(n_train, stn_hidden)
@@ -515,6 +521,13 @@ def main():
             except Exception as e:
                 print(f"  [{station_name}] WARNING: could not generate architecture diagram: {e}")
 
+        save_model(model, out_dir / f"model_{station_name}.pth")
+        save_predictions(yt_test_final, yp_test_final,
+                         np.array([station_name] * len(yt_test_final)),
+                         out_dir / f"predictions_{station_name}.npz")
+        plot_scatter(yt_test_final, yp_test_final,
+                     title=f"{station_name} (test)",
+                     save_path=out_dir / f"scatter_{station_name}.png")
         print(f"  {station_name}: RMSE={m['rmse']:.2f}  R2={m['r2']:.4f}  "
               f"n_test={len(yt_test_final)}  arch={stn_arch_type}{stn_hidden}  "
               f"cv_folds={len(fold_summaries)}  ensemble={int(args.ensemble)}")

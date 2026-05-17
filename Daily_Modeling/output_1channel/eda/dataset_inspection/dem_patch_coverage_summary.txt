@@ -1,0 +1,19 @@
+DEM patch land-coverage audit (cells with elevation > -1)
+
+Stations audited: 26
+Local valid fraction: mean=0.5499, median=0.5868, min=0.1818, max=0.7686
+Regional valid fraction: mean=0.2417, median=0.2592, min=0.0928, max=0.2960
+
+Worst 5 stations by local valid fraction:
+  aunuu_UH: local=22/121 (0.1818), regional=58/625 (0.0928), local_center_m=15.326, regional_center_m=15.326
+  aunuu: local=23/121 (0.1901), regional=59/625 (0.0944), local_center_m=15.546, regional_center_m=15.546
+  matatula: local=30/121 (0.2479), regional=71/625 (0.1136), local_center_m=25.250, regional_center_m=25.250
+  poloa_UH: local=35/121 (0.2893), regional=104/625 (0.1664), local_center_m=93.054, regional_center_m=93.054
+  fagaitua: local=49/121 (0.4050), regional=119/625 (0.1904), local_center_m=72.914, regional_center_m=72.914
+
+Worst 5 stations by regional valid fraction:
+  aunuu_UH: local=22/121 (0.1818), regional=58/625 (0.0928), local_center_m=15.326, regional_center_m=15.326
+  aunuu: local=23/121 (0.1901), regional=59/625 (0.0944), local_center_m=15.546, regional_center_m=15.546
+  matatula: local=30/121 (0.2479), regional=71/625 (0.1136), local_center_m=25.250, regional_center_m=25.250
+  poloa_UH: local=35/121 (0.2893), regional=104/625 (0.1664), local_center_m=93.054, regional_center_m=93.054
+  fagaitua: local=49/121 (0.4050), regional=119/625 (0.1904), local_center_m=72.914, regional_center_m=72.914

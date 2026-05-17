@@ -785,6 +785,9 @@ def plot_sample_dem_patches(
 ):
     """Visualise local and regional DEM patches for a handful of samples.
 
+    Supports both single-band (S, H, W) and multi-band (S, n_bands, H, W) arrays.
+    For multi-band arrays, each band gets its own pair of rows (local + regional).
+
     Picks *n_samples* evenly spaced across unique stations if *sample_indices*
     is not given.
     """
@@ -793,54 +796,78 @@ def plot_sample_dem_patches(
         pick_st = unique_st[np.linspace(0, len(unique_st) - 1, min(n_samples, len(unique_st)), dtype=int)]
         sample_indices = [int(np.where(stations == s)[0][0]) for s in pick_st]
 
-    n = len(sample_indices)
-    fig, axes = plt.subplots(2, n, figsize=(3.2 * n, 6), squeeze=False)
+    # Normalise to always be (S, n_bands, H, W)
+    if local_dem.ndim == 3:
+        local_dem = local_dem[:, np.newaxis]
+        regional_dem = regional_dem[:, np.newaxis]
+
+    n_bands = local_dem.shape[1]
+    band_names = ["Elevation (m)", "Slope (°)", "sin(Aspect)", "cos(Aspect)"]
+    band_cmaps = ["terrain", "YlOrRd", "RdBu", "RdBu"]
+    # Row layout: for each band, 2 rows (local on top, regional below)
+    n_row_groups = n_bands   # each group = 1 local row + 1 regional row
+    n_rows = n_row_groups * 2
+    n_cols = len(sample_indices)
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 3.0 * n_rows), squeeze=False)
+
     for col, idx in enumerate(sample_indices):
-        ld = local_dem[idx]
-        rd = regional_dem[idx]
         st = str(stations[idx])
+        for b in range(n_bands):
+            local_row = b * 2
+            reg_row = b * 2 + 1
+            bname = band_names[b] if b < len(band_names) else f"Band {b}"
+            cmap = band_cmaps[b] if b < len(band_cmaps) else "viridis"
 
-        ld_plot = np.where(ld <= -1, np.nan, ld)
-        rd_plot = np.where(rd <= -1, np.nan, rd)
+            ld_raw = local_dem[idx, b]
+            rd_raw = regional_dem[idx, b]
 
-        ld_valid = ld_plot[np.isfinite(ld_plot)]
-        rd_valid = rd_plot[np.isfinite(rd_plot)]
+            # Mask ocean sentinel (-1) only for elevation band; other bands use any finite value
+            if b == 0:
+                ld_plot = np.where(ld_raw <= -1, np.nan, ld_raw)
+                rd_plot = np.where(rd_raw <= -1, np.nan, rd_raw)
+            else:
+                ld_plot = np.where(ld_raw <= -1, np.nan, ld_raw)
+                rd_plot = np.where(rd_raw <= -1, np.nan, rd_raw)
 
-        if len(ld_valid) > 0:
-            ld_vmin, ld_vmax = np.nanpercentile(ld_valid, [2, 98])
-            if ld_vmin == ld_vmax:
-                ld_vmin -= 1.0
-                ld_vmax += 1.0
-        else:
-            ld_vmin, ld_vmax = 0.0, 1.0
+            def _vrange(arr):
+                valid = arr[np.isfinite(arr)]
+                if len(valid) == 0:
+                    return 0.0, 1.0
+                vmin, vmax = np.nanpercentile(valid, [2, 98])
+                if vmin == vmax:
+                    vmin -= 1.0; vmax += 1.0
+                return float(vmin), float(vmax)
 
-        if len(rd_valid) > 0:
-            rd_vmin, rd_vmax = np.nanpercentile(rd_valid, [2, 98])
-            if rd_vmin == rd_vmax:
-                rd_vmin -= 1.0
-                rd_vmax += 1.0
-        else:
-            rd_vmin, rd_vmax = 0.0, 1.0
+            ld_vmin, ld_vmax = _vrange(ld_plot)
+            rd_vmin, rd_vmax = _vrange(rd_plot)
 
-        im0 = axes[0, col].imshow(ld_plot, cmap="terrain", interpolation="nearest", vmin=ld_vmin, vmax=ld_vmax)
-        axes[0, col].set_title(
-            f"Local DEM\n{st} [#{idx}]\nvalid={len(ld_valid)}/{ld.size} ({100.0 * len(ld_valid) / ld.size:.1f}%)",
-            fontsize=8,
-        )
-        plt.colorbar(im0, ax=axes[0, col], fraction=0.046, pad=0.04)
+            ld_valid_n = int(np.isfinite(ld_plot).sum())
+            rd_valid_n = int(np.isfinite(rd_plot).sum())
 
-        im1 = axes[1, col].imshow(rd_plot, cmap="terrain", interpolation="nearest", vmin=rd_vmin, vmax=rd_vmax)
-        axes[1, col].set_title(
-            f"Regional DEM\n{st} [#{idx}]\nvalid={len(rd_valid)}/{rd.size} ({100.0 * len(rd_valid) / rd.size:.1f}%)",
-            fontsize=8,
-        )
-        plt.colorbar(im1, ax=axes[1, col], fraction=0.046, pad=0.04)
+            im0 = axes[local_row, col].imshow(ld_plot, cmap=cmap, interpolation="nearest",
+                                               vmin=ld_vmin, vmax=ld_vmax)
+            axes[local_row, col].set_title(
+                f"Local {bname}\n{st} [#{idx}]\n{ld_valid_n}/{ld_raw.size} valid",
+                fontsize=7,
+            )
+            plt.colorbar(im0, ax=axes[local_row, col], fraction=0.046, pad=0.04)
+
+            im1 = axes[reg_row, col].imshow(rd_plot, cmap=cmap, interpolation="nearest",
+                                             vmin=rd_vmin, vmax=rd_vmax)
+            axes[reg_row, col].set_title(
+                f"Regional {bname}\n{st} [#{idx}]\n{rd_valid_n}/{rd_raw.size} valid",
+                fontsize=7,
+            )
+            plt.colorbar(im1, ax=axes[reg_row, col], fraction=0.046, pad=0.04)
 
     for ax_row in axes:
         for ax in ax_row:
             ax.set_xticks([])
             ax.set_yticks([])
-    fig.suptitle("Sample DEM Patches (raw, metres)", fontsize=12)
+
+    band_label = f"{n_bands}-band (elev, slope, sin_asp, cos_asp)" if n_bands == 4 else f"{n_bands}-band"
+    fig.suptitle(f"Sample DEM Patches ({band_label})", fontsize=12)
     plt.tight_layout()
     if save_path:
         _save_and_close(fig, save_path)
@@ -1052,9 +1079,20 @@ def plot_per_station_dem_summary(
     rows = []
     for st in np.unique(stations):
         mask = stations == st
-        # Centre pixel of the 3x3 patch
-        ld_center = local_dem[mask, 1, 1] if local_dem.ndim == 3 else local_dem[mask].ravel()
-        rd_center = regional_dem[mask, 1, 1] if regional_dem.ndim == 3 else regional_dem[mask].ravel()
+        # Centre pixel of the elevation band
+        if local_dem.ndim == 4:   # (S, n_bands, H, W) — use band 0 (elevation)
+            H, W = local_dem.shape[2], local_dem.shape[3]
+            ld_center = local_dem[mask, 0, H // 2, W // 2]
+            H2, W2 = regional_dem.shape[2], regional_dem.shape[3]
+            rd_center = regional_dem[mask, 0, H2 // 2, W2 // 2]
+        elif local_dem.ndim == 3:  # (S, H, W)
+            H, W = local_dem.shape[1], local_dem.shape[2]
+            ld_center = local_dem[mask, H // 2, W // 2]
+            H2, W2 = regional_dem.shape[1], regional_dem.shape[2]
+            rd_center = regional_dem[mask, H2 // 2, W2 // 2]
+        else:
+            ld_center = local_dem[mask].ravel()
+            rd_center = regional_dem[mask].ravel()
         ld_val = float(np.nanmean(ld_center))
         rd_val = float(np.nanmean(rd_center))
         rows.append({"station": str(st), "local_dem_centre": ld_val, "regional_dem_centre": rd_val})
@@ -1424,7 +1462,9 @@ def plot_dem_on_map(
             lon = info.get("longitude", info.get("lon", None))
             if lat is None or lon is None:
                 continue
-            patch = dem_arr[idx]
+            patch_raw = dem_arr[idx]
+            # Use elevation band only for map overlay (band 0 for multi-band, or direct for single-band)
+            patch = patch_raw[0] if patch_raw.ndim == 3 else patch_raw
             h, w = patch.shape
             # Scale patch extent based on physical size.
             # Approximate degrees per km (sufficient for small extents around American Samoa).

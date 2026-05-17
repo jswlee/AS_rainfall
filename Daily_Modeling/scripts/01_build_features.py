@@ -44,8 +44,8 @@ def main(start_date: str = "1980-01-01", end_date: str = "2024-12-31"):
         local_cfg=config.DEM_MAX_LOCAL,
         regional_cfg=config.DEM_MAX_REGIONAL,
     )
-    local_arr = np.stack([dem[s]["local"] for s in sorted(dem)], axis=0).astype(np.float32)
-    regional_arr = np.stack([dem[s]["regional"] for s in sorted(dem)], axis=0).astype(np.float32)
+    local_arr = np.stack([dem[s]["local"] for s in sorted(dem)], axis=0).astype(np.float32)    # (S, n_bands, H, W)
+    regional_arr = np.stack([dem[s]["regional"] for s in sorted(dem)], axis=0).astype(np.float32)  # (S, n_bands, H, W)
     dem_stations = np.array(sorted(dem.keys()), dtype=object)
     dem_path = output_dir / "dem_patches.npz"
     np.savez_compressed(

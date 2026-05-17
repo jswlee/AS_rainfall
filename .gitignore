@@ -15,3 +15,4 @@ other_LAND_files/
 *.pth
 *.npz
 ideas.txt
+*output/

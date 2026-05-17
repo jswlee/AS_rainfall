@@ -12,12 +12,40 @@ _THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = _THIS_DIR.parent
 
 # ---------------------------------------------------------------------------
+# Region selection
+# ---------------------------------------------------------------------------
+# Set to "AS" (American Samoa only - default), "HI" (Hawai'i only), or
+# "AGGREGATE" (combined AS + HI; requires running aggregate/scripts/*.py).
+# Can be overridden via the AS_RAINFALL_REGION environment variable.
+import os as _os
+REGION = _os.environ.get("AS_RAINFALL_REGION", "AS").upper()
+
+# ---------------------------------------------------------------------------
 # Raw data paths
 # ---------------------------------------------------------------------------
-STATION_METADATA_PATH = REPO_ROOT / "raw_data" / "station_locations.csv"
-DEM_PATH = REPO_ROOT / "raw_data" / "DEM" / "DEM_Tut1.tif"
-REANALYSIS_DIR = REPO_ROOT / "raw_data" / "climate_variables_daily_1980-2024_updated"
-DAILY_RAINFALL_DIR = REPO_ROOT / "raw_data" / "rainfall_corrected_NEW"
+_AS_DIR = REPO_ROOT / "raw_data" / "AS"
+_HI_DIR = REPO_ROOT / "raw_data" / "HI"
+_AGG_DIR = REPO_ROOT / "raw_data" / "aggregate"
+
+if REGION == "AGGREGATE":
+    STATION_METADATA_PATH = _AGG_DIR / "station_locations.csv"
+    REANALYSIS_DIR = _AGG_DIR / "reanalysis_data"
+    DAILY_RAINFALL_DIR = _AGG_DIR / "final_rainfall_per_station"
+    # DEM is region-specific; the user is still preparing a HI DEM. For now
+    # default to the AS DEM so other pipelines remain runnable. Downstream
+    # code that builds DEM patches per station should branch on the station's
+    # region once a HI DEM is available.
+    DEM_PATH = _AS_DIR / "DEM" / "DEM_Tut1.tif"
+elif REGION == "HI":
+    STATION_METADATA_PATH = _HI_DIR / "station_locations.csv"
+    REANALYSIS_DIR = _HI_DIR / "hawaii_climate_variables_daily_1980-2024"
+    DAILY_RAINFALL_DIR = _HI_DIR / "final_rainfall_per_station"
+    DEM_PATH = _HI_DIR / "DEM"  # placeholder - user is preparing this
+else:  # "AS" (default)
+    STATION_METADATA_PATH = _AS_DIR / "station_locations.csv"
+    DEM_PATH = _AS_DIR / "DEM" / "10m_tutuila_3band.tif"
+    REANALYSIS_DIR = _AS_DIR / "climate_variables_daily_1980-2024"
+    DAILY_RAINFALL_DIR = _AS_DIR / "final_rainfall_per_station"
 
 # ---------------------------------------------------------------------------
 # Output paths (all under Daily_Modeling/output/)
@@ -35,6 +63,8 @@ for _d in (OUTPUT_DIR, FEATURES_DIR, ASSEMBLED_DIR, EDA_DIR, TUNING_DIR, RESULTS
 # ---------------------------------------------------------------------------
 # DEM patch configuration  (same as existing pipeline)
 # ---------------------------------------------------------------------------
+# Number of DEM channels: 1 = elevation only, 4 = elevation + slope + sin(aspect) + cos(aspect)
+DEM_N_CHANNELS = 4
 # Default DEM patch config (used when NOT tuning patch size)
 DEM_PATCH_CONFIG = {
     "local": {"patch_size": 3, "km_per_cell": 2},      # 3x3 @ 2 km -> 6 km
@@ -114,9 +144,7 @@ VARIABLE_MAPPING = {
 }
 
 # ---------------------------------------------------------------------------
-# Daily reanalysis variable configs (13 derived channels).
-# Dropped hgt_1000 (r=1.00 with slp - perfectly redundant) and
-# pottmp_diff_1000_500 (r=0.99 with air_temp_diff_1000_500 - near-perfectly redundant).
+# Daily reanalysis variable configs (16 derived channels).
 # ---------------------------------------------------------------------------
 DAILY_VARIABLE_CONFIGS = {
     "air_temp_diff_1000_500": {
@@ -249,19 +277,10 @@ LAND_DEFAULT_HP = {
     "use_batch_norm": False,
 }
 
-MLP_DEFAULT_HP = {
-    "hidden_sizes": [512, 512, 512],
-    "dropout_rate": 0.3,
-    "learning_rate": 1e-4,
-    "weight_decay": 1e-5,
-    "batch_size": 256,
-    "loss_type": "mse",  # one of: mse, log_mse, tweedie
-}
-
-DATALOADER_NUM_WORKERS = 4
-DATALOADER_PIN_MEMORY = True
-DATALOADER_PERSISTENT_WORKERS = True
-DATALOADER_PREFETCH_FACTOR = 4
+DATALOADER_NUM_WORKERS = 0
+DATALOADER_PIN_MEMORY = False
+DATALOADER_PERSISTENT_WORKERS = False
+DATALOADER_PREFETCH_FACTOR = 2
 
 MAX_EPOCHS = 1000
 PATIENCE = 100

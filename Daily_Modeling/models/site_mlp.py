@@ -201,7 +201,7 @@ def create_site_mlp(metadata: dict, hyperparams: Optional[dict] = None,
     from Daily_Modeling.config import MLP_DEFAULT_HP
     hp = {**MLP_DEFAULT_HP, **(hyperparams or {})}
     input_size = compute_input_size(
-        metadata.get("climate_shape", (15, 3, 3)),
+        metadata.get("climate_shape", (16, 3, 3)),
         metadata.get("local_dem_shape", (3, 3)),
         metadata.get("regional_dem_shape", (3, 3)),
         metadata.get("num_month_features", 12),

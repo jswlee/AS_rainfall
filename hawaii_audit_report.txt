@@ -1,0 +1,147 @@
+================================================================================
+NETCDF AUDIT REPORT
+================================================================================
+Total files analyzed: 11
+Files with errors: 0
+
+FILE OVERVIEW
+----------------------------------------
+hawaii.air.2m.day.mean.nc ✅ OK       106.3 MB
+hawaii.air.day.mean.nc    ✅ OK       230.7 MB
+hawaii.hgt.day.mean.nc    ✅ OK       216.6 MB
+hawaii.omega.day.mean.nc  ✅ OK       173.7 MB
+hawaii.pottmp.day.mean.nc ✅ OK       1249.5 MB
+hawaii.pr_wtr.eatm.day.mean.nc ✅ OK       138.7 MB
+hawaii.shum.day.mean.nc   ✅ OK       316.3 MB
+hawaii.skt.day.mean.nc    ✅ OK       114.7 MB
+hawaii.slp.day.mean.nc    ✅ OK       101.5 MB
+hawaii.uwnd.day.mean.nc   ✅ OK       281.4 MB
+hawaii.vwnd.day.mean.nc   ✅ OK       73.5 MB
+
+TIME COVERAGE ANALYSIS
+----------------------------------------
+Expected date range: 1980-01-01 00:00:00 to 2024-12-31 00:00:00
+
+hawaii.air.2m.day.mean.nc
+  Time steps: 16,438 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.air.day.mean.nc   
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.hgt.day.mean.nc   
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.omega.day.mean.nc 
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.pottmp.day.mean.nc
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.pr_wtr.eatm.day.mean.nc
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.shum.day.mean.nc  
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.skt.day.mean.nc   
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.slp.day.mean.nc   
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.uwnd.day.mean.nc  
+  Time steps: 16,437 / 16,437
+  Date range: 1970-01-01 00:00:00 to 1970-01-01 00:00:00.000016436
+  Missing: 16,437 days (100.0%)
+
+hawaii.vwnd.day.mean.nc  
+  Time steps: 16,437 / 16,437
+  Date range: 1677-09-21 00:12:43.145224194 to 1677-09-21 00:12:43.145224194
+  Missing: 16,437 days (100.0%)
+
+VARIABLE COMPARISON
+----------------------------------------
+Total unique variables found: 11
+
+msl                       in 1 files:
+  - hawaii.slp.day.mean.nc
+
+pt                        in 1 files:
+  - hawaii.pottmp.day.mean.nc
+
+q                         in 1 files:
+  - hawaii.shum.day.mean.nc
+
+skt                       in 1 files:
+  - hawaii.skt.day.mean.nc
+
+t                         in 1 files:
+  - hawaii.air.day.mean.nc
+
+t2m                       in 1 files:
+  - hawaii.air.2m.day.mean.nc
+
+tcwv                      in 1 files:
+  - hawaii.pr_wtr.eatm.day.mean.nc
+
+u                         in 1 files:
+  - hawaii.uwnd.day.mean.nc
+
+v                         in 1 files:
+  - hawaii.vwnd.day.mean.nc
+
+w                         in 1 files:
+  - hawaii.omega.day.mean.nc
+
+z                         in 1 files:
+  - hawaii.hgt.day.mean.nc
+
+PRESSURE LEVEL ANALYSIS
+----------------------------------------
+Levels [1000.0, 500.0] found in 2 files:
+  - hawaii.air.day.mean.nc
+  - hawaii.hgt.day.mean.nc
+
+Levels [500.0] found in 1 files:
+  - hawaii.omega.day.mean.nc
+
+Levels [1000.0, 850.0, 500.0] found in 1 files:
+  - hawaii.pottmp.day.mean.nc
+
+Levels [925.0, 750.0] found in 3 files:
+  - hawaii.shum.day.mean.nc
+  - hawaii.uwnd.day.mean.nc
+  - hawaii.vwnd.day.mean.nc
+
+DATA QUALITY ISSUES
+----------------------------------------
+hawaii.vwnd.day.mean.nc:
+  ⚠️  v level 925.0: 100.0% NaN
+  ⚠️  v level 750.0: 100.0% NaN
+
+RECOMMENDATIONS
+----------------------------------------
+⚠️  INCONSISTENT TIME COVERAGE DETECTED:
+   Files have different numbers of time steps
+   This will cause NaN values in derived variables
+   Recommendation: Use the dataset with complete coverage
+
+Audit complete.

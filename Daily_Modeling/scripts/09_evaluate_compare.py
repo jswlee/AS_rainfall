@@ -20,7 +20,7 @@ import pandas as pd
 from Daily_Modeling import config
 from Daily_Modeling.data_utils.splits import (
     assign_station_groups, compute_station_year_ranges, compute_year_boundaries,
-    spatiotemporal_split,
+    spatiotemporal_split, station_proportional_split,
 )
 from Daily_Modeling.utils.io_utils import save_json
 from Daily_Modeling.utils.metrics import (
@@ -33,18 +33,32 @@ from Daily_Modeling.utils.visualization import (
 
 def _load_predictions(run_dir: Path):
     """Load predictions NPZ from a run directory (tries several filenames)."""
+    def _extract(z):
+        y_true = z["y_true"]
+        y_pred = z["y_pred"] if "y_pred" in z else z["y_pred_mean"]
+        stations = z.get("stations", np.array([]))
+        return y_true, y_pred, stations
+
+    # Try direct paths first
     for name in ("predictions_test_spatial.npz", "predictions_test.npz", "predictions.npz"):
         p = run_dir / name
         if p.exists():
             z = np.load(str(p), allow_pickle=True)
-            return z["y_true"], z["y_pred"], z.get("stations", np.array([]))
+            return _extract(z)
+
+    # Try inference subdirectory (LAND model structure)
+    for name in ("predictions_test_spatial.npz", "predictions_test.npz", "predictions.npz"):
+        p = run_dir / "inference" / name
+        if p.exists():
+            z = np.load(str(p), allow_pickle=True)
+            return _extract(z)
+    
     return None, None, None
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--land-dir", default=str(config.RESULTS_DIR / "land_final"))
-    parser.add_argument("--glm-dir", default=str(config.RESULTS_DIR / "bernoulli_gamma_final"))
     parser.add_argument("--mlp-dir", default=str(config.RESULTS_DIR / "site_mlp_final"))
     parser.add_argument("--out-dir", default=str(config.RESULTS_DIR / "comparison"))
     args = parser.parse_args()
@@ -54,7 +68,6 @@ def main():
 
     model_dirs = {
         "LAND": Path(args.land_dir),
-        "Bernoulli-Gamma": Path(args.glm_dir),
         "Site MLP": Path(args.mlp_dir),
     }
 
@@ -130,37 +143,80 @@ def main():
     # ---- Seasonal breakdown (if we have month info) ----
     # Try to load months from the assembled dataset
     try:
-        npz_path = config.ASSEMBLED_DIR / "daily_dataset.npz"
+        # Accept either naming convention
+        for _cand in ("daily_dataset.npz", "daily_dataset_station_centered.npz"):
+            npz_path = config.ASSEMBLED_DIR / _cand
+            if npz_path.exists():
+                break
         z = np.load(str(npz_path), allow_pickle=True)
         all_months = z["months"]
         all_stations = z["stations"]
+        all_years = z["years"]
 
+        unique = sorted(set(str(s) for s in all_stations))
+        train_yr, val_yr, test_yr = compute_year_boundaries(all_years)
+        yr_ranges = compute_station_year_ranges(all_stations, all_years)
+        groups = assign_station_groups(unique, station_year_ranges=yr_ranges,
+                                       val_years=val_yr, test_years=test_yr)
+        splits = spatiotemporal_split(all_stations, all_years, groups,
+                                      train_years=train_yr, val_years=val_yr, test_years=test_yr)
+
+        SEASONS = [("Dry (May-Oct)", {5, 6, 7, 8, 9, 10}), ("Wet (Nov-Apr)", {1, 2, 3, 4, 11, 12})]
+        all_seasonal_rows = []
+
+        # LAND: spatially held-out test set
         if "LAND" in all_data:
-            unique = sorted(set(str(s) for s in all_stations))
-            train_yr, val_yr, test_yr = compute_year_boundaries(z["years"])
-            yr_ranges = compute_station_year_ranges(all_stations, z["years"])
-            groups = assign_station_groups(unique, station_year_ranges=yr_ranges,
-                                           val_years=val_yr, test_years=test_yr)
-            splits = spatiotemporal_split(all_stations, z["years"], groups,
-                                          train_years=train_yr, val_years=val_yr, test_years=test_yr)
             test_key = "test_spatial" if "test_spatial" in splits else "test"
             test_months = all_months[splits[test_key]]
-
             yt = all_data["LAND"]["y_true"]
             yp = all_data["LAND"]["y_pred"]
             if len(test_months) == len(yt):
-                seasonal_rows = []
-                for season_name, month_set in [("Dry", {5,6,7,8,9,10}), ("Wet", {1,2,3,4,11,12})]:
+                for season_name, month_set in SEASONS:
                     mask = np.isin(test_months, list(month_set))
                     if mask.sum() > 0:
                         m = compute_metrics(yt[mask], yp[mask])
                         m["season"] = season_name
                         m["model"] = "LAND"
-                        seasonal_rows.append(m)
-                if seasonal_rows:
-                    sdf = pd.DataFrame(seasonal_rows)
-                    sdf.to_csv(out / "seasonal_land.csv", index=False)
-                    print(f"\nSeasonal LAND metrics:\n{sdf.round(4).to_string(index=False)}")
+                        m["n"] = int(mask.sum())
+                        all_seasonal_rows.append(m)
+
+        # Site MLP: per-station chronological test sets; months come from the
+        # per-station split predictions (saved with station labels).  We rebuild
+        # month assignments from the full dataset index.
+        if "Site MLP" in all_data:
+            mlp_st = all_data["Site MLP"]["stations"]
+            mlp_yt = all_data["Site MLP"]["y_true"]
+            mlp_yp = all_data["Site MLP"]["y_pred"]
+
+            # Build a month array aligned to the Site MLP predictions
+            mlp_months = np.zeros(len(mlp_yt), dtype=int)
+            cursor = 0
+            for stn in unique:
+                sp = station_proportional_split(all_stations, all_years,
+                                                all_months, z.get("days", np.ones_like(all_months)),
+                                                stn)
+                n_test = len(sp.get("test", []))
+                if n_test == 0:
+                    continue
+                mlp_months[cursor:cursor + n_test] = all_months[sp["test"]]
+                cursor += n_test
+
+            if cursor > 0:
+                for season_name, month_set in SEASONS:
+                    mask = np.isin(mlp_months[:cursor], list(month_set))
+                    if mask.sum() > 0:
+                        m = compute_metrics(mlp_yt[mask], mlp_yp[mask])
+                        m["season"] = season_name
+                        m["model"] = "Site MLP"
+                        m["n"] = int(mask.sum())
+                        all_seasonal_rows.append(m)
+
+        if all_seasonal_rows:
+            sdf = pd.DataFrame(all_seasonal_rows)
+            cols = ["model", "season", "n", "rmse", "mae", "r2", "spearman_r"]
+            cols = [c for c in cols if c in sdf.columns]
+            sdf.to_csv(out / "seasonal_metrics.csv", index=False)
+            print(f"\nSeasonal metrics:\n{sdf[cols].round(4).to_string(index=False)}")
     except Exception as e:
         print(f"Seasonal breakdown skipped: {e}")
 

@@ -1,0 +1,1955 @@
+[
+    {
+        "standard_name": "Albedo_1_Avg",
+        "display_name": "Albedo",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "BattAhIn",
+        "display_name": "Battery power input",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "BattAhOut",
+        "display_name": "Battery power output",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "BattCapacity",
+        "display_name": "Battery capacity",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "BattStateOfCharge",
+        "display_name": "Battery charge percentage",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "BattStateOfHealth",
+        "display_name": "Battery health",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "BattTemp",
+        "display_name": "Battery temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "BattVolt",
+        "display_name": "Battery voltage",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "BattVolt_Max",
+        "display_name": "Battery voltage, maximum",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "BattVolt_Min",
+        "display_name": "Battery voltage, minimum",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "BattVolt_TMn",
+        "display_name": "Battery voltage, time of minimum",
+        "units": "time",
+        "units_plain": "time",
+        "units_expanded": "timestamp"
+    },
+    {
+        "standard_name": "BattVolt_TMx",
+        "display_name": "Battery voltage, time of maximum",
+        "units": "time",
+        "units_plain": "time",
+        "units_expanded": "timestamp"
+    },
+    {
+        "standard_name": "CellHrlyAllowedUpTime",
+        "display_name": "Cellular modem, time allowed to stay ON per hour",
+        "units": "sec",
+        "units_plain": "sec",
+        "units_expanded": "second"
+    },
+    {
+        "standard_name": "CellHrlyUpTime",
+        "display_name": "Cellular modem, time stayed ON per hour",
+        "units": "sec",
+        "units_plain": "sec",
+        "units_expanded": "second"
+    },
+    {
+        "standard_name": "CellIMSI",
+        "display_name": "Cellular IMSI (International Mobile Subscriber Identity)",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "CellLastRegTime",
+        "display_name": "Cellular modem, time spent until connected to the cellular network",
+        "units": "sec",
+        "units_plain": "sec",
+        "units_expanded": "second"
+    },
+    {
+        "standard_name": "CellLastUpTime",
+        "display_name": "Cellular modem, time spent while connected to the cellular network",
+        "units": "sec",
+        "units_plain": "sec",
+        "units_expanded": "second"
+    },
+    {
+        "standard_name": "CellOperator",
+        "display_name": "Cellular provider",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "CellQlt",
+        "display_name": "Cellular signal quality",
+        "units": "dBm",
+        "units_plain": "dBm",
+        "units_expanded": "decibel-milliwatt"
+    },
+    {
+        "standard_name": "CellStr",
+        "display_name": "Cellular signal strength",
+        "units": "dBm",
+        "units_plain": "dBm",
+        "units_expanded": "decibel-milliwatt"
+    },
+    {
+        "standard_name": "CellUsage5min",
+        "display_name": "Cellular data usage, 5-minute",
+        "units": "KB",
+        "units_plain": "KB",
+        "units_expanded": "kilobyte"
+    },
+    {
+        "standard_name": "CellUsageDay",
+        "display_name": "Cellular data usage, daily",
+        "units": "KB",
+        "units_plain": "KB",
+        "units_expanded": "kilobyte"
+    },
+    {
+        "standard_name": "CellUsageMonth",
+        "display_name": "Cellular data usage, monthly cumulative",
+        "units": "KB",
+        "units_plain": "KB",
+        "units_expanded": "kilobyte"
+    },
+    {
+        "standard_name": "CH201_DayBattAhIn",
+        "display_name": "Battery power input, charger, daily total",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "CH201_DayBattAhOut",
+        "display_name": "Battery power output, charger, daily total",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "CH201_DayLoadAh",
+        "display_name": "Load power use, daily total",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "CH201_DaySysAh",
+        "display_name": "Whole system power use, daily total",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "CH201_VBatt_Max",
+        "display_name": "Battery voltage, charger, maximum",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "CH201_VBatt_Min",
+        "display_name": "Battery voltage, charger, minimum",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "CheckBatt",
+        "display_name": "Battery error code",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "ChgSource",
+        "display_name": "Battery charging source code",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "ChgState",
+        "display_name": "Battery charging state code",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "ChgTmp",
+        "display_name": "Charger temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "CPUTemp",
+        "display_name": "Logger CPU temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "CV_levelNS",
+        "display_name": "Sensor level in NS direction, ClimaVUE",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "CV_levelWE",
+        "display_name": "Sensor level in WE direction, ClimaVUE",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "DCin_1",
+        "display_name": "Charger input voltage, source 1",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "DCin_2",
+        "display_name": "Charger input voltage, source 2",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "DutyCycle_Avg",
+        "display_name": "Sensor heater duty cycle, Rnet",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "DutyCycle_Max",
+        "display_name": "Sensor heater duty cycle, Rnet, maximum",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "DutyCycle_Min",
+        "display_name": "Sensor heater duty cycle, Rnet, minimum",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "EC_1_Avg",
+        "display_name": "Soil electrical conductivity",
+        "units": "dS/m",
+        "units_plain": "dS/m",
+        "units_expanded": "decisiemens per meter"
+    },
+    {
+        "standard_name": "EC_1_Max",
+        "display_name": "Soil electrical conductivity, maximum",
+        "units": "dS/m",
+        "units_plain": "dS/m",
+        "units_expanded": "decisiemens per meter"
+    },
+    {
+        "standard_name": "EC_1_Min",
+        "display_name": "Soil electrical conductivity, minimum",
+        "units": "dS/m",
+        "units_plain": "dS/m",
+        "units_expanded": "decisiemens per meter"
+    },
+    {
+        "standard_name": "EC_2_Avg",
+        "display_name": "Soil electrical conductivity, sensor 2",
+        "units": "dS/m",
+        "units_plain": "dS/m",
+        "units_expanded": "decisiemens per meter"
+    },
+    {
+        "standard_name": "EC_3_Avg",
+        "display_name": "Soil electrical conductivity, sensor 3",
+        "units": "dS/m",
+        "units_plain": "dS/m",
+        "units_expanded": "decisiemens per meter"
+    },
+    {
+        "standard_name": "Fault_Compass",
+        "display_name": "Sensor status, fault compass",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_Dewpoint",
+        "display_name": "Sensor status, fault dew point",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_GPS",
+        "display_name": "Sensor status, fault GPS",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_Humidity",
+        "display_name": "Sensor status, fault relative humidity",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_NAN",
+        "display_name": "Sensor status, fault NAN",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_Pressure",
+        "display_name": "Sensor status, fault pressure",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_Temperature",
+        "display_name": "Sensor status, fault air temperature",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_Undefined",
+        "display_name": "Sensor status, fault undefined",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Fault_Wind",
+        "display_name": "Sensor status, fault wind",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "FC_1_Tot300s",
+        "display_name": "Fog collection, 5-minute total",
+        "units": "ml",
+        "units_plain": "ml",
+        "units_expanded": "milliliter"
+    },
+    {
+        "standard_name": "FM_1_Avg",
+        "display_name": "Fuel moisture",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "FM_sensor",
+        "display_name": "Sensor switch, FM",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "FOGtip_1_Tot300s",
+        "display_name": "Fog gauge tips, 5-minute total",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "FOGtip_1_Tot3600s",
+        "display_name": "Fog gauge tips, 60-minute total",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "FOGtip_1_Tot900s",
+        "display_name": "Fog gauge tips, 15-minute total",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "FT_1_Avg",
+        "display_name": "Fuel temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "FT_sensor",
+        "display_name": "Sensor switch, FT",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "GNSSNumSat",
+        "display_name": "Number of global navigation satellite system satellites in view",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "Good_Sample",
+        "display_name": "Sensor status, good sample",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "IBatt",
+        "display_name": "Battery current",
+        "units": "A",
+        "units_plain": "A",
+        "units_expanded": "ampere"
+    },
+    {
+        "standard_name": "ILoad",
+        "display_name": "Load current",
+        "units": "A",
+        "units_plain": "A",
+        "units_expanded": "ampere"
+    },
+    {
+        "standard_name": "Ka_1_Avg",
+        "display_name": "Soil relative dielectric permittivity",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "Ka_1_Max",
+        "display_name": "Soil relative dielectric permittivity, maximum",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "Ka_1_Min",
+        "display_name": "Soil relative dielectric permittivity, minimum",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "Ka_2_Avg",
+        "display_name": "Soil relative dielectric permittivity, sensor 2",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "Ka_3_Avg",
+        "display_name": "Soil relative dielectric permittivity, sensor 3",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "LGR_LiBattV",
+        "display_name": "Logger internal battery voltage",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "LGR_PakBus",
+        "display_name": "Logger PakBus address",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "LGR_StName",
+        "display_name": "Station name",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "Lightning_1_Tot300s",
+        "display_name": "Lightning strikes count",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "LightningDist_km_1_Avg",
+        "display_name": "Lightning strikes distance",
+        "units": "km",
+        "units_plain": "km",
+        "units_expanded": "kilometer"
+    },
+    {
+        "standard_name": "LoadAh",
+        "display_name": "Load power use",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "LWin_1_Avg",
+        "display_name": "Incoming longwave radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWin_1_Max",
+        "display_name": "Incoming longwave radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWin_1_Min",
+        "display_name": "Incoming longwave radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWin_1_sens",
+        "display_name": "Sensor calibration coefficient, LWin",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "LWinUC_1_Avg",
+        "display_name": "Incoming longwave radiation, uncorrected",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWnet_1_Avg",
+        "display_name": "Net longwave radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWnet_1_Max",
+        "display_name": "Net longwave radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWnet_1_Min",
+        "display_name": "Net longwave radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWout_1_Avg",
+        "display_name": "Outgoing longwave radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWout_1_Max",
+        "display_name": "Outgoing longwave radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWout_1_Min",
+        "display_name": "Outgoing longwave radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWout_1_sens",
+        "display_name": "Sensor calibration coefficient, LWin",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "LWoutUC_1_Avg",
+        "display_name": "Outgoing longwave radiation, uncorrected",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "LWS_mv_1_Avg",
+        "display_name": "Leaf wetness sensor reading",
+        "units": "mV",
+        "units_plain": "mV",
+        "units_expanded": "millivolt"
+    },
+    {
+        "standard_name": "LWS_mv_2_Avg",
+        "display_name": "Leaf wetness sensor reading, sensor 2",
+        "units": "mV",
+        "units_plain": "mV",
+        "units_expanded": "millivolt"
+    },
+    {
+        "standard_name": "LWS_mv_3_Avg",
+        "display_name": "Leaf wetness sensor reading, sensor 3",
+        "units": "mV",
+        "units_plain": "mV",
+        "units_expanded": "millivolt"
+    },
+    {
+        "standard_name": "NO_SHF",
+        "display_name": "Number of sensors, SHF",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "NO_Tsoil",
+        "display_name": "Number of sensors, Tsoil",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "Nscans",
+        "display_name": "Number of scans",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "NUM_REC_CRD",
+        "display_name": "Number of records stored on card",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "NUM_REC_LGR",
+        "display_name": "Number of records stored in logger",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "OUTPUT_INTERVAL",
+        "display_name": "Data output interval",
+        "units": "min",
+        "units_plain": "min",
+        "units_expanded": "minute"
+    },
+    {
+        "standard_name": "P_1_Avg",
+        "display_name": "Air pressure",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "P_hPa_1_Avg",
+        "display_name": "Air pressure, in hectopascal",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "P_hPa_1_Max",
+        "display_name": "Air pressure, maximum, in hectopascal ",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "P_hPa_1_Min",
+        "display_name": "Air pressure, minimum, in hectopascal ",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "PA_1_Avg",
+        "display_name": "Period average",
+        "units": "\u03bcs",
+        "units_plain": "micro-s",
+        "units_expanded": "microsecond"
+    },
+    {
+        "standard_name": "PA_1_Max",
+        "display_name": "Period average, maximum",
+        "units": "\u03bcs",
+        "units_plain": "micro-s",
+        "units_expanded": "microsecond"
+    },
+    {
+        "standard_name": "PA_1_Min",
+        "display_name": "Period average, minimum",
+        "units": "\u03bcs",
+        "units_plain": "micro-s",
+        "units_expanded": "microsecond"
+    },
+    {
+        "standard_name": "PA_2_Avg",
+        "display_name": "Period average, sensor 2",
+        "units": "\u03bcs",
+        "units_plain": "micro-s",
+        "units_expanded": "microsecond"
+    },
+    {
+        "standard_name": "PA_3_Avg",
+        "display_name": "Period average, sensor 3",
+        "units": "\u03bcs",
+        "units_plain": "micro-s",
+        "units_expanded": "microsecond"
+    },
+    {
+        "standard_name": "PAR_1_Avg",
+        "display_name": "Photosynthetically active radiation",
+        "units": "\u03bcmol/s/m\u00b2",
+        "units_plain": "micro-mol/s/m^2",
+        "units_expanded": "micromole per second per square meter"
+    },
+    {
+        "standard_name": "PAR_1_sens",
+        "display_name": "Sensor calibration coefficient, PAR_1",
+        "units": "\u03bcA/(1000 \u03bcmol/s/m\u00b2)",
+        "units_plain": "micro-A/(1000 micro-mol/s/m^2)",
+        "units_expanded": "microampere per (1000 micromole per second per square meter)"
+    },
+    {
+        "standard_name": "PAR_1_Tot86400s",
+        "display_name": "Photosynthetically active radiation, daily total",
+        "units": "mmol/m\u00b2",
+        "units_plain": "mmol/m^2",
+        "units_expanded": "millimole per square meter"
+    },
+    {
+        "standard_name": "PAR_2_Avg",
+        "display_name": "Photosynthetically active radiation, sensor 2",
+        "units": "\u03bcmol/s/m\u00b2",
+        "units_plain": "micro-mol/s/m^2",
+        "units_expanded": "micromole per second per square meter"
+    },
+    {
+        "standard_name": "PARdiff_1_Avg",
+        "display_name": "Photosynthetically active radiation, diffused",
+        "units": "\u03bcmol/s/m\u00b2",
+        "units_plain": "micro-mol/s/m^2",
+        "units_expanded": "micromole per second per square meter"
+    },
+    {
+        "standard_name": "Psl_1_Avg",
+        "display_name": "Sea level air pressure",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "Psl_hPa_1_Avg",
+        "display_name": "Sea level air pressure, in hectopascal",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "Psl_hPa_1_Max",
+        "display_name": "Sea level air pressure, maximum, in hectopascal",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "Psl_hPa_1_Min",
+        "display_name": "Sea level air pressure, minimum, in hectopascal",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "Qloss",
+        "display_name": "Battery charge deficit",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "RF_1_Tot1800s",
+        "display_name": "Rainfall, 30-minute total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_1_Tot300s",
+        "display_name": "Rainfall, 5-minute total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_1_Tot3600s",
+        "display_name": "Rainfall, hourly total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_1_Tot600s",
+        "display_name": "Rainfall, 10-minute total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_1_Tot60s",
+        "display_name": "Rainfall, 1-minute total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_1_Tot86400s",
+        "display_name": "Rainfall, daily total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_1_Tot900s",
+        "display_name": "Rainfall, 15-minute total",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_2_Tot1800s",
+        "display_name": "Rainfall, 30-minute total, sensor 2",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_2_Tot300s",
+        "display_name": "Rainfall, 5-minute total, sensor 2",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RF_2_Tot60s",
+        "display_name": "Rainfall, 1-minute total, sensor 2",
+        "units": "mm",
+        "units_plain": "mm",
+        "units_expanded": "millimeter"
+    },
+    {
+        "standard_name": "RFint_1_Max",
+        "display_name": "Maximum rain intensity",
+        "units": "mm/hour",
+        "units_plain": "mm/hour",
+        "units_expanded": "millimeter per hour"
+    },
+    {
+        "standard_name": "RFint_2_Max",
+        "display_name": "Maximum rain intensity, sensor 2",
+        "units": "mm/hour",
+        "units_plain": "mm/hour",
+        "units_expanded": "millimeter per hour"
+    },
+    {
+        "standard_name": "RGtip_1_Tot300s",
+        "display_name": "Rain gauge tips, 5-minute total",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "RGtip_1_Tot60s",
+        "display_name": "Rain gauge tips, 1-minute total",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "RGtip_2_Tot300s",
+        "display_name": "Rain gauge tips, 5-minute total, sensor 2",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "RGtip_2_Tot60s",
+        "display_name": "Rain gauge tips, 1-minute total, sensor 2",
+        "units": "count",
+        "units_plain": "count",
+        "units_expanded": "count"
+    },
+    {
+        "standard_name": "RH_1_Avg",
+        "display_name": "Relative humidity, sensor 1",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RH_1_Max",
+        "display_name": "Relative humidity, maximum, sensor 1",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RH_1_Min",
+        "display_name": "Relative humidity, minimum, sensor 1",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RH_2_Avg",
+        "display_name": "Relative humidity, sensor 2",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RH_2_Max",
+        "display_name": "Relative humidity, maximum, sensor 2",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RH_2_Min",
+        "display_name": "Relative humidity, minimum, sensor 2",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RHenc",
+        "display_name": "Enclosure relative humidity",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RHenc_Max",
+        "display_name": "Enclosure relative humidity, maximum",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "RHenc_Min",
+        "display_name": "Enclosure relative humidity, minimum",
+        "units": "%",
+        "units_plain": "%",
+        "units_expanded": "percent"
+    },
+    {
+        "standard_name": "Rin_1_Avg",
+        "display_name": "Total incoming radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "RinUC_1_Avg",
+        "display_name": "Total incoming radiation, uncorrected",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "Rnet_1_Avg",
+        "display_name": "Net radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "Rnet_1_heater",
+        "display_name": "Sensor heater switch, Rnet",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "Rnet_1_Max",
+        "display_name": "Net radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "Rnet_1_Min",
+        "display_name": "Net radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "Rnet_1_sens",
+        "display_name": "Sensor calibration coefficient, Rnet",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "Rnet_1_SN",
+        "display_name": "Sensor serial number, Rnet",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "Rnet_2_Avg",
+        "display_name": "Net radiation, sensor 2",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "Rnet_sensor",
+        "display_name": "Sensor model, Rnet",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "RnetUC_1_Avg",
+        "display_name": "Net radiation, uncorrected",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "Rout_1_Avg",
+        "display_name": "Total outgoing radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "RoutUC_1_Avg",
+        "display_name": "Total outgoing radiation, uncorrected",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "RV_1_Level",
+        "display_name": "Sensor level, RainVUE",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "RV_1_LiBattV",
+        "display_name": "Sensor internal battery voltage, RainVUE",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "RV_2_Level",
+        "display_name": "Sensor level, RainVUE, sensor 2",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "RV_2_LiBattV",
+        "display_name": "Sensor internal battery voltage, RainVUE, sensor 2",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "SCAN_INTERVAL",
+        "display_name": "Data sampling interval",
+        "units": "sec",
+        "units_plain": "sec",
+        "units_expanded": "second"
+    },
+    {
+        "standard_name": "SHF_1_Avg",
+        "display_name": "Soil heat flux below ground",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SHF_1_sens",
+        "display_name": "Sensor calibration coefficient, SHF_1",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "SHF_1_SN",
+        "display_name": "Sensor serial number, SHF_1",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SHF_2_Avg",
+        "display_name": "Soil heat flux below ground, sensor 2",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SHF_2_sens",
+        "display_name": "Sensor calibration coefficient, SHF_2",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "SHF_2_SN",
+        "display_name": "Sensor serial number, SHF_2",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SHF_3_Avg",
+        "display_name": "Soil heat flux below ground, sensor 3",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SHF_3_sens",
+        "display_name": "Sensor calibration coefficient, SHF_3",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "SHF_3_SN",
+        "display_name": "Sensor serial number, SHF_3",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SHF_4_Avg",
+        "display_name": "Soil heat flux below ground, sensor 4",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SHF_4_sens",
+        "display_name": "Sensor calibration coefficient, SHF_4",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "SHF_4_SN",
+        "display_name": "Sensor serial number, SHF_4",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SHF_depth",
+        "display_name": "Sensor installation depth, SHF",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SHFsrf_1_Avg",
+        "display_name": "Soil heat flux at ground surface",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SITE_BD",
+        "display_name": "Site soil bulk density",
+        "units": "kg/m\u00b3",
+        "units_plain": "kg/m^3",
+        "units_expanded": "kilogram per cubic meter"
+    },
+    {
+        "standard_name": "SITE_ELEV",
+        "display_name": "Site elevation",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SITE_MagDec",
+        "display_name": "Site magnetic declination",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "SM_1_Avg",
+        "display_name": "Soil volumetric water content",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "SM_1_Max",
+        "display_name": "Soil volumetric water content, maximum",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "SM_1_Min",
+        "display_name": "Soil volumetric water content, minimum",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "SM_2_Avg",
+        "display_name": "Soil volumetric water content, sensor 2",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "SM_3_Avg",
+        "display_name": "Soil volumetric water content, sensor 3",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "SM1_depth0",
+        "display_name": "Sensor probe top depth, SM_1",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SM1_depthM",
+        "display_name": "Sensor measurement depth, SM_1",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SM1_ori",
+        "display_name": "Sensor orientation, SM_1",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SM2_depth0",
+        "display_name": "Sensor probe top depth, SM_2",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SM2_depthM",
+        "display_name": "Sensor measurement depth, SM_2",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SM2_ori",
+        "display_name": "Sensor orientation, SM_2",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SM3_depth0",
+        "display_name": "Sensor probe top depth, SM_3",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SM3_depthM",
+        "display_name": "Sensor measurement depth, SM_3",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "SM3_ori",
+        "display_name": "Sensor orientation, SM_3",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SMadjT_1_Avg",
+        "display_name": "Soil volumetric water content, temperature adjusted",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "SMadjT_2_Avg",
+        "display_name": "Soil volumetric water content, temperature adjusted, sensor 2",
+        "units": "m\u00b3/m\u00b3",
+        "units_plain": "m^3/m^3",
+        "units_expanded": "cubic meter of liquid water per cubic meter of soil"
+    },
+    {
+        "standard_name": "ST_ID",
+        "display_name": "Station ID",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SWin_1_Avg",
+        "display_name": "Incoming shortwave radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWin_1_Max",
+        "display_name": "Incoming shortwave radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWin_1_Min",
+        "display_name": "Incoming shortwave radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWin_1_sens",
+        "display_name": "Sensor calibration coefficient, SWin",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "SWin_1_SN",
+        "display_name": "Sensor serial number, SWin",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "SWin_1_Tot86400s",
+        "display_name": "Incoming shortwave radiation, daily total",
+        "units": "MJ/m\u00b2",
+        "units_plain": "MJ/m^2",
+        "units_expanded": "megajoule per square meter"
+    },
+    {
+        "standard_name": "SWin_2_Avg",
+        "display_name": "Incoming shortwave radiation, sensor 2",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWnet_1_Avg",
+        "display_name": "Net shortwave radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWnet_1_Max",
+        "display_name": "Net shortwave radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWnet_1_Min",
+        "display_name": "Net shortwave radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWout_1_Avg",
+        "display_name": "Outgoing shortwave radiation",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWout_1_Max",
+        "display_name": "Outgoing shortwave radiation, maximum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWout_1_Min",
+        "display_name": "Outgoing shortwave radiation, minimum",
+        "units": "W/m\u00b2",
+        "units_plain": "W/m^2",
+        "units_expanded": "watt per square meter"
+    },
+    {
+        "standard_name": "SWout_1_sens",
+        "display_name": "Sensor calibration coefficient, SWout",
+        "units": "\u03bcV/(W/m\u00b2)",
+        "units_plain": "micro-V/(W/m^2)",
+        "units_expanded": "microvolt per (watt per square meter)"
+    },
+    {
+        "standard_name": "SysAh",
+        "display_name": "Whole system power use",
+        "units": "Ah",
+        "units_plain": "Ah",
+        "units_expanded": "ampere-hour"
+    },
+    {
+        "standard_name": "Tair_1_Avg",
+        "display_name": "Air temperature, sensor 1",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tair_1_Max",
+        "display_name": "Air temperature, maximum, sensor 1",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tair_1_Min",
+        "display_name": "Air temperature, minimum, sensor 1",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tair_2_Avg",
+        "display_name": "Air temperature, sensor 2",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tair_2_Max",
+        "display_name": "Air temperature, maximum, sensor 2",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tair_2_Min",
+        "display_name": "Air temperature, minimum, sensor 2",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "TCair_1_Avg",
+        "display_name": "Air temperature, thermocouple",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "TCair_1_Max",
+        "display_name": "Air temperature, thermocouple, maximum",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "TCair_1_Min",
+        "display_name": "Air temperature, thermocouple, minimum",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "TCair_F_1_Avg",
+        "display_name": "Air temperature, thermocouple, in Fahrenheit",
+        "units": "\u00b0F",
+        "units_plain": "degree F",
+        "units_expanded": "degrees Fahrenheit"
+    },
+    {
+        "standard_name": "Tpanel",
+        "display_name": "Logger panel temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tpanel_Max",
+        "display_name": "Logger panel temperature, maximum",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tpanel_Min",
+        "display_name": "Logger panel temperature, minimum",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Trh_1_Avg",
+        "display_name": "Sensor body temperature, RH",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "TRH_sensor",
+        "display_name": "Sensor model, TRH",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "Trnet_1_Avg",
+        "display_name": "Sensor body temperature, Rnet",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Trnet_K_1_Avg",
+        "display_name": "Sensor body temperature, Rnet, in kelvin",
+        "units": "K",
+        "units_plain": "K",
+        "units_expanded": "kelvin"
+    },
+    {
+        "standard_name": "Tsky_1_Avg",
+        "display_name": "Sky temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "TSM1_depthM",
+        "display_name": "Sensor measurement depth, SM_1 for temperature",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "TSM2_depthM",
+        "display_name": "Sensor measurement depth, SM_2 for temperature",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "TSM3_depthM",
+        "display_name": "Sensor measurement depth, SM_3 for temperature",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "Tsoil_1_Avg",
+        "display_name": "Soil temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_1_Max",
+        "display_name": "Soil temperature, maximum",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_1_Min",
+        "display_name": "Soil temperature, minimum",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_2_Avg",
+        "display_name": "Soil temperature, sensor 2",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_2_Max",
+        "display_name": "Soil temperature, maximum, sensor 2",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_2_Min",
+        "display_name": "Soil temperature, minimum, sensor 2",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_3_Avg",
+        "display_name": "Soil temperature, sensor 3",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsoil_4_Avg",
+        "display_name": "Soil temperature, sensor 4",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Tsrf_1_Avg",
+        "display_name": "Surface temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Twt_1_Avg",
+        "display_name": "Water temperature",
+        "units": "\u00b0C",
+        "units_plain": "degree C",
+        "units_expanded": "degrees Celsius"
+    },
+    {
+        "standard_name": "Twt_F_1_Avg",
+        "display_name": "Water temperature, in Fahrenheit",
+        "units": "\u00b0F",
+        "units_plain": "degree F",
+        "units_expanded": "degrees Fahrenheit"
+    },
+    {
+        "standard_name": "UPDATE",
+        "display_name": "Logger constants update status",
+        "units": null,
+        "units_plain": null,
+        "units_expanded": null
+    },
+    {
+        "standard_name": "VBatt",
+        "display_name": "Battery voltage, charger",
+        "units": "V",
+        "units_plain": "V",
+        "units_expanded": "volt"
+    },
+    {
+        "standard_name": "VP_1_Avg",
+        "display_name": "Vapor pressure, sensor 1",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "VP_2_Avg",
+        "display_name": "Vapor pressure, sensor 2",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "VP_hPa_1_Avg",
+        "display_name": "Vapor pressure, in hectopascal, sensor 1",
+        "units": "hPa",
+        "units_plain": "hPa",
+        "units_expanded": "hectopascal "
+    },
+    {
+        "standard_name": "VPD_1_Avg",
+        "display_name": "Vapor pressure deficit, sensor 1",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "VPD_2_Avg",
+        "display_name": "Vapor pressure deficit, sensor 2",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "VPsat_1_Avg",
+        "display_name": "Saturation vapor pressure, sensor 1",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "VPsat_2_Avg",
+        "display_name": "Saturation vapor pressure, sensor 2",
+        "units": "kPa",
+        "units_plain": "kPa",
+        "units_expanded": "kilopascal"
+    },
+    {
+        "standard_name": "VR_1_Avg",
+        "display_name": "Voltage ratio",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "VR_1_Max",
+        "display_name": "Voltage ratio, maximum",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "VR_1_Min",
+        "display_name": "Voltage ratio, minimum",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "VR_2_Avg",
+        "display_name": "Voltage ratio, sensor 2",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "VR_3_Avg",
+        "display_name": "Voltage ratio, sensor 3",
+        "units": "unitless",
+        "units_plain": "unitless",
+        "units_expanded": "ratio"
+    },
+    {
+        "standard_name": "WBatt",
+        "display_name": "Battery charge power",
+        "units": "W",
+        "units_plain": "W",
+        "units_expanded": "watt"
+    },
+    {
+        "standard_name": "WD_1_StdCS",
+        "display_name": "Wind direction standard deviation, wind speed weighted",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WD_1_StdY",
+        "display_name": "Wind direction standard deviation",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WD_2_StdCS",
+        "display_name": "Wind direction standard deviation, wind speed weighted, sensor 2",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WDrs_1_Avg",
+        "display_name": "Wind direction, vector average",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WDrsUC_2_Avg",
+        "display_name": "Wind direction, vector average, uncorrected, sensor 2",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WDuv_1_Avg",
+        "display_name": "Wind direction, scalar average",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WDuv_2_Avg",
+        "display_name": "Wind direction, scalar average, sensor 2",
+        "units": "\u00b0",
+        "units_plain": "degrees",
+        "units_expanded": "degrees"
+    },
+    {
+        "standard_name": "WG_1_Max",
+        "display_name": "Wind gust, maximum",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WG_1_TMx",
+        "display_name": "Wind gust, time of maximum",
+        "units": "time",
+        "units_plain": "time",
+        "units_expanded": "timestamp"
+    },
+    {
+        "standard_name": "Wlvl_1_Avg",
+        "display_name": "Water level",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    },
+    {
+        "standard_name": "Wlvl_cm_1_Avg",
+        "display_name": "Water level, in cm",
+        "units": "cm",
+        "units_plain": "cm",
+        "units_expanded": "centimeter"
+    },
+    {
+        "standard_name": "Wlvl_psig_1_Avg",
+        "display_name": "Water level, in psig",
+        "units": "psig",
+        "units_plain": "psig",
+        "units_expanded": "pounds per square inch gauge"
+    },
+    {
+        "standard_name": "WS_1_Avg",
+        "display_name": "Wind speed, scalar average",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WS_1_Max",
+        "display_name": "Wind speed, maximum",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WS_1_Min",
+        "display_name": "Wind speed, non-zero minimum",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WS_1_mult",
+        "display_name": "Sensor calibration coefficient, WS_1",
+        "units": "(m/s)/Hz",
+        "units_plain": "(m/s)/Hz",
+        "units_expanded": "(meter per second) per hertz"
+    },
+    {
+        "standard_name": "WS_1_TMx",
+        "display_name": "Wind speed, time of maximum",
+        "units": "time",
+        "units_plain": "time",
+        "units_expanded": "timestamp"
+    },
+    {
+        "standard_name": "WS_2_Avg",
+        "display_name": "Wind speed, scalar average, sensor 2",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WSrs_1_Avg",
+        "display_name": "Wind speed, vector average",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WSrs_2_Avg",
+        "display_name": "Wind speed, vector average, sensor 2",
+        "units": "m/s",
+        "units_plain": "m/s",
+        "units_expanded": "meter per second"
+    },
+    {
+        "standard_name": "WTlvl_1_Avg",
+        "display_name": "Water table level",
+        "units": "m",
+        "units_plain": "m",
+        "units_expanded": "meter"
+    }
+]

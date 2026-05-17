@@ -96,19 +96,19 @@ def main():
     parser.add_argument(
         '--dir1',
         type=Path,
-        default=Path('raw_data/climate_variables_daily_FULL_1980-2024'),
+        default=Path('raw_data/AS/climate_variables_daily_FULL_1980-2024'),
         help='First directory with .nc files'
     )
     parser.add_argument(
         '--dir2',
         type=Path,
-        default=Path('raw_data/2010-2014'),
+        default=Path('raw_data/AS/2010-2014'),
         help='Second directory with .nc files'
     )
     parser.add_argument(
         '--output',
         type=Path,
-        default=Path('raw_data/climate_variables_daily_1980-2024_updated'),
+        default=Path('raw_data/AS/climate_variables_daily_1980-2024_updated'),
         help='Output directory for combined files'
     )
     

@@ -7,12 +7,12 @@ This module contains all configuration parameters for the ML data preprocessing 
 import os
 
 # Input data paths
-STATION_METADATA_PATH = "raw_data/station_locations.csv"
-DEM_PATH = "raw_data/DEM/DEM_Tut1.tif"
-REANALYSIS_DIR_MONTHLY = "raw_data/climate_variables_monthly_raw"
-REANALYSIS_DIR_DAILY = "raw_data/climate_variables_daily_1980-2024_updated"
+STATION_METADATA_PATH = "raw_data/AS/station_locations.csv"
+DEM_PATH = "raw_data/AS/DEM/DEM_Tut1.tif"
+REANALYSIS_DIR_MONTHLY = "raw_data/AS/climate_variables_monthly_raw"
+REANALYSIS_DIR_DAILY = "raw_data/AS/climate_variables_daily_1980-2024_updated"
 MONTHLY_RAINFALL_DATA_DIR = "Process_Raw_Rainfall_Data/output/monthly_rainfall"
-DAILY_RAINFALL_DATA_DIR = "raw_data/rainfall_corrected"
+DAILY_RAINFALL_DATA_DIR = "raw_data/AS/final_rainfall_per_station"
 
 # Backward compatibility - defaults to monthly
 REANALYSIS_DIR = REANALYSIS_DIR_MONTHLY

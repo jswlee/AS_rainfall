@@ -48,9 +48,9 @@ def process_variable(folder_name, variable_name, input_dir, subset_dir, output_d
 
 def main():
     parser = argparse.ArgumentParser(description="Subset and concatenate climate data.")
-    parser.add_argument('--input_dir', type=Path, default='raw_data/climate_variables_daily')
+    parser.add_argument('--input_dir', type=Path, default='raw_data/AS/climate_variables_daily')
     parser.add_argument('--subset_dir', type=Path, default=Path('./tmp_subsets_daily'))
-    parser.add_argument('--output_dir', type=Path, default=Path('./raw_data/climate_variables_daily_processed_1'))
+    parser.add_argument('--output_dir', type=Path, default=Path('./raw_data/AS/climate_variables_daily_processed_1'))
     parser.add_argument('--min_lat', type=float, default=-10.0)
     parser.add_argument('--max_lat', type=float, default=-20.0)
     parser.add_argument('--min_lon', type=float, default=-180.0)

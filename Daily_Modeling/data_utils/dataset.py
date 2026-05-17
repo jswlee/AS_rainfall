@@ -153,12 +153,15 @@ def get_dataset_metadata(
         "num_climate_vars": int(c.shape[1]),
     }
     if dem_crop_config is not None:
+        ld = tensors["local_dem"]
+        rd = tensors["regional_dem"]
+        n_dem_bands = ld.shape[1] if ld.dim() == 4 else 1
         if "local_patch_size" in dem_crop_config:
             lp = dem_crop_config["local_patch_size"]
-            meta["local_dem_shape"] = (lp, lp)
+            meta["local_dem_shape"] = (n_dem_bands, lp, lp) if n_dem_bands > 1 else (lp, lp)
         if "regional_patch_size" in dem_crop_config:
             rp = dem_crop_config["regional_patch_size"]
-            meta["regional_dem_shape"] = (rp, rp)
+            meta["regional_dem_shape"] = (n_dem_bands, rp, rp) if n_dem_bands > 1 else (rp, rp)
     return meta
 
 
@@ -217,18 +220,36 @@ def normalize_tensors(
     stats["climate_mean"] = means.cpu().numpy()
     stats["climate_std"] = stds.cpu().numpy()
 
-    # DEM: global z-score per scale
+    # DEM: per-channel z-score (elevation, slope, aspect have different scales)
     # IMPORTANT: Exclude ocean (-1) values from normalization (match paper's land_mean/land_std)
     for key in ("local_dem", "regional_dem"):
-        dem = tensors[key]
-        train_vals = dem[train_indices].reshape(-1)
-        # Only use land pixels (> 0) for mean/std, matching paper's approach
-        mask = train_vals > 0
-        m = train_vals[mask].mean() if mask.any() else torch.tensor(0.0)
-        s = train_vals[mask].std() if mask.any() else torch.tensor(1.0)
-        tensors[key] = (dem - m) / s
-        stats[f"{key}_mean"] = float(m)
-        stats[f"{key}_std"] = float(s)
+        dem = tensors[key]  # (N, n_bands, H, W) or (N, H, W) for single-band legacy
+        if dem.dim() == 3:
+            # Legacy single-band: (N, H, W) — normalize as before
+            train_vals = dem[train_indices].reshape(-1)
+            mask = train_vals > 0
+            m = train_vals[mask].mean() if mask.any() else torch.tensor(0.0)
+            s = train_vals[mask].std() if mask.any() else torch.tensor(1.0)
+            tensors[key] = (dem - m) / s
+            stats[f"{key}_mean"] = float(m)
+            stats[f"{key}_std"] = float(s)
+        else:
+            # Multi-band: (N, n_bands, H, W) — normalize each band independently
+            n_bands = dem.shape[1]
+            means = torch.zeros(n_bands, device=dem.device)
+            stds = torch.ones(n_bands, device=dem.device)
+            train_dem = dem[train_indices]  # (T, n_bands, H, W)
+            for b in range(n_bands):
+                train_vals = train_dem[:, b].reshape(-1)
+                # Band 0 = elevation: exclude ocean (-1); bands 1+ = slope/aspect: exclude -1 sentinel
+                mask = train_vals > -0.5
+                if mask.any():
+                    means[b] = train_vals[mask].mean()
+                    stds[b] = train_vals[mask].std().clamp(min=1e-6)
+            # Broadcast normalisation: (N, n_bands, H, W)
+            tensors[key] = (dem - means[None, :, None, None]) / stds[None, :, None, None]
+            stats[f"{key}_mean"] = means.cpu().numpy()
+            stats[f"{key}_std"] = stds.cpu().numpy()
 
     # Target scale (train-only std in mm)
     raw_targets = tensors["targets"][train_indices]
@@ -291,7 +312,16 @@ def print_normalization_report(
                   f"min={finite.min():.3f}  max={finite.max():.3f}  NaN={nan_pct:.2f}%")
         m_key, s_key = f"{key}_mean", f"{key}_std"
         if m_key in stats:
-            print(f"    Norm params: mean={stats[m_key]:.4f}  std={stats[s_key]:.4f}")
+            m_val, s_val = stats[m_key], stats[s_key]
+            if np.ndim(m_val) == 0:
+                # Single-band scalar
+                print(f"    Norm params: mean={float(m_val):.4f}  std={float(s_val):.4f}")
+            else:
+                # Multi-band: one value per band
+                band_names = ["elev", "slope", "sin_aspect", "cos_aspect"]
+                for b, (mv, sv) in enumerate(zip(m_val, s_val)):
+                    bname = band_names[b] if b < len(band_names) else f"band{b}"
+                    print(f"    Norm params [{bname}]: mean={float(mv):.4f}  std={float(sv):.4f}")
 
     # --- Temporal ---
     temp = tensors["temporal"]

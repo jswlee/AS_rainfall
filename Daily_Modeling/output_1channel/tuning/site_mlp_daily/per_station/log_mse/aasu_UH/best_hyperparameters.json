@@ -1,0 +1,18 @@
+{
+  "local_dem_cfg": 4,
+  "regional_dem_cfg": 5,
+  "arch_idx": 2,
+  "dropout": 0.15000000000000002,
+  "lr": 6.0289412217901975e-05,
+  "wd": 2.3409228900533878e-06,
+  "bs": 512,
+  "loss_type": "log_mse",
+  "arch_type": "mlp",
+  "local_dem_patch": 5,
+  "local_dem_km": 1,
+  "regional_dem_patch": 5,
+  "regional_dem_km": 4,
+  "hidden_sizes": [
+    256
+  ]
+}

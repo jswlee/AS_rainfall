@@ -92,13 +92,27 @@ class LANDModel(nn.Module):
         )
         self._cu = cu
 
-        # --- Stacked DEM branch (paper: 2-channel 10x10 image -> Conv2d) ---
+        # --- Stacked DEM branch ---
         # Local and regional DEMs are resized to dem_patch_size x dem_patch_size
         # and stacked along the channel dim before this conv.
+        # Each DEM scale may have multiple channels (e.g. elev, slope, sin_aspect,
+        # cos_aspect). We use groups=2 so the local and regional streams remain
+        # depthwise-independent (no cross-scale mixing) while allowing
+        # cross-channel mixing within each scale.
         p = self.dem_patch_size
         if dem_units % 2 != 0:
             raise ValueError(f"dem_units ({dem_units}) must be even for groups=2 DEM conv.")
-        self.dem_conv = nn.Conv2d(2, dem_units, kernel_size=3, padding=0, groups=2)
+        # Number of channels per DEM scale (1 for legacy (H,W), or C for (C,H,W))
+        n_dem_ch_local = local_dem_shape[0] if len(local_dem_shape) == 3 else 1
+        n_dem_ch_regional = regional_dem_shape[0] if len(regional_dem_shape) == 3 else 1
+        if n_dem_ch_local != n_dem_ch_regional:
+            raise ValueError(
+                f"Local and regional DEM must have the same number of channels "
+                f"(got {n_dem_ch_local} vs {n_dem_ch_regional})."
+            )
+        self._n_dem_ch = int(n_dem_ch_local)
+        dem_in_total = 2 * self._n_dem_ch  # local + regional, stacked on channel dim
+        self.dem_conv = nn.Conv2d(dem_in_total, dem_units, kernel_size=3, padding=0, groups=2)
         dem_flat = dem_units * (p - 2) * (p - 2)
         self.dem_stack = nn.Sequential(
             self.dem_conv,
@@ -181,7 +195,7 @@ class LANDModel(nn.Module):
             rd = rd.unsqueeze(1)
         ld = F.interpolate(ld, size=(p, p), mode="bilinear", align_corners=False)
         rd = F.interpolate(rd, size=(p, p), mode="bilinear", align_corners=False)
-        dem = torch.cat([ld, rd], dim=1)  # (B, 2, p, p)
+        dem = torch.cat([ld, rd], dim=1)  # (B, 2*C, p, p)  where C = n_dem_ch per scale
         dem = self.dem_stack(dem)
 
         # Month

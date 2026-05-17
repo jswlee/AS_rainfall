@@ -52,8 +52,11 @@ def _build_dem_coverage_audit(local_dem_raw, regional_dem_raw, stations) -> pd.D
     unique_st = np.unique(stations)
     for st in unique_st:
         idx = np.where(stations == st)[0][0]
-        ld = local_dem_raw[idx]
-        rd = regional_dem_raw[idx]
+        ld_full = local_dem_raw[idx]
+        rd_full = regional_dem_raw[idx]
+        # Support both (H,W) single-band and (n_bands,H,W) multi-band arrays
+        ld = ld_full[0] if ld_full.ndim == 3 else ld_full
+        rd = rd_full[0] if rd_full.ndim == 3 else rd_full
         ld_valid = ld > -1
         rd_valid = rd > -1
         rows.append({
@@ -478,17 +481,23 @@ def _build_interactive_report(
     # === DEM statistics ===
     html_parts.append('<div class="section"><h2>DEM Elevation Statistics</h2>')
     html_parts.append('<div class="two-col"><div>')
+    # For display: use elevation band only (band 0) if multi-band
+    ld_elev = local_dem_raw[:, 0] if local_dem_raw.ndim == 4 else local_dem_raw
+    rd_elev = regional_dem_raw[:, 0] if regional_dem_raw.ndim == 4 else regional_dem_raw
+    ld_shape_str = f'{local_dem_raw.shape[2]}x{local_dem_raw.shape[3]}' if local_dem_raw.ndim == 4 else f'{local_dem_raw.shape[1]}x{local_dem_raw.shape[2]}'
+    rd_shape_str = f'{regional_dem_raw.shape[2]}x{regional_dem_raw.shape[3]}' if regional_dem_raw.ndim == 4 else f'{regional_dem_raw.shape[1]}x{regional_dem_raw.shape[2]}'
+    n_bands_str = f' ({local_dem_raw.shape[1]} bands)' if local_dem_raw.ndim == 4 else ''
     html_parts.append('<h3>Local DEM</h3><table>')
-    html_parts.append(f'<tr><th>Shape</th><td>{local_dem_raw.shape[1]}x{local_dem_raw.shape[2]}</td></tr>')
-    html_parts.append(f'<tr><th>Min</th><td>{local_dem_raw.min():.1f} m</td></tr>')
-    html_parts.append(f'<tr><th>Max</th><td>{local_dem_raw.max():.1f} m</td></tr>')
-    html_parts.append(f'<tr><th>Mean</th><td>{local_dem_raw.mean():.1f} m</td></tr>')
+    html_parts.append(f'<tr><th>Shape</th><td>{ld_shape_str}{n_bands_str}</td></tr>')
+    html_parts.append(f'<tr><th>Min (elev)</th><td>{ld_elev.min():.1f} m</td></tr>')
+    html_parts.append(f'<tr><th>Max (elev)</th><td>{ld_elev.max():.1f} m</td></tr>')
+    html_parts.append(f'<tr><th>Mean (elev)</th><td>{ld_elev.mean():.1f} m</td></tr>')
     html_parts.append('</table></div><div>')
     html_parts.append('<h3>Regional DEM</h3><table>')
-    html_parts.append(f'<tr><th>Shape</th><td>{regional_dem_raw.shape[1]}x{regional_dem_raw.shape[2]}</td></tr>')
-    html_parts.append(f'<tr><th>Min</th><td>{regional_dem_raw.min():.1f} m</td></tr>')
-    html_parts.append(f'<tr><th>Max</th><td>{regional_dem_raw.max():.1f} m</td></tr>')
-    html_parts.append(f'<tr><th>Mean</th><td>{regional_dem_raw.mean():.1f} m</td></tr>')
+    html_parts.append(f'<tr><th>Shape</th><td>{rd_shape_str}{n_bands_str}</td></tr>')
+    html_parts.append(f'<tr><th>Min (elev)</th><td>{rd_elev.min():.1f} m</td></tr>')
+    html_parts.append(f'<tr><th>Max (elev)</th><td>{rd_elev.max():.1f} m</td></tr>')
+    html_parts.append(f'<tr><th>Mean (elev)</th><td>{rd_elev.mean():.1f} m</td></tr>')
     html_parts.append('</table></div></div></div>')
 
     # === Normalisation stats table ===

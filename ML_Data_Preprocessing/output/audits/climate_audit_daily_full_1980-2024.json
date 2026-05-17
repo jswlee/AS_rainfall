@@ -1,5 +1,5 @@
 {
-  "input_dir": "raw_data/climate_variables_daily_FULL_1980-2024",
+  "input_dir": "raw_data/AS/climate_variables_daily_FULL_1980-2024",
   "n_files": 11,
   "files": [
     {

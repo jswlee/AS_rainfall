@@ -290,13 +290,24 @@ def extract_dem_patch(
     patch_size: int,
     km_per_cell: float,
 ) -> np.ndarray:
-    """Extract a (patch_size x patch_size) DEM patch from an open rasterio src.
-    
-    Cells that fall outside the DEM extent (ocean) are set to -1.0 to indicate
-    missing/ocean data. Each cell uses the mean of all valid elevation values
-    within its box area (km_per_cell x km_per_cell). If a cell's center point
-    is ocean, the cell value is set to -1.0 regardless of surrounding land.
+    """Extract a DEM patch from an open rasterio src.
+
+    Each spatial cell covers a km_per_cell × km_per_cell area; the value stored
+    is the mean of all valid pixels in that area (block averaging / coarsening).
+    Cells that fall outside the DEM extent (ocean) are set to -1.0.
+
+    For 3-band files (elevation, slope, aspect), aspect (degrees) is split into
+    sin(aspect) and cos(aspect) after averaging, giving 4 output channels:
+      band 0: elevation (m)
+      band 1: slope (degrees)
+      band 2: sin(aspect)
+      band 3: cos(aspect)
+
+    For single-band files, returns shape (1, patch_size, patch_size).
     """
+    file_bands = dem_src.count
+    # Output channels: aspect → 2 channels (sin, cos) for 3-band files
+    n_out = file_bands + 1 if file_bands >= 3 else file_bands
     half = patch_size // 2
 
     if dem_src.crs is None:
@@ -304,7 +315,8 @@ def extract_dem_patch(
 
     step_m = float(km_per_cell) * 1000.0
 
-    patch = np.full((patch_size, patch_size), -1.0, dtype=np.float32)
+    # Raw patch for file bands; we'll expand aspect afterwards
+    patch = np.full((file_bands, patch_size, patch_size), -1.0, dtype=np.float32)
 
     x0, y0 = transform("EPSG:4326", dem_src.crs, [lon], [lat])
     x0 = float(x0[0])
@@ -341,18 +353,43 @@ def extract_dem_patch(
                 r, c = int(r), int(c)
                 if 0 <= r < dem_src.height and 0 <= c < dem_src.width:
                     window = from_bounds(xmin, ymin, xmax, ymax, transform=dem_src.transform)
-                    data = dem_src.read(1, window=window, boundless=True, masked=True)
-                    values = np.asarray(data.filled(np.nan), dtype=np.float32)
-                    if dem_src.nodata is not None:
-                        values = np.where(values == dem_src.nodata, np.nan, values)
-                    values = np.where(np.isfinite(values) & (values >= 0), values, np.nan)
-                    if np.isfinite(values).any():
-                        patch[pi, pj] = float(np.nanmean(values))
-                    else:
-                        patch[pi, pj] = -1.0
+                    # Read all bands at once: shape (file_bands, H, W)
+                    data_all = dem_src.read(window=window, boundless=True, masked=True)
+                    for b in range(file_bands):
+                        values = np.asarray(data_all[b].filled(np.nan), dtype=np.float32)
+                        if dem_src.nodata is not None:
+                            values = np.where(values == dem_src.nodata, np.nan, values)
+                        # Band 0 (elevation): require >= 0 for valid land
+                        # Band 1+ (slope, aspect): any finite value is valid
+                        if b == 0:
+                            values = np.where(np.isfinite(values) & (values >= 0), values, np.nan)
+                        else:
+                            values = np.where(np.isfinite(values), values, np.nan)
+                        if np.isfinite(values).any():
+                            patch[b, pi, pj] = float(np.nanmean(values))
+                        else:
+                            patch[b, pi, pj] = -1.0
             except Exception:
                 pass
-    return patch
+
+    if file_bands < 3:
+        return patch  # single-band: return as-is (1, H, W)
+
+    # Convert aspect (band 2, degrees) → sin + cos, keeping ocean sentinel intact
+    aspect_deg = patch[2]  # (H, W)
+    aspect_rad = np.deg2rad(aspect_deg)
+    ocean_mask = aspect_deg <= -1.0
+
+    sin_asp = np.where(ocean_mask, -1.0, np.sin(aspect_rad)).astype(np.float32)
+    cos_asp = np.where(ocean_mask, -1.0, np.cos(aspect_rad)).astype(np.float32)
+
+    # Stack: elev (0), slope (1), sin_aspect (2), cos_aspect (3)
+    out = np.empty((4, patch_size, patch_size), dtype=np.float32)
+    out[0] = patch[0]   # elevation
+    out[1] = patch[1]   # slope
+    out[2] = sin_asp
+    out[3] = cos_asp
+    return out
 
 
 def build_dem_patches(

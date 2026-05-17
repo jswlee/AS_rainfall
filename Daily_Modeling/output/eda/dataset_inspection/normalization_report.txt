@@ -41,13 +41,19 @@
     skin_temp                           mean=    301.4620  std=      0.7908
     slp                                 mean= 101069.1875  std=    239.4303
 
-  local_dem: shape=(62535, 11, 11)
-    After norm:  mean=-0.4595  std=0.9915  min=-1.200  max=3.002  NaN=0.00%
-    Norm params: mean=113.5740  std=95.4678
+  local_dem: shape=(62535, 4, 11, 11)
+    After norm:  mean=-1.4011  std=1.5527  min=-3.427  max=5.149  NaN=0.00%
+    Norm params [elev]: mean=113.5740  std=95.4678
+    Norm params [slope]: mean=20.1140  std=9.9930
+    Norm params [sin_aspect]: mean=0.2994  std=0.4356
+    Norm params [cos_aspect]: mean=-0.2023  std=0.2327
 
-  regional_dem: shape=(62535, 25, 25)
-    After norm:  mean=-0.8440  std=0.7201  min=-1.144  max=3.178  NaN=0.00%
-    Norm params: mean=106.6112  std=94.0676
+  regional_dem: shape=(62535, 4, 25, 25)
+    After norm:  mean=-1.8615  std=1.2158  min=-3.044  max=4.522  NaN=0.00%
+    Norm params [elev]: mean=106.6112  std=94.0676
+    Norm params [slope]: mean=19.5128  std=10.0396
+    Norm params [sin_aspect]: mean=0.2819  std=0.4396
+    Norm params [cos_aspect]: mean=-0.1955  std=0.2643
 
   temporal: shape=(62535, 12)
     min=0.0000  max=1.0000  (not normalised, one-hot)

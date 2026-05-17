@@ -74,7 +74,7 @@ def audit_single_file(nc_path: Path, expected_date_range: Tuple[pd.Timestamp, pd
     
     try:
         ds = xr.open_dataset(nc_path)
-        
+
         # Basic file info
         result["variables"] = list(ds.data_vars.keys())
         result["coordinates"] = list(ds.coords.keys())

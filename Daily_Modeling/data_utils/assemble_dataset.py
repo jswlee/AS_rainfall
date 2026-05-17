@@ -61,8 +61,8 @@ def assemble(
     # 3. Load pre-built DEM patches from step 01
     print(f"Loading DEM patches from {dem_npz} ...")
     dz = np.load(str(dem_npz), allow_pickle=True)
-    dem_local_raw = dz["dem_local_raw"]      # (S, H, W)
-    dem_regional_raw = dz["dem_regional_raw"]
+    dem_local_raw = dz["dem_local_raw"]      # (S, n_bands, H, W)
+    dem_regional_raw = dz["dem_regional_raw"]  # (S, n_bands, H, W)
     dem_station_names = dz["stations"]
     # Build lookup: station_name -> index in DEM arrays
     dem_lookup = {str(s): i for i, s in enumerate(dem_station_names)}
@@ -84,8 +84,8 @@ def assemble(
 
     # 5. Align: for each reanalysis sample, look up DEM + rainfall
     N = len(re_stations)
-    dem_local = np.zeros((N, dem_local_raw.shape[1], dem_local_raw.shape[2]), dtype=np.float32)
-    dem_regional = np.zeros((N, dem_regional_raw.shape[1], dem_regional_raw.shape[2]), dtype=np.float32)
+    dem_local = np.zeros((N,) + dem_local_raw.shape[1:], dtype=np.float32)    # (N, n_bands, H, W)
+    dem_regional = np.zeros((N,) + dem_regional_raw.shape[1:], dtype=np.float32)  # (N, n_bands, H, W)
     rainfall_mm = np.full(N, np.nan, dtype=np.float32)
     keep = np.zeros(N, dtype=bool)
 
