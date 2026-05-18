@@ -98,16 +98,17 @@ def objective(
     output_head = config.LOSS_TO_HEAD[args.loss_type]
 
     hp = {
-        "climate_units": trial.suggest_int("climate_units", num_cv * 140, num_cv * 250, step=num_cv),
+        "climate_units": trial.suggest_int("climate_units", num_cv * 16, num_cv * 64, step=num_cv),
         "dem_units": trial.suggest_int("dem_units", 16, 256, step=16),
         "dem_patch_size": trial.suggest_int("dem_patch_size", 3, 12),
-        "temporal_units": trial.suggest_int("temporal_units", 4, 64, step=4),
-        "na": trial.suggest_int("na", 64, 512, step=64),
+        "temporal_units": trial.suggest_int("temporal_units", 16, 64, step=16),
+        "na": trial.suggest_int("na", 16, 1024, step=16),
         "nb": trial.suggest_int("nb", 16, 128, step=16),
-        "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.3, step=0.05),
+        "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
         "learning_rate": trial.suggest_float("learning_rate", 1e-7, 1e-2, log=True),
-        "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-3, log=True),
-        "batch_size": trial.suggest_categorical("batch_size", [256, 512, 1024]),
+        "weight_decay": trial.suggest_float("weight_decay", 1e-8, 1e-3, log=True),
+        "batch_size": trial.suggest_categorical("batch_size", [128, 256, 512, 1024]),
+        # "batch_size": trial.suggest_categorical("batch_size", [256, 512, 1024]),
         "climate_processing": "conv2d",
         "output_head": output_head,
         "loss_type": args.loss_type,
@@ -241,7 +242,7 @@ def objective(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-trials", type=int, default=100)
+    parser.add_argument("--n-trials", type=int, default=200)
     parser.add_argument("--study-name", default=None,
                         help="Study name (default: land_daily_<loss_type>_<opt_metric>_<cv_folds><cv_mode>_<n_trials>)")
     parser.add_argument("--loss-type", default="bernoulli_gamma",
@@ -253,7 +254,7 @@ def main():
                         choices=["temporal", "spatial", "both"],
                         help="CV fold construction mode: temporal (held-out years), spatial (held-out stations), "
                              "both (mix of temporal and spatial folds)")
-    parser.add_argument("--opt-metric", default="mae",
+    parser.add_argument("--opt-metric", default="mse",
                         choices=["mae", "mse", "pctl_abs_rel_bias", "csi"],
                         help="Optuna objective metric (default: mae)")
     parser.add_argument("--extreme-percentile", type=float, default=98.0,

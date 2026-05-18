@@ -35,7 +35,7 @@ from Daily_Modeling.data_utils.splits import (
 from Daily_Modeling.models.land import create_land_model
 from Daily_Modeling.utils.training import train_model
 from Daily_Modeling.models.losses import get_criterion
-from Daily_Modeling.utils.inference import predict, predict_mm, make_metric_fn
+from Daily_Modeling.utils.inference import predict, predict_mm, make_metric_fn, run_ensemble_inference_from_dir
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics, baseline_mean_metrics, per_station_metrics
 from Daily_Modeling.utils.visualization import (
     plot_model_comparison_table, plot_scatter, plot_split_heatmap, plot_training_history,
@@ -154,6 +154,15 @@ def main():
                         help="Override weight decay from tuned HPs")
     parser.add_argument("--dropout-rate", type=float, default=None,
                         help="Override dropout rate from tuned HPs")
+    parser.add_argument("--no-post-inference", action="store_true", default=False,
+                        help="Skip automatic ensemble inference on test splits after training.")
+    parser.add_argument("--inference-splits", default="both",
+                        choices=["temporal", "spatial", "both"],
+                        help="Test split(s) to evaluate during post-training inference (default: both).")
+    parser.add_argument("--inference-batch-size", type=int, default=512,
+                        help="Batch size for post-training inference dataloaders (default: 512).")
+    parser.add_argument("--wet-dry-threshold", type=float, default=1.0,
+                        help="Wet-day threshold in mm for wet/dry evaluation (default: 1.0).")
     args = parser.parse_args()
 
     device = select_device()
@@ -494,6 +503,23 @@ def main():
           f"RMSE={summary['rmse_mean']:.3f}±{summary['rmse_std']:.3f}")
 
     print(f"\nAll results saved to {out_dir}")
+
+    # --- Post-training ensemble inference on held-out test splits ---
+    if not args.no_post_inference:
+        print("\n" + "=" * 60)
+        print("Post-training ensemble inference on test splits")
+        print("=" * 60)
+        try:
+            run_ensemble_inference_from_dir(
+                run_dir=out_dir,
+                splits=args.inference_splits,
+                batch_size=args.inference_batch_size,
+                wet_dry_threshold_mm=args.wet_dry_threshold,
+            )
+        except Exception as e:
+            print(f"WARNING: post-training inference failed: {e}")
+    else:
+        print("\nSkipping post-training inference (--no-post-inference set).")
 
 
 if __name__ == "__main__":

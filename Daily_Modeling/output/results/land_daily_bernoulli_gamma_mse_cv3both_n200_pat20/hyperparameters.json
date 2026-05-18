@@ -1,0 +1,23 @@
+{
+  "local_dem_cfg": 0,
+  "regional_dem_cfg": 3,
+  "climate_units": 2240,
+  "dem_units": 160,
+  "dem_patch_size": 12,
+  "temporal_units": 4,
+  "na": 480,
+  "nb": 128,
+  "dropout_rate": 0.1,
+  "learning_rate": 9.63046349385816e-06,
+  "weight_decay": 1.034816215314247e-08,
+  "batch_size": 512,
+  "local_dem_patch": 1,
+  "local_dem_km": 0.5,
+  "regional_dem_patch": 5,
+  "regional_dem_km": 2,
+  "climate_processing": "conv2d",
+  "output_head": "bernoulli_gamma",
+  "loss_type": "bernoulli_gamma",
+  "use_batch_norm": false,
+  "tweedie_p": 1.5
+}

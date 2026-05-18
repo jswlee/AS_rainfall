@@ -79,17 +79,20 @@ DEM_MAX_REGIONAL = {"patch_size": 25, "km_per_cell": 1}  # 25x25 @ 1 km -> 25 km
 # Candidate combos for HP tuning: (patch_size, km_per_cell)
 # Total box = patch_size * km_per_cell
 DEM_LOCAL_CANDIDATES = [
-    (1, 1),   #  1 km  (centre pixel only)
-    (3, 0.5),  #  1.5 km
+    (3, 0.5), #  1.5 km
     (3, 1),   #  3 km
+    (3, 1.5),  #  4.5 km
     (3, 2),   #  6 km
+    (3, 2.5),  #  7.5 km
     (5, 1),   #  5 km
+    (5, 1.5),  #  7.5 km
 ]
 DEM_REGIONAL_CANDIDATES = [
     (3, 3),   #  9 km
     (3, 5),   # 15 km
     (3, 8),   # 24 km
     (5, 2),   # 10 km
+    (5, 2.5),  # 12.5 km
     (5, 3),   # 15 km
     (5, 4),   # 20 km
     (5, 5),   # 25 km
