@@ -168,8 +168,18 @@ def save_optuna_visualizations(study, out_dir: Path) -> None:
             "slice_plots.png": plot_slice(study),
         }
 
+        import numpy as np
         for filename, fig in figures.items():
-            target_fig = fig.figure if hasattr(fig, "figure") else fig
+            if isinstance(fig, np.ndarray):
+                # plot_slice returns an ndarray of Axes; grab figure from first axis
+                flat = fig.ravel()
+                target_fig = flat[0].figure if len(flat) > 0 else None
+            elif hasattr(fig, "figure"):
+                target_fig = fig.figure
+            else:
+                target_fig = fig
+            if target_fig is None:
+                continue
             _save_and_close(target_fig, Path(out_dir) / filename, message=f"  Saved {filename}")
     except Exception as e:
         print(f"  WARNING: Could not generate tuning visuals: {e}")
@@ -779,6 +789,7 @@ def plot_sample_dem_patches(
     local_dem: np.ndarray,
     regional_dem: np.ndarray,
     stations: np.ndarray,
+    station_dem_idx: Optional[np.ndarray] = None,
     sample_indices: Optional[Sequence[int]] = None,
     n_samples: int = 6,
     save_path: Optional[Path] = None,
@@ -790,6 +801,10 @@ def plot_sample_dem_patches(
 
     Picks *n_samples* evenly spaced across unique stations if *sample_indices*
     is not given.
+
+    Args:
+        station_dem_idx: Array mapping sample index to DEM station index (0-25).
+                        If None, assumes local_dem/regional_dem match stations length.
     """
     if sample_indices is None:
         unique_st = np.unique(stations)
@@ -813,14 +828,16 @@ def plot_sample_dem_patches(
 
     for col, idx in enumerate(sample_indices):
         st = str(stations[idx])
+        # Map sample index to DEM station index if station_dem_idx provided
+        dem_idx = int(station_dem_idx[idx]) if station_dem_idx is not None else idx
         for b in range(n_bands):
             local_row = b * 2
             reg_row = b * 2 + 1
             bname = band_names[b] if b < len(band_names) else f"Band {b}"
             cmap = band_cmaps[b] if b < len(band_cmaps) else "viridis"
 
-            ld_raw = local_dem[idx, b]
-            rd_raw = regional_dem[idx, b]
+            ld_raw = local_dem[dem_idx, b]
+            rd_raw = regional_dem[dem_idx, b]
 
             # Mask ocean sentinel (-1) only for elevation band; other bands use any finite value
             if b == 0:
@@ -1072,27 +1089,36 @@ def plot_per_station_dem_summary(
     local_dem: np.ndarray,
     regional_dem: np.ndarray,
     stations: np.ndarray,
+    station_dem_idx: Optional[np.ndarray] = None,
     save_path: Optional[Path] = None,
 ):
-    """Box plots of DEM elevation per station (centre pixel)."""
+    """Box plots of DEM elevation per station (centre pixel).
+
+    Args:
+        station_dem_idx: Array mapping sample index to DEM station index (0-25).
+                        If None, assumes local_dem/regional_dem match stations length.
+    """
     import pandas as pd
     rows = []
     for st in np.unique(stations):
         mask = stations == st
-        # Centre pixel of the elevation band
+        # Get DEM station index for this station's samples
+        sample_idx = int(np.where(mask)[0][0])  # First occurrence
+        dem_idx = int(station_dem_idx[sample_idx]) if station_dem_idx is not None else sample_idx
+        # Centre pixel of the elevation band (use dem_idx, not mask, since DEM arrays are per-station)
         if local_dem.ndim == 4:   # (S, n_bands, H, W) — use band 0 (elevation)
             H, W = local_dem.shape[2], local_dem.shape[3]
-            ld_center = local_dem[mask, 0, H // 2, W // 2]
+            ld_center = local_dem[dem_idx, 0, H // 2, W // 2]
             H2, W2 = regional_dem.shape[2], regional_dem.shape[3]
-            rd_center = regional_dem[mask, 0, H2 // 2, W2 // 2]
+            rd_center = regional_dem[dem_idx, 0, H2 // 2, W2 // 2]
         elif local_dem.ndim == 3:  # (S, H, W)
             H, W = local_dem.shape[1], local_dem.shape[2]
-            ld_center = local_dem[mask, H // 2, W // 2]
+            ld_center = local_dem[dem_idx, H // 2, W // 2]
             H2, W2 = regional_dem.shape[1], regional_dem.shape[2]
-            rd_center = regional_dem[mask, H2 // 2, W2 // 2]
+            rd_center = regional_dem[dem_idx, H2 // 2, W2 // 2]
         else:
-            ld_center = local_dem[mask].ravel()
-            rd_center = regional_dem[mask].ravel()
+            ld_center = local_dem[dem_idx].ravel()
+            rd_center = regional_dem[dem_idx].ravel()
         ld_val = float(np.nanmean(ld_center))
         rd_val = float(np.nanmean(rd_center))
         rows.append({"station": str(st), "local_dem_centre": ld_val, "regional_dem_centre": rd_val})
@@ -1425,6 +1451,7 @@ def plot_dem_on_map(
     regional_dem: np.ndarray,
     stations: np.ndarray,
     station_metadata: dict,
+    station_dem_idx: Optional[np.ndarray] = None,
     n_samples: int = 6,
     local_km_per_cell: float = 1.0,
     regional_km_per_cell: float = 1.0,
@@ -1433,6 +1460,10 @@ def plot_dem_on_map(
     """Overlay DEM patches on a geographic scatter map of station locations.
 
     Shows local and regional DEM patches positioned at their station coordinates.
+
+    Args:
+        station_dem_idx: Array mapping sample index to DEM station index (0-25).
+                        If None, assumes local_dem/regional_dem match stations length.
     """
     unique_st = np.unique(stations)
     pick_st = unique_st[np.linspace(0, len(unique_st) - 1, min(n_samples, len(unique_st)), dtype=int)]
@@ -1455,14 +1486,16 @@ def plot_dem_on_map(
 
         # Overlay DEM patches for selected stations
         for st in pick_st:
-            idx = int(np.where(stations == st)[0][0])
+            sample_idx = int(np.where(stations == st)[0][0])
+            # Map sample index to DEM station index if provided
+            dem_idx = int(station_dem_idx[sample_idx]) if station_dem_idx is not None else sample_idx
             sname = str(st)
             info = station_metadata.get(sname, {})
             lat = info.get("latitude", info.get("lat", None))
             lon = info.get("longitude", info.get("lon", None))
             if lat is None or lon is None:
                 continue
-            patch_raw = dem_arr[idx]
+            patch_raw = dem_arr[dem_idx]
             # Use elevation band only for map overlay (band 0 for multi-band, or direct for single-band)
             patch = patch_raw[0] if patch_raw.ndim == 3 else patch_raw
             h, w = patch.shape

@@ -27,25 +27,46 @@ _AS_DIR = REPO_ROOT / "raw_data" / "AS"
 _HI_DIR = REPO_ROOT / "raw_data" / "HI"
 _AGG_DIR = REPO_ROOT / "raw_data" / "aggregate"
 
+# Region-specific DEM files (3-band: elevation, slope, aspect).
+# These are referenced directly by build_dem_patches for multi-region dispatch.
+DEM_AS_PATH = _AS_DIR / "DEM" / "10m_tutuila_3band.tif"
+DEM_HI_PATH = _HI_DIR / "DEM" / "30m_hawaii.tif"
+
+# Lookup used by get_dem_path_for_station() to route each station to the
+# correct DEM file.  Keys match the prefix convention: CSV files starting
+# with "HI_" are Hawaii stations; all others are American Samoa.
+DEM_PATHS_BY_REGION = {
+    "HI": DEM_HI_PATH,
+    "AS": DEM_AS_PATH,
+}
+
 if REGION == "AGGREGATE":
     STATION_METADATA_PATH = _AGG_DIR / "station_locations.csv"
     REANALYSIS_DIR = _AGG_DIR / "reanalysis_data"
     DAILY_RAINFALL_DIR = _AGG_DIR / "final_rainfall_per_station"
-    # DEM is region-specific; the user is still preparing a HI DEM. For now
-    # default to the AS DEM so other pipelines remain runnable. Downstream
-    # code that builds DEM patches per station should branch on the station's
-    # region once a HI DEM is available.
-    DEM_PATH = _AS_DIR / "DEM" / "DEM_Tut1.tif"
+    # For single-DEM callers, default to AS.  Multi-region code should use
+    # get_dem_path_for_station() / DEM_PATHS_BY_REGION instead.
+    DEM_PATH = DEM_AS_PATH
 elif REGION == "HI":
     STATION_METADATA_PATH = _HI_DIR / "station_locations.csv"
     REANALYSIS_DIR = _HI_DIR / "hawaii_climate_variables_daily_1980-2024"
     DAILY_RAINFALL_DIR = _HI_DIR / "final_rainfall_per_station"
-    DEM_PATH = _HI_DIR / "DEM"  # placeholder - user is preparing this
+    DEM_PATH = DEM_HI_PATH
 else:  # "AS" (default)
     STATION_METADATA_PATH = _AS_DIR / "station_locations.csv"
-    DEM_PATH = _AS_DIR / "DEM" / "10m_tutuila_3band.tif"
+    DEM_PATH = DEM_AS_PATH
     REANALYSIS_DIR = _AS_DIR / "climate_variables_daily_1980-2024"
     DAILY_RAINFALL_DIR = _AS_DIR / "final_rainfall_per_station"
+
+
+def get_dem_path_for_station(station_name: str):
+    """Return the DEM Path for *station_name*.
+
+    Station names that start with ``HI_`` belong to Hawaii; all others belong
+    to American Samoa.  The returned value is a ``pathlib.Path``.
+    """
+    region = "HI" if str(station_name).startswith("HI_") else "AS"
+    return DEM_PATHS_BY_REGION[region]
 
 # ---------------------------------------------------------------------------
 # Output paths (all under Daily_Modeling/output/)
@@ -150,10 +171,10 @@ VARIABLE_MAPPING = {
 # Daily reanalysis variable configs (16 derived channels).
 # ---------------------------------------------------------------------------
 DAILY_VARIABLE_CONFIGS = {
-    "air_temp_diff_1000_500": {
-        "description": "Air temperature difference 1000-500 hPa",
-        "variable": "Air", "levels": [1000, 500], "operation": "diff",
-    },
+    # "air_temp_diff_1000_500": {
+    #     "description": "Air temperature difference 1000-500 hPa",
+    #     "variable": "Air", "levels": [1000, 500], "operation": "diff",
+    # },
     "air_2m": {
         "description": "Surface air temperature at 2 m",
         "variable": "Air 2m", "interpolate": True,
@@ -170,10 +191,10 @@ DAILY_VARIABLE_CONFIGS = {
         "description": "Omega (vertical velocity) 500 hPa",
         "variable": "Omega", "level": 500,
     },
-    "pottmp_diff_500_1000": {
-        "description": "Potential temperature difference 500-1000 hPa",
-        "variable": "Potential Temperature", "levels": [500, 1000], "operation": "diff",
-    },
+    # "pottmp_diff_500_1000": {
+    #     "description": "Potential temperature difference 500-1000 hPa",
+    #     "variable": "Potential Temperature", "levels": [500, 1000], "operation": "diff",
+    # },
     "pottmp_diff_850_1000": {
         "description": "Potential temperature difference 850-1000 hPa",
         "variable": "Potential Temperature", "levels": [850, 1000], "operation": "diff",
@@ -219,10 +240,10 @@ DAILY_VARIABLE_CONFIGS = {
         "description": "Skin temperature",
         "variable": "Skin Temperature", "interpolate": True,
     },
-    "slp": {
-        "description": "Sea level pressure",
-        "variable": "Sea Level Pressure",
-    },
+    # "slp": {
+    #     "description": "Sea level pressure",
+    #     "variable": "Sea Level Pressure",
+    # },
 }
 
 DAILY_VARIABLE_NAMES = list(DAILY_VARIABLE_CONFIGS.keys())
@@ -264,20 +285,22 @@ LOSS_TO_HEAD = {
 }
 
 LAND_DEFAULT_HP = {
-    "climate_units": 128,
-    "dem_units": 64,
+    # Conservative defaults for ~65k samples (prevents overfitting)
+    "climate_units": 64,      # Was 128 - reduce for small dataset
+    "dem_units": 32,          # Was 64 - reduce DEM complexity
     "dem_patch_size": 10,
-    "temporal_units": 16,
-    "na": 256,
-    "nb": 64,
-    "dropout_rate": 0.3,
+    "temporal_units": 8,      # Was 16 - month encoding can be simpler
+    "na": 64,                 # Was 256 - narrow fusion layer
+    "nb": 32,                 # Was 64 - reduce secondary fusion
+    "dropout_rate": 0.4,      # Was 0.3 - stronger regularization
     "learning_rate": 5e-5,
-    "weight_decay": 3e-5,
+    "weight_decay": 1e-4,     # Was 3e-5 - stronger L2 regularization
     "batch_size": 256,
     "climate_processing": "conv2d",
     "output_head": "gamma",
     "loss_type": "gamma",
     "use_batch_norm": False,
+    "lightweight": True,      # Use simplified architecture (single-layer branches)
 }
 
 DATALOADER_NUM_WORKERS = 0
@@ -287,3 +310,20 @@ DATALOADER_PREFETCH_FACTOR = 2
 
 MAX_EPOCHS = 1000
 PATIENCE = 100
+
+# ---------------------------------------------------------------------------
+# Small-dataset tuning guidance (for ~65k samples)
+# ---------------------------------------------------------------------------
+# Use these ranges in 04_tune_land.py to prevent overfitting:
+#
+#   climate_units:     32 to 192 (step=num_cv)  [was: num_cv*16 to num_cv*64]
+#   dem_units:         16 to 64  (step=16)       [was: 16-256]
+#   temporal_units:    4 to 24   (step=4)        [was: 16-64]
+#   na:                32 to 256 (step=16)        [was: 16-1024]
+#   nb:                16 to 64  (step=16)        [was: 16-128]
+#   dropout_rate:      0.3 to 0.6 (step=0.05)     [was: 0.0-0.5]
+#   weight_decay:      1e-5 to 1e-3 (log)          [was: 1e-8-1e-3]
+#   learning_rate:     1e-6 to 1e-4 (log)         [was: 1e-7-1e-2]
+#
+# Recommended: Always use lightweight=True for <100k samples
+# This removes redundant layers in climate_body, dem_stack, month_stack.

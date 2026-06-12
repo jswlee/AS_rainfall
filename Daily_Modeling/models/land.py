@@ -34,15 +34,16 @@ class LANDModel(nn.Module):
         regional_dem_shape: Tuple[int, int] = (3, 3),
         dem_patch_size: int = _DEFAULT_DEM_PATCH_SIZE,
         num_month_features: int = 12,
-        climate_units: int = 1020,
-        dem_units: int = 64,
-        temporal_units: int = 16,
-        na: int = 512,
-        nb: int = 128,
-        dropout_rate: float = 0.3,
+        climate_units: int = 128,
+        dem_units: int = 32,
+        temporal_units: int = 12,
+        na: int = 128,
+        nb: int = 32,
+        dropout_rate: float = 0.4,
         climate_processing: str = "conv2d",
         output_head: str = "mse",
         use_batch_norm: bool = False,
+        lightweight: bool = True,
     ):
         super().__init__()
         self.climate_processing = climate_processing
@@ -50,6 +51,7 @@ class LANDModel(nn.Module):
         self.local_dem_shape = local_dem_shape
         self.regional_dem_shape = regional_dem_shape
         self.dem_patch_size = int(dem_patch_size)
+        self.lightweight = lightweight
 
         _bn = lambda n: nn.BatchNorm1d(n) if use_batch_norm else nn.Identity()
 
@@ -83,13 +85,22 @@ class LANDModel(nn.Module):
                 nn.Linear(flat, climate_units),
             )
             cu = climate_units
-        self.climate_body = nn.Sequential(
-            _bn(cu),
-            nn.ReLU(),
-            nn.Linear(cu, cu),
-            _bn(cu),
-            nn.ReLU(),
-        )
+        if lightweight:
+            # Single-layer climate body for small datasets (with lighter dropout)
+            self.climate_body = nn.Sequential(
+                _bn(cu),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate / 2.0),
+            )
+        else:
+            # Full 2-layer body (original paper architecture)
+            self.climate_body = nn.Sequential(
+                _bn(cu),
+                nn.ReLU(),
+                nn.Linear(cu, cu),
+                _bn(cu),
+                nn.ReLU(),
+            )
         self._cu = cu
 
         # --- Stacked DEM branch ---
@@ -114,39 +125,75 @@ class LANDModel(nn.Module):
         dem_in_total = 2 * self._n_dem_ch  # local + regional, stacked on channel dim
         self.dem_conv = nn.Conv2d(dem_in_total, dem_units, kernel_size=3, padding=0, groups=2)
         dem_flat = dem_units * (p - 2) * (p - 2)
-        self.dem_stack = nn.Sequential(
-            self.dem_conv,
-            nn.ReLU(),
-            nn.Flatten(),
-            _bn(dem_flat),
-            nn.ReLU(),
-            nn.Linear(dem_flat, dem_units),
-            _bn(dem_units),
-            nn.ReLU(),
-        )
+        if lightweight:
+            # Single-stage DEM processing for small datasets (with lighter dropout)
+            self.dem_stack = nn.Sequential(
+                self.dem_conv,
+                nn.ReLU(),
+                nn.Flatten(),
+                nn.Linear(dem_flat, dem_units),
+                _bn(dem_units),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate / 2.0),
+            )
+        else:
+            # Full 2-stage DEM stack (original paper)
+            self.dem_stack = nn.Sequential(
+                self.dem_conv,
+                nn.ReLU(),
+                nn.Flatten(),
+                _bn(dem_flat),
+                nn.ReLU(),
+                nn.Linear(dem_flat, dem_units),
+                _bn(dem_units),
+                nn.ReLU(),
+            )
         self._dem_units = dem_units
 
         # --- Month branch ---
-        self.month_stack = nn.Sequential(
-            nn.Linear(num_month_features, temporal_units),
-            _bn(temporal_units),
-            nn.ReLU(),
-            nn.Linear(temporal_units, temporal_units),
-            _bn(temporal_units),
-            nn.ReLU(),
-        )
+        if lightweight:
+            # Single-layer month encoding (with lighter dropout)
+            self.month_stack = nn.Sequential(
+                nn.Linear(num_month_features, temporal_units),
+                _bn(temporal_units),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate / 2.0),
+            )
+        else:
+            # Full 2-layer month stack
+            self.month_stack = nn.Sequential(
+                nn.Linear(num_month_features, temporal_units),
+                _bn(temporal_units),
+                nn.ReLU(),
+                nn.Linear(temporal_units, temporal_units),
+                _bn(temporal_units),
+                nn.ReLU(),
+            )
 
         # --- Dense head ---
         combined = cu + dem_units + temporal_units
-        self.fusion_stack = nn.Sequential(
-            nn.Linear(combined, na),
-            _bn(na),
-            nn.ReLU(),
-            nn.Linear(na, nb),
-            _bn(nb),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-        )
+        if lightweight and nb >= na:
+            # Simplify: single fusion layer if nb >= na
+            self.fusion_stack = nn.Sequential(
+                nn.Linear(combined, na),
+                _bn(na),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),
+            )
+            # Override nb to na for output layer compatibility
+            self._fusion_out = na
+        else:
+            # Standard 2-layer fusion
+            self.fusion_stack = nn.Sequential(
+                nn.Linear(combined, na),
+                _bn(na),
+                nn.ReLU(),
+                nn.Linear(na, nb),
+                _bn(nb),
+                nn.ReLU(),
+                nn.Dropout(dropout_rate),
+            )
+            self._fusion_out = nb
 
         # --- Output ---
         if output_head in ("mse", "softplus"):
@@ -157,7 +204,7 @@ class LANDModel(nn.Module):
             n_out = 3
         else:
             raise ValueError(f"Unknown output_head: {output_head!r}")
-        self.out = nn.Linear(nb, n_out)
+        self.out = nn.Linear(self._fusion_out, n_out)
 
         self._init_weights()
 
@@ -224,21 +271,24 @@ def create_land_model(hyperparams: dict, metadata: dict) -> LANDModel:
     num_month = int(metadata.get("num_month_features", 12))
 
     # dem_units: use explicit key
-    dem_units = hyperparams.get("dem_units", 64)
+    dem_units = hyperparams.get("dem_units", 32)
 
-    return LANDModel(
+    model = LANDModel(
         climate_shape=climate_shape,
         local_dem_shape=local_dem_shape,
         regional_dem_shape=regional_dem_shape,
         dem_patch_size=int(hyperparams.get("dem_patch_size", _DEFAULT_DEM_PATCH_SIZE)),
         num_month_features=num_month,
-        climate_units=hyperparams.get("climate_units", 1020),
+        climate_units=hyperparams.get("climate_units", 128),
         dem_units=dem_units,
-        temporal_units=hyperparams.get("temporal_units", 16),
-        na=hyperparams.get("na", 512),
-        nb=hyperparams.get("nb", 128),
-        dropout_rate=hyperparams.get("dropout_rate", 0.3),
+        temporal_units=hyperparams.get("temporal_units", 12),
+        na=hyperparams.get("na", 128),
+        nb=hyperparams.get("nb", 32),
+        dropout_rate=hyperparams.get("dropout_rate", 0.4),
         climate_processing=hyperparams.get("climate_processing", "conv2d"),
         output_head=hyperparams.get("output_head", "mse"),
         use_batch_norm=hyperparams.get("use_batch_norm", False),
+        lightweight=hyperparams.get("lightweight", True),
     )
+    print(f"  Model parameters: {model.count_parameters():,}")
+    return model

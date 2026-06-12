@@ -8,14 +8,16 @@ Supports four loss / output-head configurations:
   - bernoulli_gamma: 3-output head, Bernoulli-Gamma NLL loss, objective = val MAE (mm)
 
 CV strategy (--cv-folds N, default 3):
-  Each Optuna trial trains N folds and returns mean val MAE across folds.
+  Each Optuna trial trains N folds and returns mean/median val metric across folds.
   Fold construction is spatio-temporal: each fold rotates which station group
   and which year block are held out for validation, so the objective is never
   evaluated on the same data every trial.
+  Use --fold-agg median for robustness against outlier folds with hard validation sets.
 
 Usage:
     python -m Daily_Modeling.scripts.04_tune_land [--n-trials 50] [--loss-type gamma]
     python -m Daily_Modeling.scripts.04_tune_land --cv-folds 3 --no-early-stopping
+    python -m Daily_Modeling.scripts.04_tune_land --fold-agg median --cv-folds 5
 """
 
 import argparse
@@ -97,22 +99,24 @@ def objective(
 
     output_head = config.LOSS_TO_HEAD[args.loss_type]
 
+    # Constrained ranges for small datasets (~65k samples)
+    # These prevent overfitting by limiting model capacity and enforcing regularization
     hp = {
-        "climate_units": trial.suggest_int("climate_units", num_cv * 16, num_cv * 64, step=num_cv),
-        "dem_units": trial.suggest_int("dem_units", 16, 256, step=16),
+        "climate_units": trial.suggest_int("climate_units", num_cv * 4, num_cv * 16, step=num_cv),  # 32-192 for 8 vars
+        "dem_units": trial.suggest_int("dem_units", 16, 64, step=16),  # Reduced from 16-256
         "dem_patch_size": trial.suggest_int("dem_patch_size", 3, 12),
-        "temporal_units": trial.suggest_int("temporal_units", 16, 64, step=16),
-        "na": trial.suggest_int("na", 16, 1024, step=16),
-        "nb": trial.suggest_int("nb", 16, 128, step=16),
-        "dropout_rate": trial.suggest_float("dropout_rate", 0.0, 0.5, step=0.05),
-        "learning_rate": trial.suggest_float("learning_rate", 1e-7, 1e-2, log=True),
-        "weight_decay": trial.suggest_float("weight_decay", 1e-8, 1e-3, log=True),
+        "temporal_units": trial.suggest_int("temporal_units", 4, 24, step=4),  # Reduced from 16-64
+        "na": trial.suggest_int("na", 32, 256, step=16),  # Narrow fusion layer (was 16-1024)
+        "nb": trial.suggest_int("nb", 16, 64, step=16),   # Secondary fusion (was 16-128)
+        "dropout_rate": trial.suggest_float("dropout_rate", 0.3, 0.6, step=0.05),  # Enforce strong dropout
+        "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),  # Narrower LR range
+        "weight_decay": trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True),  # Stronger L2 reg minimum
         "batch_size": trial.suggest_categorical("batch_size", [128, 256, 512, 1024]),
-        # "batch_size": trial.suggest_categorical("batch_size", [256, 512, 1024]),
         "climate_processing": "conv2d",
         "output_head": output_head,
         "loss_type": args.loss_type,
         "use_batch_norm": args.use_batch_norm,
+        "lightweight": True,  # Always use simplified architecture for small datasets
         "local_dem_patch": lp, "local_dem_km": lk,
         "regional_dem_patch": rp, "regional_dem_km": rk,
     }
@@ -235,9 +239,13 @@ def objective(
     if len(fold_scores) == 0:
         return float("inf")
 
-    mean_score = float(np.mean(fold_scores))
-    print(f"  Trial {trial.number} mean CV score: {mean_score:.4f}")
-    return mean_score
+    if args.fold_agg == "median":
+        agg_score = float(np.median(fold_scores))
+        print(f"  Trial {trial.number} median CV score: {agg_score:.4f} (folds: {fold_scores})")
+    else:
+        agg_score = float(np.mean(fold_scores))
+        print(f"  Trial {trial.number} mean CV score: {agg_score:.4f} (folds: {fold_scores})")
+    return agg_score
 
 
 def main():
@@ -247,13 +255,17 @@ def main():
                         help="Study name (default: land_daily_<loss_type>_<opt_metric>_<cv_folds><cv_mode>_<n_trials>)")
     parser.add_argument("--loss-type", default="bernoulli_gamma",
                         choices=["mse", "gamma", "tweedie", "bernoulli_gamma"],
-                        help="Loss / output-head configuration (default: gamma)")
+                        help="Loss / output-head configuration (default: bernoulli_gamma)")
     parser.add_argument("--cv-folds", type=int, default=3,
                         help="Number of CV folds per trial (default: 3)")
     parser.add_argument("--cv-mode", default="both",
                         choices=["temporal", "spatial", "both"],
                         help="CV fold construction mode: temporal (held-out years), spatial (held-out stations), "
                              "both (mix of temporal and spatial folds)")
+    parser.add_argument("--fold-agg", default="mean",
+                        choices=["mean", "median"],
+                        help="Aggregation method for fold scores: mean or median (default: mean). "
+                             "Median is more robust to outlier folds with hard validation sets.")
     parser.add_argument("--opt-metric", default="mse",
                         choices=["mae", "mse", "pctl_abs_rel_bias", "csi"],
                         help="Optuna objective metric (default: mae)")

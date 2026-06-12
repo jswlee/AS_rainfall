@@ -176,7 +176,12 @@ def _apply_saved_normalization(
     for key in ("local_dem", "regional_dem"):
         m = torch.tensor(stats[f"{key}_mean"], device=device, dtype=tensors[key].dtype)
         s = torch.tensor(stats[f"{key}_std"], device=device, dtype=tensors[key].dtype)
-        tensors[key] = (tensors[key] - m) / s
+        t = tensors[key]
+        # Multi-band (N,C,H,W): broadcast per-channel stats. Single-band scalar: no reshape needed.
+        if m.dim() == 1 and t.dim() == 4:
+            m = m[None, :, None, None]
+            s = s[None, :, None, None]
+        tensors[key] = (t - m) / s
 
     target_scale = float(stats["target_std_mm"])
     return tensors, target_scale
@@ -296,8 +301,15 @@ def run_ensemble_inference_from_dir(
     if dem_crop is not None:
         lp = dem_crop["local_patch_size"]
         rp = dem_crop["regional_patch_size"]
-        metadata["local_dem_shape"] = (lp, lp)
-        metadata["regional_dem_shape"] = (rp, rp)
+        # Preserve channel dim (e.g. (C, H, W) for multi-band DEM)
+        local_shape = tuple(metadata.get("local_dem_shape", (lp, lp)))
+        regional_shape = tuple(metadata.get("regional_dem_shape", (rp, rp)))
+        if len(local_shape) == 3:
+            metadata["local_dem_shape"] = (local_shape[0], lp, lp)
+            metadata["regional_dem_shape"] = (regional_shape[0], rp, rp)
+        else:
+            metadata["local_dem_shape"] = (lp, lp)
+            metadata["regional_dem_shape"] = (rp, rp)
         print(
             f"DEM crop: local={lp}x{lp}@{dem_crop['local_km']}km  "
             f"regional={rp}x{rp}@{dem_crop['regional_km']}km"

@@ -47,13 +47,15 @@ from Daily_Modeling.utils.visualization import (
 )
 
 
-def _build_dem_coverage_audit(local_dem_raw, regional_dem_raw, stations) -> pd.DataFrame:
+def _build_dem_coverage_audit(local_dem_raw, regional_dem_raw, stations, station_dem_idx=None) -> pd.DataFrame:
     rows = []
     unique_st = np.unique(stations)
     for st in unique_st:
-        idx = np.where(stations == st)[0][0]
-        ld_full = local_dem_raw[idx]
-        rd_full = regional_dem_raw[idx]
+        sample_idx = int(np.where(stations == st)[0][0])
+        # Map sample index to DEM station index if provided
+        dem_idx = int(station_dem_idx[sample_idx]) if station_dem_idx is not None else sample_idx
+        ld_full = local_dem_raw[dem_idx]
+        rd_full = regional_dem_raw[dem_idx]
         # Support both (H,W) single-band and (n_bands,H,W) multi-band arrays
         ld = ld_full[0] if ld_full.ndim == 3 else ld_full
         rd = rd_full[0] if rd_full.ndim == 3 else rd_full
@@ -112,6 +114,7 @@ def main():
     reanalysis_raw = z["reanalysis_patches"]
     local_dem_raw = z["dem_local_raw"]
     regional_dem_raw = z["dem_regional_raw"]
+    station_dem_idx = z["station_dem_idx"]
     month_oh = z["month_onehot"]
     rainfall_raw = z["rainfall_mm_raw"]
     stations = z["stations"]
@@ -163,13 +166,14 @@ def main():
     print("\n--- Sample DEM Patches ---")
     plot_sample_dem_patches(
         local_dem_raw, regional_dem_raw, stations,
+        station_dem_idx=station_dem_idx,
         n_samples=8,
         save_path=out / "sample_dem_patches.png",
     )
     print("  Saved sample_dem_patches.png")
 
     # === DEM land-coverage audit ===
-    dem_coverage_df = _build_dem_coverage_audit(local_dem_raw, regional_dem_raw, stations)
+    dem_coverage_df = _build_dem_coverage_audit(local_dem_raw, regional_dem_raw, stations, station_dem_idx)
     dem_coverage_df.to_csv(out / "dem_patch_coverage_by_station.csv", index=False)
     worst_local = dem_coverage_df.nsmallest(5, "local_valid_frac")
     worst_regional = dem_coverage_df.nsmallest(5, "regional_valid_frac")
@@ -213,6 +217,7 @@ def main():
     print("\n--- Per-Station DEM Elevation ---")
     plot_per_station_dem_summary(
         local_dem_raw, regional_dem_raw, stations,
+        station_dem_idx=station_dem_idx,
         save_path=out / "station_dem_summary.png",
     )
     print("  Saved station_dem_summary.png")
@@ -281,6 +286,7 @@ def main():
         station_meta = load_station_metadata()
         plot_dem_on_map(
             local_dem_raw, regional_dem_raw, stations, station_meta,
+            station_dem_idx=station_dem_idx,
             n_samples=8, save_path=out / "dem_on_map.png",
         )
         print("  Saved dem_on_map.png")

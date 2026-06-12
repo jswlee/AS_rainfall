@@ -3,15 +3,13 @@
   NORMALIZATION REPORT - Feature Statistics After Normalisation
 ======================================================================
 
-  Climate reanalysis: shape=(62535, 16, 3, 3)
+  Climate reanalysis: shape=(62535, 13, 3, 3)
   Channel                                 mean      std        min        max    NaN%
   ----------------------------------- -------- -------- ---------- ---------- -------
-  air_temp_diff_1000_500                0.0773   1.0146     -5.859      5.682   0.00%
   air_2m                                0.1391   1.0149     -4.548      3.892   0.00%
   hgt_500                               0.1691   1.0415    -21.368      3.557   0.00%
   hgt_1000                              0.0557   0.9926    -23.215      2.800   0.00%
   omega_500                             0.0110   1.0552    -28.058      4.242   0.00%
-  pottmp_diff_500_1000                 -0.0555   1.0116     -5.772      5.693   0.00%
   pottmp_diff_850_1000                 -0.1071   0.9829     -6.874      5.625   0.00%
   pr_wtr                                0.0257   0.9912     -3.487      3.471   0.00%
   shum_750                              0.0228   0.9912     -3.073      3.283   0.00%
@@ -21,15 +19,12 @@
   merid_moist_750                      -0.0073   0.9909    -17.186     12.132   0.00%
   merid_moist_925                      -0.0332   0.9877    -13.603      9.539   0.00%
   skin_temp                             0.1262   0.9811     -3.073      3.285   0.00%
-  slp                                   0.0533   0.9921    -22.968      2.847   0.00%
 
   Climate normalisation params (train-only):
-    air_temp_diff_1000_500              mean=     30.8966  std=      1.0586
     air_2m                              mean=    299.7567  std=      0.7414
     hgt_500                             mean=  57477.8633  std=    170.5100
     hgt_1000                            mean=    921.6150  std=    204.5843
     omega_500                           mean=     -0.0276  std=      0.1098
-    pottmp_diff_500_1000                mean=     27.8460  std=      1.2245
     pottmp_diff_850_1000                mean=      5.6121  std=      0.7678
     pr_wtr                              mean=     47.0370  std=      9.0121
     shum_750                            mean=      0.0076  std=      0.0024
@@ -39,21 +34,20 @@
     merid_moist_750                     mean=     -0.0119  std=      0.0246
     merid_moist_925                     mean=     -0.0012  std=      0.0503
     skin_temp                           mean=    301.4620  std=      0.7908
-    slp                                 mean= 101069.1875  std=    239.4303
 
-  local_dem: shape=(62535, 4, 11, 11)
-    After norm:  mean=-1.4011  std=1.5527  min=-3.427  max=5.149  NaN=0.00%
-    Norm params [elev]: mean=113.5740  std=95.4678
-    Norm params [slope]: mean=20.1140  std=9.9930
-    Norm params [sin_aspect]: mean=0.2994  std=0.4356
-    Norm params [cos_aspect]: mean=-0.2023  std=0.2327
+  local_dem: shape=(26, 4, 11, 11)
+    After norm:  mean=-1.4172  std=1.4518  min=-3.115  max=4.651  NaN=0.00%
+    Norm params [elev]: mean=114.7138  std=96.4982
+    Norm params [slope]: mean=19.8153  std=9.9043
+    Norm params [sin_aspect]: mean=0.2784  std=0.4350
+    Norm params [cos_aspect]: mean=-0.1995  std=0.2570
 
-  regional_dem: shape=(62535, 4, 25, 25)
-    After norm:  mean=-1.8615  std=1.2158  min=-3.044  max=4.522  NaN=0.00%
-    Norm params [elev]: mean=106.6112  std=94.0676
-    Norm params [slope]: mean=19.5128  std=10.0396
-    Norm params [sin_aspect]: mean=0.2819  std=0.4396
-    Norm params [cos_aspect]: mean=-0.1955  std=0.2643
+  regional_dem: shape=(26, 4, 25, 25)
+    After norm:  mean=-1.8732  std=1.1785  min=-2.979  max=4.340  NaN=0.00%
+    Norm params [elev]: mean=106.2817  std=94.0711
+    Norm params [slope]: mean=19.4225  std=10.0283
+    Norm params [sin_aspect]: mean=0.2755  std=0.4391
+    Norm params [cos_aspect]: mean=-0.1861  std=0.2732
 
   temporal: shape=(62535, 12)
     min=0.0000  max=1.0000  (not normalised, one-hot)

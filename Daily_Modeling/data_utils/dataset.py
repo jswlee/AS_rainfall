@@ -45,9 +45,9 @@ def precompute_dem_crops(
 ) -> Dict[str, torch.Tensor]:
     """Batch-crop DEM tensors upfront so ``__getitem__`` is pure indexing.
 
-    Returns a shallow copy of *tensors* with ``local_dem`` and
-    ``regional_dem`` replaced by their cropped versions.  Pass the result
-    to :func:`make_dataloaders` with ``dem_crop_config=None``.
+    Works on both per-station DEM tables (S_stations, C, H, W) and the legacy
+    per-sample layout.  Returns a shallow copy of *tensors* with ``local_dem``
+    and ``regional_dem`` replaced by their cropped versions.
     """
     if dem_crop_config is None:
         return tensors
@@ -80,9 +80,12 @@ class RainfallDataset(Dataset):
         self.tensors = tensors
         self.indices = indices
         self.target_scale = float(target_scale) if target_scale else None
-        self.feature_keys = [k for k in tensors if k != "targets"]
-        # dem_crop_config: {"local_patch_size": int, "local_km": int,
-        #                   "regional_patch_size": int, "regional_km": int}
+        # station_dem_idx present => per-station DEM storage
+        self._dem_indexed = "station_dem_idx" in tensors
+        _exclude = {"targets", "station_dem_idx"}
+        if self._dem_indexed:
+            _exclude |= {"local_dem", "regional_dem"}
+        self.feature_keys = [k for k in tensors if k not in _exclude]
         self.dem_crop = dem_crop_config
 
     def __len__(self) -> int:
@@ -91,6 +94,11 @@ class RainfallDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
         di = self.indices[idx]
         features = {k: self.tensors[k][di] for k in self.feature_keys}
+        # Per-station DEM: look up via station_dem_idx
+        if self._dem_indexed:
+            si = int(self.tensors["station_dem_idx"][di])
+            features["local_dem"] = self.tensors["local_dem"][si]
+            features["regional_dem"] = self.tensors["regional_dem"][si]
         # Runtime DEM cropping if configured
         if self.dem_crop is not None:
             if "local_patch_size" in self.dem_crop:
@@ -135,6 +143,9 @@ def get_dataset_metadata(
 ) -> dict:
     """Extract shape metadata from loaded tensors.
 
+    Works with both per-station DEM tables (``station_dem_idx`` present) and
+    the legacy per-sample layout.
+
     Args:
         tensors: dict of torch tensors from :func:`load_tensors_from_npz`.
         dem_crop_config: optional DEM crop configuration; if provided,
@@ -145,6 +156,8 @@ def get_dataset_metadata(
         num_month_features, num_climate_vars.
     """
     c = tensors["climate"]
+    # For per-station DEM tables shape is (S, C, H, W); per-sample is (N, C, H, W).
+    # shape[1:] gives (C, H, W) in both cases — correct for model metadata.
     meta = {
         "climate_shape": tuple(c.shape[1:]),
         "local_dem_shape": tuple(tensors["local_dem"].shape[1:]),
@@ -154,8 +167,7 @@ def get_dataset_metadata(
     }
     if dem_crop_config is not None:
         ld = tensors["local_dem"]
-        rd = tensors["regional_dem"]
-        n_dem_bands = ld.shape[1] if ld.dim() == 4 else 1
+        n_dem_bands = ld.shape[1] if ld.dim() >= 3 else 1
         if "local_patch_size" in dem_crop_config:
             lp = dem_crop_config["local_patch_size"]
             meta["local_dem_shape"] = (n_dem_bands, lp, lp) if n_dem_bands > 1 else (lp, lp)
@@ -171,9 +183,19 @@ def load_tensors_from_npz(
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, np.ndarray]]:
     """Load the assembled NPZ into GPU/CPU tensors + numpy metadata.
 
+    Supports two DEM storage layouts:
+
+    * **Per-station** (new, compact): NPZ contains ``station_dem_idx`` mapping
+      each sample to a row in ``dem_local_raw`` / ``dem_regional_raw`` which
+      have shape ``(S_stations, C, H, W)``.
+    * **Per-sample** (legacy): ``dem_local_raw`` has shape ``(N_samples, C, H, W)``
+      and no ``station_dem_idx`` key is present.
+
     Returns:
-        tensors: dict of torch tensors {climate, local_dem, regional_dem, temporal, targets}
-        metadata: dict of numpy arrays {stations, years, months, days, variables}
+        tensors: dict of torch tensors.
+            Always: climate, local_dem, regional_dem, temporal, targets.
+            Per-station layout only: station_dem_idx (int32 on CPU/device).
+        metadata: dict of numpy arrays {stations, years, months, days, variables}.
     """
     if npz_path is None:
         npz_path = config.ASSEMBLED_DIR / "daily_dataset_station_centered.npz"
@@ -186,6 +208,10 @@ def load_tensors_from_npz(
         "temporal": torch.from_numpy(z["month_onehot"].astype(np.float32)).to(device),
         "targets": torch.from_numpy(z["rainfall_mm_raw"].astype(np.float32)).to(device),
     }
+    if "station_dem_idx" in z.files:
+        tensors["station_dem_idx"] = torch.from_numpy(
+            z["station_dem_idx"].astype(np.int64)
+        ).to(device)
     metadata = {
         "stations": z["stations"],
         "years": z["years"],
@@ -222,11 +248,18 @@ def normalize_tensors(
 
     # DEM: per-channel z-score (elevation, slope, aspect have different scales)
     # IMPORTANT: Exclude ocean (-1) values from normalization (match paper's land_mean/land_std)
+    #
+    # Per-station layout: dem tensors are (S_stations, C, H, W).  We compute
+    # stats over all station patches (not per-sample train indices) because each
+    # station appears exactly once in the DEM table.  For the legacy per-sample
+    # layout we still slice by train_indices.
+    dem_per_station = "station_dem_idx" in tensors
     for key in ("local_dem", "regional_dem"):
-        dem = tensors[key]  # (N, n_bands, H, W) or (N, H, W) for single-band legacy
+        dem = tensors[key]  # (S, C, H, W) per-station  OR  (N, C, H, W) / (N, H, W) legacy
         if dem.dim() == 3:
-            # Legacy single-band: (N, H, W) — normalize as before
-            train_vals = dem[train_indices].reshape(-1)
+            # Legacy single-band: (N, H, W)
+            src = dem if dem_per_station else dem[train_indices]
+            train_vals = src.reshape(-1)
             mask = train_vals > 0
             m = train_vals[mask].mean() if mask.any() else torch.tensor(0.0)
             s = train_vals[mask].std() if mask.any() else torch.tensor(1.0)
@@ -234,19 +267,18 @@ def normalize_tensors(
             stats[f"{key}_mean"] = float(m)
             stats[f"{key}_std"] = float(s)
         else:
-            # Multi-band: (N, n_bands, H, W) — normalize each band independently
+            # Multi-band: (S or N, n_bands, H, W)
             n_bands = dem.shape[1]
             means = torch.zeros(n_bands, device=dem.device)
             stds = torch.ones(n_bands, device=dem.device)
-            train_dem = dem[train_indices]  # (T, n_bands, H, W)
+            # Per-station: use all station patches; legacy: restrict to train rows
+            train_dem = dem if dem_per_station else dem[train_indices]
             for b in range(n_bands):
                 train_vals = train_dem[:, b].reshape(-1)
-                # Band 0 = elevation: exclude ocean (-1); bands 1+ = slope/aspect: exclude -1 sentinel
                 mask = train_vals > -0.5
                 if mask.any():
                     means[b] = train_vals[mask].mean()
                     stds[b] = train_vals[mask].std().clamp(min=1e-6)
-            # Broadcast normalisation: (N, n_bands, H, W)
             tensors[key] = (dem - means[None, :, None, None]) / stds[None, :, None, None]
             stats[f"{key}_mean"] = means.cpu().numpy()
             stats[f"{key}_std"] = stds.cpu().numpy()
@@ -390,7 +422,12 @@ class InMemoryLoader:
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.target_scale = float(target_scale) if target_scale else None
-        self.feature_keys = [k for k in tensors if k != "targets"]
+        # station_dem_idx present => per-station DEM storage
+        self._dem_indexed = "station_dem_idx" in tensors
+        _exclude = {"targets", "station_dem_idx"}
+        if self._dem_indexed:
+            _exclude |= {"local_dem", "regional_dem"}
+        self.feature_keys = [k for k in tensors if k not in _exclude]
         self.dataset = _DatasetStub(len(indices))
 
     def __len__(self) -> int:
@@ -405,6 +442,11 @@ class InMemoryLoader:
         for start in range(0, len(idx), self.batch_size):
             bi = idx[start : start + self.batch_size]
             features = {k: self.tensors[k][bi] for k in self.feature_keys}
+            # Per-station DEM: expand patches via station_dem_idx
+            if self._dem_indexed:
+                si = self.tensors["station_dem_idx"][bi]  # (B,)
+                features["local_dem"] = self.tensors["local_dem"][si]
+                features["regional_dem"] = self.tensors["regional_dem"][si]
             targets = self.tensors["targets"][bi]
             if self.target_scale and self.target_scale > 0:
                 targets = targets / self.target_scale

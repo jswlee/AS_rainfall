@@ -96,7 +96,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=1000,
                         help="Training epochs per ensemble member")
     parser.add_argument("--patience", type=int, default=config.PATIENCE)
-    parser.add_argument("--run-name", default="land_final")
+    parser.add_argument("--run-name", default=None,
+                        help="Run name (default: derived from hp-dir directory name, or 'land_final' if no hp-dir)")
     parser.add_argument("--loss-type", default=None,
                         choices=["mse", "gamma", "tweedie", "bernoulli_gamma"],
                         help="Override loss type (default: read from HP file, else mse)")
@@ -140,6 +141,11 @@ def main():
                         help="Enable mixed-precision (AMP) training. Off by default for Gamma/Tweedie stability.")
     parser.add_argument("--batch-norm", type=str, choices=["true", "false"], default=None,
                         help="Override BatchNorm setting (true/false). Omit to inherit from HP file.")
+    parser.add_argument("--lightweight", action="store_true", default=None,
+                        help="Use simplified architecture (single-layer branches). "
+                             "Default: True for small datasets (inherit from config or HP file).")
+    parser.add_argument("--no-lightweight", dest="lightweight", action="store_false",
+                        help="Disable lightweight mode - use full 2-layer architecture.")
     parser.add_argument("--small-batch-processing", action="store_true", default=False,
                         help="Optimise for small batch sizes: pre-stage tensors on GPU and "
                              "use torch.compile to reduce per-step overhead.")
@@ -164,6 +170,13 @@ def main():
     parser.add_argument("--wet-dry-threshold", type=float, default=1.0,
                         help="Wet-day threshold in mm for wet/dry evaluation (default: 1.0).")
     args = parser.parse_args()
+
+    # Derive run-name from hp-dir if not explicitly provided
+    if args.run_name is None:
+        if args.hp_dir:
+            args.run_name = Path(args.hp_dir).name
+        else:
+            args.run_name = "land_final"
 
     device = select_device()
     print(f"Device: {device}")
@@ -234,11 +247,15 @@ def main():
     if args.batch_norm is not None:
         hp["use_batch_norm"] = (args.batch_norm == "true")
         print(f"Overriding use_batch_norm: {hp['use_batch_norm']}")
+    if args.lightweight is not None:
+        hp["lightweight"] = args.lightweight
+        print(f"Overriding lightweight: {hp['lightweight']}")
 
     hp["output_head"] = config.LOSS_TO_HEAD[hp["loss_type"]]
     hp.setdefault("climate_processing", "conv2d")
     hp.setdefault("tweedie_p", 1.5)
     hp.setdefault("use_batch_norm", False)
+    hp.setdefault("lightweight", True)  # Default to True for small datasets
     print(f"Hyperparameters: {json.dumps(hp, indent=2)}")
 
     # Build DEM crop config from HPs (handles both index and explicit keys)

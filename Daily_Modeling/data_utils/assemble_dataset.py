@@ -84,8 +84,7 @@ def assemble(
 
     # 5. Align: for each reanalysis sample, look up DEM + rainfall
     N = len(re_stations)
-    dem_local = np.zeros((N,) + dem_local_raw.shape[1:], dtype=np.float32)    # (N, n_bands, H, W)
-    dem_regional = np.zeros((N,) + dem_regional_raw.shape[1:], dtype=np.float32)  # (N, n_bands, H, W)
+    station_dem_idx = np.full(N, -1, dtype=np.int32)   # index into dem_*_raw per sample
     rainfall_mm = np.full(N, np.nan, dtype=np.float32)
     keep = np.zeros(N, dtype=bool)
 
@@ -93,12 +92,11 @@ def assemble(
         st = str(re_stations[i])
         y, m, d = int(re_years[i]), int(re_months[i]), int(re_days[i])
 
-        # DEM
+        # DEM index
         di = dem_lookup.get(st)
         if di is None:
             continue
-        dem_local[i] = dem_local_raw[di]
-        dem_regional[i] = dem_regional_raw[di]
+        station_dem_idx[i] = di
 
         # Rainfall
         rl = rain_lookup.get(st)
@@ -118,19 +116,23 @@ def assemble(
     re_years = re_years[idx]
     re_months = re_months[idx]
     re_days = re_days[idx]
-    dem_local = dem_local[idx]
-    dem_regional = dem_regional[idx]
+    station_dem_idx = station_dem_idx[idx]   # (N_aligned,) indices into dem_*_raw
     rainfall_mm = rainfall_mm[idx]
 
     # 6. Month one-hot
     month_onehot = _month_onehot(re_months)
 
     # 7. Save
+    #    DEM arrays are kept at station-level (S_stations, n_bands, H, W) to avoid
+    #    duplicating identical patches across millions of samples.  station_dem_idx
+    #    maps each sample row back to its station's DEM patch at runtime.
     np.savez_compressed(
         str(out_path),
         reanalysis_patches=re_patches,
-        dem_local_raw=dem_local,
-        dem_regional_raw=dem_regional,
+        dem_local_raw=dem_local_raw,
+        dem_regional_raw=dem_regional_raw,
+        dem_stations=dem_station_names,
+        station_dem_idx=station_dem_idx,
         month_onehot=month_onehot,
         rainfall_mm_raw=rainfall_mm,
         stations=re_stations,
@@ -139,5 +141,6 @@ def assemble(
         days=re_days,
         variables=np.array(var_names, dtype=object),
     )
-    print(f"Saved assembled dataset -> {out_path}  ({len(idx)} samples)")
+    print(f"Saved assembled dataset -> {out_path}  ({len(idx)} samples, "
+          f"{len(dem_station_names)} unique DEM stations)")
     return out_path
