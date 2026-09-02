@@ -79,14 +79,14 @@ def main():
     out = config.EDA_DIR / "dataset_inspection"
     out.mkdir(parents=True, exist_ok=True)
 
-    npz_path = config.ASSEMBLED_DIR / "daily_dataset_station_centered.npz"
+    npz_path = config.DATASET_NPZ
     if not npz_path.exists():
         print(f"ERROR: {npz_path} not found. Run steps 01 + 02 first.")
         sys.exit(1)
 
     # === 1. Raw NPZ structure summary ===
     print("=" * 70)
-    print("  RAW NPZ STRUCTURE - daily_dataset.npz")
+    print(f"  RAW NPZ STRUCTURE - {npz_path.name}")
     print("=" * 70)
     z = np.load(str(npz_path), allow_pickle=True)
     summary_lines = []

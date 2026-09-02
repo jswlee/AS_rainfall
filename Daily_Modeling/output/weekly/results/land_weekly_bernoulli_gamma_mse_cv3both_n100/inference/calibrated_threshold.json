@@ -1,0 +1,6 @@
+{
+  "prob_threshold": 0.5,
+  "val_ets": NaN,
+  "wet_dry_threshold_mm": 1.0,
+  "n_val_samples": 116
+}

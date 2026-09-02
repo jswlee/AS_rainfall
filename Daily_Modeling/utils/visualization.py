@@ -1681,23 +1681,25 @@ def plot_wetdry_evaluation(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     threshold_mm: float = 1.0,
-    title: str = "Wet/Dry Day Evaluation",
+    title: str = "Wet/Dry Evaluation",
     save_path: Optional[Path] = None,
+    period_noun: str = "day",
 ) -> "plt.Figure":
-    """Four-panel wet/dry day evaluation figure.
+    """Four-panel wet/dry evaluation figure.
 
     Panels:
         1. Confusion matrix (TP/FP/FN/TN counts and rates)
-        2. Scatter plot on observed wet days (y_true ≥ threshold)
-        3. KDE / histogram of wet-day amounts (observed vs predicted)
+        2. Scatter plot on observed wet periods (y_true ≥ threshold)
+        3. KDE / histogram of wet-period amounts (observed vs predicted)
         4. Bar chart of classification skill scores (POD, FAR, CSI, ETS, HSS)
 
     Args:
         y_true: observed rainfall in mm.
         y_pred: predicted rainfall in mm.
-        threshold_mm: wet-day threshold in mm (default 1.0).
+        threshold_mm: wet-period threshold in mm (default 1.0).
         title: figure suptitle.
         save_path: if provided, save and close the figure.
+        period_noun: "day" or "week" — controls labels in titles/legends.
 
     Returns:
         matplotlib Figure.
@@ -1731,7 +1733,7 @@ def plot_wetdry_evaluation(
     hss = _safe(hss_num, hss_denom)
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 11))
-    fig.suptitle(f"{title}\n(wet-day threshold = {threshold_mm:.1f} mm)", fontsize=13, fontweight="bold")
+    fig.suptitle(f"{title}\n(wet-{period_noun} threshold = {threshold_mm:.1f} mm)", fontsize=13, fontweight="bold")
 
     # --- Panel 1: Confusion matrix ---
     ax_cm = axes[0, 0]
@@ -1752,7 +1754,7 @@ def plot_wetdry_evaluation(
                        fontsize=9, color="white" if cm[r, c] > cm.max() * 0.5 else "black")
     fig.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
 
-    # --- Panel 2: Scatter on observed wet days ---
+    # --- Panel 2: Scatter on observed wet periods ---
     ax_sc = axes[0, 1]
     wet_mask = obs_wet
     if wet_mask.sum() >= 2:
@@ -1763,37 +1765,37 @@ def plot_wetdry_evaluation(
         res = yp_w - yt_w
         r2 = float(1.0 - np.sum(res ** 2) / np.sum((yt_w - yt_w.mean()) ** 2)) if yt_w.std() > 0 else float("nan")
         ax_sc.set_title(
-            f"Wet-day scatter (n={int(wet_mask.sum()):,})\n"
+            f"Wet-{period_noun} scatter (n={int(wet_mask.sum()):,})\n"
             f"MAE={float(np.mean(np.abs(res))):.2f} mm  R²={r2:.3f}",
             fontsize=10,
         )
     else:
-        ax_sc.set_title("Wet-day scatter (insufficient data)")
+        ax_sc.set_title(f"Wet-{period_noun} scatter (insufficient data)")
     ax_sc.set_xlabel("Observed (mm)", fontsize=9)
     ax_sc.set_ylabel("Predicted (mm)", fontsize=9)
     ax_sc.set_xlim(left=0)
     ax_sc.set_ylim(bottom=0)
     ax_sc.grid(alpha=0.3)
 
-    # --- Panel 3: KDE of wet-day amounts ---
+    # --- Panel 3: KDE of wet-period amounts ---
     ax_kd = axes[1, 0]
     if wet_mask.sum() >= 5:
         yt_w = yt[wet_mask]
-        # Predicted amounts on observed wet days
+        # Predicted amounts on observed wet periods
         yp_w_obs = yp[wet_mask]
-        # All predicted wet-day amounts (for predicted wet days)
+        # All predicted wet-period amounts (for predicted wet periods)
         yp_w_pred = yp[pred_wet] if pred_wet.sum() >= 2 else np.array([])
 
         q99 = float(np.nanpercentile(yt_w, 99))
         bins = np.linspace(threshold_mm, q99, 40)
         ax_kd.hist(yt_w, bins=bins, alpha=0.55, color="steelblue", density=True,
-                   label=f"Observed wet days (n={int(wet_mask.sum()):,})")
+                   label=f"Observed wet {period_noun}s (n={int(wet_mask.sum()):,})")
         ax_kd.hist(yp_w_obs, bins=bins, alpha=0.55, color="coral", density=True,
                    label=f"Predicted | obs wet (n={int(wet_mask.sum()):,})")
-        ax_kd.set_title(f"Wet-day amount distribution (≥{threshold_mm:.1f} mm)", fontsize=10)
+        ax_kd.set_title(f"Wet-{period_noun} amount distribution (≥{threshold_mm:.1f} mm)", fontsize=10)
         ax_kd.legend(fontsize=8)
     else:
-        ax_kd.set_title("Wet-day distribution (insufficient data)")
+        ax_kd.set_title(f"Wet-{period_noun} distribution (insufficient data)")
     ax_kd.set_xlabel("Rainfall (mm)", fontsize=9)
     ax_kd.set_ylabel("Density", fontsize=9)
     ax_kd.grid(alpha=0.3)

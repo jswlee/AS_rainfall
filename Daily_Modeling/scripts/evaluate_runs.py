@@ -1,8 +1,9 @@
 """
 evaluate_runs.py
 
-Scans Daily_Modeling/output/results and produces a comparative evaluation
-across all training runs. Outputs are saved to Daily_Modeling/output/evaluation/.
+Scans Daily_Modeling/output/<freq>/results and produces a comparative
+evaluation across all training runs.  Outputs are saved to
+Daily_Modeling/output/<freq>/evaluation/  (freq = AS_RAINFALL_FREQ).
 
 Produced files:
   run_summary.txt             - Text summary with hyperparams and all metrics
@@ -21,8 +22,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-RESULTS_DIR = Path(__file__).resolve().parent.parent / "output" / "results"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "evaluation"
+from Daily_Modeling import config
+
+RESULTS_DIR = config.RESULTS_DIR
+OUTPUT_DIR = config.FREQ_OUTPUT_DIR / "evaluation"
 
 FOLD_METRICS = ["r2", "rmse", "mae", "mbe", "spearman_r", "csi"]
 METRIC_LABELS = {

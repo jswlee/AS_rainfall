@@ -36,7 +36,7 @@ HI_STATION_META_PATH = REPO_ROOT / "raw_data" / "HI" / "station_locations.csv"
 AS_META_COLUMNS = [
     "Station", "Organization", "LAT", "LONG", "elev_ft", "elev_src",
     "start_yr", "end_yr", "range", "station_id", "source", "source_unit",
-    "source_freq",
+    "source_freq", "Island",
 ]
 
 # ---------------------------------------------------------------------------
@@ -96,6 +96,9 @@ def _melt_one_month(csv_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     meta = meta.drop_duplicates(subset=["station_id"])
 
     # --- Rainfall: melt wide -> long ---
+    island_map = df.set_index("station_id")["Island"] if "Island" in df.columns else None
+    if island_map is not None:
+        island_map = island_map[~island_map.index.duplicated(keep="first")]
     long_df = df.melt(
         id_vars=["station_id"],
         value_vars=date_cols,
@@ -109,6 +112,8 @@ def _melt_one_month(csv_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     ), errors="coerce")
     long_df = long_df.drop(columns=["date_col"])
     long_df["precip_mm"] = pd.to_numeric(long_df["precip_mm"], errors="coerce")
+    if island_map is not None:
+        long_df["Island"] = long_df["station_id"].map(island_map)
 
     return long_df, meta
 
@@ -163,6 +168,7 @@ def main() -> int:
         out_df = pd.DataFrame({
             "datetime": sdf["date"].dt.strftime("%m/%d/%Y"),
             "precip_mm": sdf["precip_mm"],
+            "Island": sdf["Island"] if "Island" in sdf.columns else np.nan,
         })
         out_df.index = np.arange(1, len(out_df) + 1)
         # Mirror AS file: leading unnamed index column
@@ -205,6 +211,7 @@ def main() -> int:
             "source": "HCDP",
             "source_unit": "mm",
             "source_freq": "daily",
+            "Island": m.get("Island", ""),
         })
     meta_out = pd.DataFrame(rows, columns=AS_META_COLUMNS)
     meta_out = meta_out.dropna(subset=["LAT", "LONG"])

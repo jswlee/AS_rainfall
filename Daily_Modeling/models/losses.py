@@ -74,8 +74,16 @@ class GammaNLL(nn.Module):
         NLL = lgamma(alpha) - (alpha-1)*log(y) + y/beta + alpha*log(beta)
 
     Only applied to samples where y > 0.  Loss computed in float32.
+
+    Args:
+        rainfall_weight: if True, up-weight each wet sample by log1p(y) so that
+            heavy-rain events receive stronger gradient signal (Fix I).
     """
     EPS = 1e-6
+
+    def __init__(self, rainfall_weight: bool = False):
+        super().__init__()
+        self.rainfall_weight = rainfall_weight
 
     def forward(self, raw_params: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         raw_params = raw_params.float()
@@ -93,6 +101,11 @@ class GammaNLL(nn.Module):
         # -log p(y) = lgamma(a) + a*log(b) - (a-1)*log(y) + y/b
         nll = torch.lgamma(a) + a * torch.log(b) - (a - 1) * torch.log(y_pos) + y_pos / b
         nll = torch.where(torch.isfinite(nll), nll, torch.zeros_like(nll))
+        if self.rainfall_weight:
+            # Fix I: log1p-weight heavy rain samples
+            w = torch.log1p(y_pos).detach()
+            w = w / w.mean().clamp(min=1e-8)
+            nll = nll * w
         return nll.mean()
 
 
@@ -105,7 +118,17 @@ class BernoulliGammaNLL(nn.Module):
     inputs while exp overflows float16 at ~11.1.
 
     Loss is computed entirely in float32 regardless of AMP dtype.
-    
+
+    Args:
+        dry_wet_ratio: ratio of dry days to wet days in the training set.
+            Used as pos_weight in BCE to penalize false alarms (Fix A).
+            Default 1.0 (balanced). Pass n_dry/n_wet from training split.
+        lambda_bce: weight on the Bernoulli occurrence loss relative to
+            the Gamma amount loss (Fix C). Default 1.0 (equal weighting).
+            Increase (>1) to penalize occurrence errors more heavily.
+        rainfall_weight: if True, up-weight wet-day Gamma loss by
+            log1p(y) so heavy-rain events get more gradient signal (Fix I).
+
     Numerical stability notes:
     - alpha and beta are clamped to [EPS, MAX_PARAM] to prevent lgamma explosion
     - lgamma(alpha) explodes as alpha -> 0 and grows slowly for large alpha
@@ -115,6 +138,17 @@ class BernoulliGammaNLL(nn.Module):
     EPS = 1e-4  # Increased from 1e-6 for better stability
     MAX_PARAM = 100.0  # Prevent extreme alpha/beta values
     MAX_LOGIT = 10.0  # Clamp logits to prevent BCE overflow
+
+    def __init__(
+        self,
+        dry_wet_ratio: float = 1.0,
+        lambda_bce: float = 1.0,
+        rainfall_weight: bool = False,
+    ):
+        super().__init__()
+        self.dry_wet_ratio = float(dry_wet_ratio)
+        self.lambda_bce = float(lambda_bce)
+        self.rainfall_weight = rainfall_weight
 
     def forward(self, outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         # Force float32 -- lgamma / log are unstable in float16
@@ -129,9 +163,11 @@ class BernoulliGammaNLL(nn.Module):
 
         is_rain = (y > 0).float()
 
-        # Bernoulli component (stable: takes raw logit)
-        loss_prob = F.binary_cross_entropy_with_logits(
-            logit_p, is_rain, reduction="none"
+        # Fix A: pos_weight penalises false alarms proportional to class imbalance
+        pw = torch.tensor(self.dry_wet_ratio, device=logit_p.device, dtype=torch.float32)
+        # Fix C: lambda_bce scales the occurrence loss relative to the amount loss
+        loss_prob = self.lambda_bce * F.binary_cross_entropy_with_logits(
+            logit_p, is_rain, pos_weight=pw, reduction="none"
         )
 
         # Gamma NLL component (Gamma PDF with scale parameterisation)
@@ -143,6 +179,12 @@ class BernoulliGammaNLL(nn.Module):
             - (alpha - 1) * torch.log(target_safe)
             + target_safe / beta
         )
+
+        # Fix I: log1p-weight heavy rain samples in the Gamma term
+        if self.rainfall_weight:
+            w = torch.log1p(target_safe).detach()
+            w = w / w.mean().clamp(min=1e-8)
+            loss_gamma = loss_gamma * w
 
         # Only apply Gamma loss on wet days
         total = loss_prob + is_rain * loss_gamma
@@ -158,7 +200,10 @@ def get_criterion(loss_type: str = "mse", **kwargs) -> nn.Module:
 
     Args:
         loss_type: one of 'mse', 'log_mse', 'tweedie', 'gamma', 'bernoulli_gamma'.
-        **kwargs: passed to the loss constructor (e.g. p=1.5 for Tweedie).
+        **kwargs: passed to the loss constructor.
+            For 'bernoulli_gamma': dry_wet_ratio, lambda_bce, rainfall_weight.
+            For 'gamma': rainfall_weight.
+            For 'tweedie': p, mu_max, loss_cap.
     """
     if loss_type == "mse":
         return nn.MSELoss()
@@ -167,8 +212,8 @@ def get_criterion(loss_type: str = "mse", **kwargs) -> nn.Module:
     elif loss_type == "tweedie":
         return TweedieLoss(**kwargs)
     elif loss_type == "gamma":
-        return GammaNLL()
+        return GammaNLL(**kwargs)
     elif loss_type == "bernoulli_gamma":
-        return BernoulliGammaNLL()
+        return BernoulliGammaNLL(**kwargs)
     else:
         raise ValueError(f"Unknown loss_type: {loss_type!r}")

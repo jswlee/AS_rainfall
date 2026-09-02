@@ -1,0 +1,6 @@
+{
+  "prob_threshold": 0.44829145728643216,
+  "val_ets": 0.36682827953156605,
+  "wet_dry_threshold_mm": 1.0,
+  "n_val_samples": 833
+}

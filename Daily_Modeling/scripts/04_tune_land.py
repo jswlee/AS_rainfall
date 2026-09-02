@@ -93,11 +93,24 @@ def objective(
         "regional_patch_size": rp, "regional_km": rk,
     }
 
+    # Reanalysis patch size is fixed to 3 to match the current NPZ
+    reanalysis_patch_size = 3
+    dem_crop["climate_patch_size"] = reanalysis_patch_size
+
     # Batch-crop all DEM samples once (eliminates per-sample cropping in DataLoader)
     cropped_tensors = precompute_dem_crops(tensors, dem_crop)
     metadata = get_dataset_metadata(cropped_tensors)
 
     output_head = config.LOSS_TO_HEAD[args.loss_type]
+
+    # Fix H: tune lightweight flag (single-layer vs full 2-layer architecture)
+    lightweight = trial.suggest_categorical("lightweight", [True, False])
+
+    # Fix C: lambda_bce is fixed (not tuned) because val_loss is monotonically
+    # lower at lambda_bce=0, making it a degenerate search dimension. Set via
+    # --lambda-bce CLI arg (default 0.15 = keeps Bernoulli head learning without
+    # dominating the Gamma NLL).
+    lambda_bce = args.lambda_bce
 
     # Constrained ranges for small datasets (~65k samples)
     # These prevent overfitting by limiting model capacity and enforcing regularization
@@ -109,14 +122,16 @@ def objective(
         "na": trial.suggest_int("na", 32, 256, step=16),  # Narrow fusion layer (was 16-1024)
         "nb": trial.suggest_int("nb", 16, 64, step=16),   # Secondary fusion (was 16-128)
         "dropout_rate": trial.suggest_float("dropout_rate", 0.3, 0.6, step=0.05),  # Enforce strong dropout
-        "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),  # Narrower LR range
+        "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True),  # Min 1e-5 to converge within 300 epochs
         "weight_decay": trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True),  # Stronger L2 reg minimum
         "batch_size": trial.suggest_categorical("batch_size", [128, 256, 512, 1024]),
         "climate_processing": "conv2d",
         "output_head": output_head,
         "loss_type": args.loss_type,
         "use_batch_norm": args.use_batch_norm,
-        "lightweight": True,  # Always use simplified architecture for small datasets
+        "lightweight": lightweight,
+        "reanalysis_patch_size": reanalysis_patch_size,
+        "lambda_bce": lambda_bce,
         "local_dem_patch": lp, "local_dem_km": lk,
         "regional_dem_patch": rp, "regional_dem_km": rk,
     }
@@ -138,6 +153,17 @@ def objective(
         criterion = get_criterion("tweedie", p=hp.get("tweedie_p", 1.5),
                                   mu_max=hp.get("tweedie_mu_max"),
                                   loss_cap=hp.get("tweedie_loss_cap"))
+    elif args.loss_type == "bernoulli_gamma":
+        # Fix A: class-imbalance pos_weight; Fix C: tuned lambda_bce
+        train_tgts = tensors["targets"][splits["train"]].numpy()
+        n_wet = float(np.sum(train_tgts >= 1.0))
+        n_dry = float(np.sum(train_tgts < 1.0))
+        dry_wet_ratio = n_dry / max(n_wet, 1.0)
+        criterion = get_criterion(
+            "bernoulli_gamma",
+            dry_wet_ratio=dry_wet_ratio,
+            lambda_bce=lambda_bce,
+        )
     else:
         criterion = get_criterion(args.loss_type)
     metric_fn  = make_metric_fn(args.loss_type, output_head, target_scale, opt_metric=args.opt_metric)
@@ -158,6 +184,8 @@ def objective(
         metric_label = f"P{int(args.extreme_percentile)}_abs_rel_bias"
     elif args.opt_metric == "csi":
         metric_label = f"1-CSI@{args.csi_threshold_mm:g}mm"
+    elif args.opt_metric == "val_loss":
+        metric_label = f"val_loss({args.loss_type})"
     else:
         metric_label = args.opt_metric.upper()
 
@@ -206,14 +234,18 @@ def objective(
             verbose=5,
             trial=None,  # no Optuna pruning inside CV folds
             no_early_stopping=args.no_early_stopping,
-            monitor=("val_metric" if args.loss_type != "mse" else "val_loss"),
+            monitor=("val_loss" if (args.loss_type == "mse" or args.opt_metric == "val_loss") else "val_metric"),
             scheduler_type=args.scheduler,
             use_amp=args.amp,
             debug_early_stopping=False,
         )
 
         # --- Score the fold ---
-        if args.loss_type == "mse" and args.opt_metric == "mse":
+        if args.opt_metric == "val_loss":
+            # Use raw validation loss (NLL for BG, MSE for mse) — most principled
+            # when all trials use the same loss scale (same lambda_bce/dry_wet_ratio).
+            fold_score = float(min(history["val_loss"]))
+        elif args.loss_type == "mse" and args.opt_metric == "mse":
             # Shortcut: use normalised validation loss directly
             fold_score = float(min(history["val_loss"]))
         else:
@@ -252,10 +284,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-trials", type=int, default=200)
     parser.add_argument("--study-name", default=None,
-                        help="Study name (default: land_daily_<loss_type>_<opt_metric>_<cv_folds><cv_mode>_<n_trials>)")
-    parser.add_argument("--loss-type", default="bernoulli_gamma",
+                        help="Study name (default: land_<freq>_<loss_type>_<opt_metric>_<cv_folds><cv_mode>_<n_trials>)")
+    parser.add_argument("--loss-type", default=None,
                         choices=["mse", "gamma", "tweedie", "bernoulli_gamma"],
-                        help="Loss / output-head configuration (default: bernoulli_gamma)")
+                        help="Loss / output-head configuration (default: auto — "
+                             "gamma for weekly, bernoulli_gamma for daily)")
     parser.add_argument("--cv-folds", type=int, default=3,
                         help="Number of CV folds per trial (default: 3)")
     parser.add_argument("--cv-mode", default="both",
@@ -267,8 +300,11 @@ def main():
                         help="Aggregation method for fold scores: mean or median (default: mean). "
                              "Median is more robust to outlier folds with hard validation sets.")
     parser.add_argument("--opt-metric", default="mse",
-                        choices=["mae", "mse", "pctl_abs_rel_bias", "csi"],
-                        help="Optuna objective metric (default: mae)")
+                        choices=["mae", "mse", "val_loss", "pctl_abs_rel_bias", "csi"],
+                        help="Optuna objective metric (default: mse). "
+                             "'val_loss' uses the raw validation NLL directly — "
+                             "most principled for bernoulli_gamma but not cross-comparable "
+                             "if lambda_bce varies across trials.")
     parser.add_argument("--extreme-percentile", type=float, default=98.0,
                         help="Percentile for extreme bias metric (default: 98)")
     parser.add_argument("--csi-threshold-mm", type=float, default=50.0,
@@ -298,15 +334,21 @@ def main():
                         help="Maximum epochs per trial (default: 300)")
     parser.add_argument("--patience", type=int, default=30,
                         help="Early stopping patience (default: 60)")
+    parser.add_argument("--lambda-bce", type=float, default=0.15,
+                        help="Fixed weight on the Bernoulli occurrence loss relative to Gamma NLL "
+                             "(default: 0.15). Not tuned — val_loss is monotonically lower at 0, "
+                             "making it a degenerate search dimension.")
     parser.add_argument("--subset-frac", type=float, default=1.0,
                         help="Training subset fraction per fold (default: 1.0)")
     parser.add_argument("--small-batch-processing", action="store_true", default=False,
                         help="Optimise for small batch sizes: pre-stage tensors on GPU and "
                              "use torch.compile to reduce per-step overhead.")
     args = parser.parse_args()
+    if args.loss_type is None:
+        args.loss_type = config.DEFAULT_LOSS_TYPE
     if args.study_name is None:
         args.study_name = (
-            f"land_daily_{args.loss_type}"
+            f"land_{config.FREQ}_{args.loss_type}"
             f"_{args.opt_metric}"
             f"_cv{int(args.cv_folds)}{args.cv_mode}"
             f"_n{int(args.n_trials)}"
@@ -442,6 +484,8 @@ def main():
     best_hp["output_head"] = config.LOSS_TO_HEAD[args.loss_type]
     best_hp["loss_type"] = args.loss_type
     best_hp["use_batch_norm"] = bool(args.use_batch_norm)
+    best_hp.setdefault("reanalysis_patch_size", 3)
+    best_hp["lambda_bce"] = args.lambda_bce
     save_json(best_hp, out_dir / "best_hyperparameters.json")
     save_json({"target_std_mm": target_scale, **stats}, out_dir / "normalization_stats.json")
 

@@ -100,9 +100,10 @@ def main():
                         help="Run name (default: derived from hp-dir directory name, or 'land_final' if no hp-dir)")
     parser.add_argument("--loss-type", default=None,
                         choices=["mse", "gamma", "tweedie", "bernoulli_gamma"],
-                        help="Override loss type (default: read from HP file, else mse)")
-    parser.add_argument("--scheduler", default="none", choices=["cosine", "none"],
-                        help="LR scheduler: none (flat LR, default) or cosine")
+                        help="Override loss type (default: read from HP file, else "
+                             "auto — gamma for weekly, bernoulli_gamma for daily)")
+    parser.add_argument("--scheduler", default="cosine", choices=["cosine", "none"],
+                        help="LR scheduler: cosine (default, matches tuning) or none (flat LR)")
     parser.add_argument("--no-early-stopping", action="store_true",
                         help="Disable early stopping; always train all --epochs")
     parser.add_argument("--ensemble-seeds", type=int, default=5,
@@ -120,8 +121,10 @@ def main():
     parser.add_argument(
         "--monitor",
         default=None,
-        choices=["mse", "rmse", "mae", "pctl_abs_rel_bias", "csi"],
-        help="Metric used to select the best epoch / early stopping. Default: existing behavior (loss for MSE runs, MAE for non-MSE runs).",
+        choices=["val_loss", "mse", "rmse", "mae", "pctl_abs_rel_bias", "csi"],
+        help="Metric used to select the best epoch / early stopping. "
+             "'val_loss' uses the raw NLL/MSE loss directly (most consistent with --opt-metric val_loss). "
+             "Default: existing behavior (loss for MSE runs, MAE for non-MSE runs).",
     )
     parser.add_argument("--num-workers", type=int, default=config.DATALOADER_NUM_WORKERS,
                         help=f"DataLoader num_workers (default: {config.DATALOADER_NUM_WORKERS}).")
@@ -156,6 +159,9 @@ def main():
                         help="Override batch size from tuned HPs")
     parser.add_argument("--learning-rate", type=float, default=None,
                         help="Override learning rate from tuned HPs")
+    parser.add_argument("--lr-scale", type=float, default=1.0,
+                        help="Multiply the tuned LR by this factor (default: 1.0). "
+                             "E.g. --lr-scale 0.1 trains at LR/10 for finer convergence.")
     parser.add_argument("--weight-decay", type=float, default=None,
                         help="Override weight decay from tuned HPs")
     parser.add_argument("--dropout-rate", type=float, default=None,
@@ -169,6 +175,8 @@ def main():
                         help="Batch size for post-training inference dataloaders (default: 512).")
     parser.add_argument("--wet-dry-threshold", type=float, default=1.0,
                         help="Wet-day threshold in mm for wet/dry evaluation (default: 1.0).")
+    parser.add_argument("--rainfall-weight", action="store_true", default=False,
+                        help="Fix I: up-weight heavy-rain samples by log1p(y) in Gamma/BG loss.")
     args = parser.parse_args()
 
     # Derive run-name from hp-dir if not explicitly provided
@@ -231,13 +239,16 @@ def main():
     # Apply CLI overrides
     if args.loss_type is not None:
         hp["loss_type"] = args.loss_type
-    hp.setdefault("loss_type", "mse")
+    hp.setdefault("loss_type", config.DEFAULT_LOSS_TYPE)
     if args.batch_size is not None:
         hp["batch_size"] = args.batch_size
         print(f"Overriding batch_size: {args.batch_size}")
     if args.learning_rate is not None:
         hp["learning_rate"] = args.learning_rate
         print(f"Overriding learning_rate: {args.learning_rate}")
+    if args.lr_scale != 1.0:
+        hp["learning_rate"] = hp["learning_rate"] * args.lr_scale
+        print(f"Scaling learning_rate by {args.lr_scale}: {hp['learning_rate']:.2e}")
     if args.weight_decay is not None:
         hp["weight_decay"] = args.weight_decay
         print(f"Overriding weight_decay: {args.weight_decay}")
@@ -259,15 +270,21 @@ def main():
     print(f"Hyperparameters: {json.dumps(hp, indent=2)}")
 
     # Build DEM crop config from HPs (handles both index and explicit keys)
-    dem_crop = config.resolve_dem_crop(hp)
-    if dem_crop is not None:
+    dem_crop = config.resolve_dem_crop(hp) or {}
+    # Fix F: apply climate centre-crop if tuned
+    if "reanalysis_patch_size" in hp:
+        dem_crop["climate_patch_size"] = int(hp["reanalysis_patch_size"])
+    if dem_crop.get("local_patch_size"):
         lp = dem_crop["local_patch_size"]
         rp = dem_crop["regional_patch_size"]
         print(f"DEM crop: local={lp}x{lp}@{dem_crop['local_km']}km  "
               f"regional={rp}x{rp}@{dem_crop['regional_km']}km")
+    if "climate_patch_size" in dem_crop:
+        print(f"Climate crop: {dem_crop['climate_patch_size']}x{dem_crop['climate_patch_size']}")
+    dem_crop_arg = dem_crop if dem_crop else None
 
     # Batch-crop all DEM samples once (eliminates per-sample cropping in DataLoader)
-    cropped_tensors = precompute_dem_crops(tensors, dem_crop)
+    cropped_tensors = precompute_dem_crops(tensors, dem_crop_arg)
     metadata = get_dataset_metadata(cropped_tensors)
 
     out_dir = config.RESULTS_DIR / args.run_name
@@ -288,6 +305,22 @@ def main():
         criterion = get_criterion("tweedie", p=hp["tweedie_p"],
                                   mu_max=args.tweedie_mu_max,
                                   loss_cap=args.tweedie_loss_cap)
+    elif loss_type == "bernoulli_gamma":
+        # Fix A: compute dry/wet ratio from training targets for pos_weight
+        train_targets_mm = tensors["targets"][splits["train"]].numpy()
+        n_wet = float(np.sum(train_targets_mm >= 1.0))
+        n_dry = float(np.sum(train_targets_mm < 1.0))
+        dry_wet_ratio = n_dry / max(n_wet, 1.0)
+        lambda_bce = float(hp.get("lambda_bce", 1.0))
+        print(f"  dry_wet_ratio={dry_wet_ratio:.3f}  lambda_bce={lambda_bce:.2f}")
+        criterion = get_criterion(
+            "bernoulli_gamma",
+            dry_wet_ratio=dry_wet_ratio,
+            lambda_bce=lambda_bce,
+            rainfall_weight=args.rainfall_weight,
+        )
+    elif loss_type == "gamma":
+        criterion = get_criterion("gamma", rainfall_weight=args.rainfall_weight)
     else:
         criterion = get_criterion(loss_type)
 
@@ -317,7 +350,9 @@ def main():
 
     if args.monitor is not None:
         m = args.monitor
-        if m == "mse":
+        if m == "val_loss":
+            monitor = "val_loss"
+        elif m == "mse":
             if metric_fn is None:
                 # For MSE training runs, validation loss is already MSE (in normalized units).
                 monitor = "val_loss"

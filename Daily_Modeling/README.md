@@ -68,6 +68,59 @@ python -m Daily_Modeling.scripts.08_train_site_mlp
 python -m Daily_Modeling.scripts.09_evaluate_compare
 ```
 
+## Weekly aggregation
+
+The pipeline can model ISO calendar weeks (Monday–Sunday) instead of days.
+Step 01 is unchanged — weekly samples are built from the same daily features.
+
+```bash
+# Assemble a weekly dataset (rainfall summed; each reanalysis channel reduced
+# to its within-week mean and std, so the channel count doubles).
+python -m Daily_Modeling.scripts.02_assemble_dataset --freq weekly
+
+# Every downstream script reads the matching NPZ via this env var
+$env:AS_RAINFALL_FREQ = "weekly"          # PowerShell
+export AS_RAINFALL_FREQ=weekly            # bash
+
+python -m Daily_Modeling.scripts.03b_inspect_dataset
+python -m Daily_Modeling.scripts.04_tune_land --n-trials 100
+python -m Daily_Modeling.scripts.06_train_land \
+    --hp-dir Daily_Modeling/output/weekly/tuning/land_weekly_gamma_... \
+    --run-name land_weekly_gamma
+```
+
+There is no `--freq` flag on steps 03-11: they all follow `AS_RAINFALL_FREQ`.
+Only step 02 takes `--freq`, because it is the step that builds the dataset.
+
+**Loss type defaults to `gamma` for weekly** (vs `bernoulli_gamma` for daily).
+Weekly rainfall is almost never zero (~96-100% of weeks are wet at 1mm), so the
+Bernoulli wet/dry gate has no signal and the Gamma NLL alone is the standard
+loss for strictly-positive, right-skewed aggregates.  The default is applied
+automatically via `config.DEFAULT_LOSS_TYPE`; pass `--loss-type` to override.
+
+Notes:
+
+- `--min-days-per-week` (default 7) sets how many daily records a week needs to
+  be kept; incomplete weeks are dropped, and the kept count is stored in the
+  NPZ as `n_days`.  `AS_RAINFALL_MIN_DAYS_PER_WEEK` sets the default.
+- Weeks are stamped with the date of their Monday, so `years`/`months`/`days`
+  and the month one-hot keep the same meaning for splits and plots.
+- `variables` are suffixed `_mean` / `_std`.  Because the LAND climate branch
+  uses a grouped conv, **`climate_units` must be divisible by the channel
+  count** — 30 for weekly vs 15 for daily.  `04_tune_land` derives its search
+  space from the data (`num_climate_vars`) and handles this automatically;
+  only the hardcoded `LAND_DEFAULT_HP` (`climate_units=64`) does not, so pass
+  `--hp-dir` when training weekly rather than relying on the defaults.
+- Outputs are fully separated by resolution, so daily and weekly runs never
+  overwrite each other:
+
+  ```
+  output/
+    features/                 # shared - step 01, frequency-independent
+    daily/{assembled,eda,tuning,results,evaluation}/
+    weekly/{assembled,eda,tuning,results,evaluation}/
+  ```
+
 ## SiteGLU: gated feature mixing without recurrent overhead
 
 This repository includes an optional site model called **`SiteGLU`** (defined in

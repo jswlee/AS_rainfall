@@ -144,8 +144,10 @@ def main():
     # Try to load months from the assembled dataset
     try:
         # Accept either naming convention
-        for _cand in ("daily_dataset.npz", "daily_dataset_station_centered.npz"):
-            npz_path = config.ASSEMBLED_DIR / _cand
+        for _cand in (config.DATASET_NPZ,
+                      config.ASSEMBLED_DIR / "daily_dataset.npz",
+                      config.ASSEMBLED_DIR / "daily_dataset_station_centered.npz"):
+            npz_path = _cand
             if npz_path.exists():
                 break
         z = np.load(str(npz_path), allow_pickle=True)

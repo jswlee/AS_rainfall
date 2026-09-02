@@ -61,7 +61,14 @@ def load_reanalysis_datasets() -> Dict[str, xr.Dataset]:
     # Collect all unique NC paths (including primary files needed for multiply)
     nc_paths_needed: set = set()
     for _, cfg in config.DAILY_VARIABLE_CONFIGS.items():
-        if "depends_on" in cfg:
+        op = cfg.get("operation")
+        if op == "divergence":
+            # Fix E: divergence uses u_variable + v_variable, not 'variable'
+            u_file = config.VARIABLE_MAPPING[cfg["u_variable"]]
+            v_file = config.VARIABLE_MAPPING[cfg["v_variable"]]
+            nc_paths_needed.add(str(config.REANALYSIS_DIR / f"{u_file}.day.mean.nc"))
+            nc_paths_needed.add(str(config.REANALYSIS_DIR / f"{v_file}.day.mean.nc"))
+        elif "depends_on" in cfg:
             # Multiply ops need the base file
             base_file_name = config.VARIABLE_MAPPING[cfg["variable"]]
             nc_paths_needed.add(str(config.REANALYSIS_DIR / f"{base_file_name}.day.mean.nc"))
@@ -173,6 +180,11 @@ def build_reanalysis_patches(
             hum_nc = str(_get_nc_path(hum_cfg))
             lev = cfg.get("level")
             channel_specs.append(("multiply", primary_nc, hum_nc, lev))
+        elif op == "divergence":
+            # Fix E: horizontal wind divergence du/dx + dv/dy
+            u_nc = str(config.REANALYSIS_DIR / f"{config.VARIABLE_MAPPING[cfg['u_variable']]}.day.mean.nc")
+            v_nc = str(config.REANALYSIS_DIR / f"{config.VARIABLE_MAPPING[cfg['v_variable']]}.day.mean.nc")
+            channel_specs.append(("divergence", u_nc, cfg["u_level"], v_nc, cfg["v_level"]))
         else:
             nc = str(_get_nc_path(cfg))
             lev = cfg.get("level")
@@ -189,6 +201,11 @@ def build_reanalysis_patches(
                 missing_cubes.add(spec[1])
             if spec[2] not in cubes:
                 missing_cubes.add(spec[2])
+        elif spec[0] == "divergence":
+            if spec[1] not in cubes:
+                missing_cubes.add(spec[1])
+            if spec[3] not in cubes:
+                missing_cubes.add(spec[3])
         else:
             if spec[1] not in cubes:
                 missing_cubes.add(spec[1])
@@ -233,6 +250,22 @@ def build_reanalysis_patches(
                         ok = False; break
                     field = wf * hf
                     gi, gj = grids[primary_nc]
+                elif spec[0] == "divergence":
+                    # Fix E: du/dx + dv/dy via central finite differences on the grid
+                    _, u_nc, u_lev, v_nc, v_lev = spec
+                    ucube = cubes.get(u_nc)
+                    vcube = cubes.get(v_nc)
+                    if ucube is None or vcube is None:
+                        ok = False; break
+                    uf = ucube.get_field(dt, level=u_lev)
+                    vf = vcube.get_field(dt, level=v_lev)
+                    if uf is None or vf is None:
+                        ok = False; break
+                    # Central differences: pad edges with forward/backward difference
+                    du_dx = np.gradient(uf, axis=1)   # d/d(col) ~ d/dx
+                    dv_dy = np.gradient(vf, axis=0)   # d/d(row) ~ d/y (sign: N->S rows)
+                    field = du_dx + dv_dy
+                    gi, gj = grids[u_nc]
                 else:
                     _, nc, lev = spec
                     cube = cubes.get(nc)

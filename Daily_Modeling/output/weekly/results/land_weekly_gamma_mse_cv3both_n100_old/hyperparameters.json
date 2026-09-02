@@ -1,0 +1,20 @@
+{
+  "local_dem_cfg": 0,
+  "regional_dem_cfg": 2,
+  "lightweight": false,
+  "climate_units": 120,
+  "dem_units": 64,
+  "dem_patch_size": 9,
+  "temporal_units": 16,
+  "na": 240,
+  "nb": 32,
+  "dropout_rate": 0.4,
+  "learning_rate": 1.679386685770158e-05,
+  "weight_decay": 0.0006786615807521817,
+  "batch_size": 128,
+  "loss_type": "gamma",
+  "output_head": "gamma",
+  "climate_processing": "conv2d",
+  "tweedie_p": 1.5,
+  "use_batch_norm": false
+}

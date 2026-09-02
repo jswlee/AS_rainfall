@@ -38,6 +38,71 @@ def decode_head_output(outputs: torch.Tensor, output_head: str) -> torch.Tensor:
 
 
 @torch.no_grad()
+def collect_bg_logits(
+    model: nn.Module, loader, device
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Collect raw logit_p values and targets from a bernoulli_gamma model.
+
+    Returns (logit_p_np, targets_np) in normalised units.
+    """
+    model.eval()
+    logits, targets = [], []
+    for features, tgt in loader:
+        features = {k: torch.nan_to_num(v.to(device)) for k, v in features.items()}
+        out = model(features).float()
+        logits.append(out[:, 0].cpu().numpy().ravel())
+        targets.append(tgt.cpu().numpy().ravel())
+    return np.concatenate(logits), np.concatenate(targets)
+
+
+def calibrate_threshold(
+    logit_p: np.ndarray,
+    targets_mm: np.ndarray,
+    threshold_mm: float = 1.0,
+    n_steps: int = 200,
+) -> Tuple[float, float]:
+    """Find the logit_p threshold that maximises ETS on a validation set.
+
+    Sweeps ``n_steps`` candidate probability thresholds in (0.01, 0.99),
+    converts each to the corresponding logit, and picks the one with the
+    highest Equitable Threat Score (ETS) for wet-day detection.
+
+    Args:
+        logit_p:      raw logit values from the bernoulli_gamma head (N,).
+        targets_mm:   observed rainfall in mm (N,).
+        threshold_mm: wet-day observation threshold in mm (default 1.0).
+        n_steps:      number of probability thresholds to evaluate.
+
+    Returns:
+        (best_prob_threshold, best_ets) — the optimal probability threshold
+        and its ETS score on the calibration set.
+    """
+    obs_wet = targets_mm >= threshold_mm
+    n = float(len(obs_wet))
+    n_obs_wet = float(obs_wet.sum())
+    if n_obs_wet == 0 or n_obs_wet == n:
+        return 0.5, float("nan")
+
+    probs = torch.sigmoid(torch.tensor(logit_p, dtype=torch.float32)).numpy()
+
+    best_ets = -np.inf
+    best_prob = 0.5
+    for p_thr in np.linspace(0.01, 0.99, n_steps):
+        pred_wet = probs >= p_thr
+        tp = float(np.sum(obs_wet & pred_wet))
+        fp = float(np.sum(~obs_wet & pred_wet))
+        fn = float(np.sum(obs_wet & ~pred_wet))
+        tc = (tp + fp) * n_obs_wet / n
+        denom = tp + fp + fn - tc
+        ets = (tp - tc) / denom if denom > 0 else -np.inf
+        if ets > best_ets:
+            best_ets = ets
+            best_prob = float(p_thr)
+
+    return best_prob, float(best_ets)
+
+
+@torch.no_grad()
 def predict(model: nn.Module, loader, device, output_head: str = "softplus") -> tuple:
     """Run inference.  Returns (preds, targets) as numpy arrays in normalised units.
 
@@ -49,6 +114,39 @@ def predict(model: nn.Module, loader, device, output_head: str = "softplus") -> 
         features = {k: torch.nan_to_num(v.to(device)) for k, v in features.items()}
         out = model(features)
         pred = decode_head_output(out, output_head)
+        preds.append(pred.cpu().numpy().ravel())
+        targets.append(tgt.cpu().numpy().ravel())
+    return np.concatenate(preds), np.concatenate(targets)
+
+
+@torch.no_grad()
+def predict_bg_calibrated(
+    model: nn.Module,
+    loader,
+    device,
+    prob_threshold: float = 0.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Inference for bernoulli_gamma head using a calibrated probability threshold.
+
+    Returns (preds, targets) in normalised units.  On days where
+    sigmoid(logit_p) < prob_threshold, the predicted amount is set to 0
+    (model predicts dry).  On wet days the prediction is alpha * beta.
+
+    Args:
+        prob_threshold: calibrated wet-day probability threshold (from
+            ``calibrate_threshold`` on the validation set).
+    """
+    model.eval()
+    preds, targets = [], []
+    for features, tgt in loader:
+        features = {k: torch.nan_to_num(v.to(device)) for k, v in features.items()}
+        out = model(features).float()
+        p_rain = torch.sigmoid(out[:, 0])                               # (B,)
+        alpha = torch.nn.functional.softplus(out[:, 1]).clamp(min=1e-6) # (B,)
+        beta = torch.nn.functional.softplus(out[:, 2]).clamp(min=1e-6)  # (B,)
+        amount = alpha * beta                                            # (B,)
+        # Zero out predictions where p_rain < calibrated threshold
+        pred = torch.where(p_rain >= prob_threshold, amount, torch.zeros_like(amount))
         preds.append(pred.cpu().numpy().ravel())
         targets.append(tgt.cpu().numpy().ravel())
     return np.concatenate(preds), np.concatenate(targets)
@@ -113,8 +211,9 @@ def run_wetdry_evaluation(
     out_dir: Path,
     split_name: str,
     threshold_mm: float = 1.0,
+    period_noun: str = "day",
 ) -> dict:
-    """Compute and save wet/dry day metrics + visualization for one split.
+    """Compute and save wet/dry metrics + visualization for one split.
 
     Saves:
         ``<out_dir>/wetdry_metrics_<split_name>.json``
@@ -125,7 +224,8 @@ def run_wetdry_evaluation(
         y_pred: predicted (ensemble mean) rainfall in mm.
         out_dir: directory to write outputs into.
         split_name: label used in filenames and titles (e.g. 'test_temporal').
-        threshold_mm: wet-day threshold in mm (default 1.0).
+        threshold_mm: wet-period threshold in mm (default 1.0).
+        period_noun: "day" or "week" — controls labels in plot titles/legends.
 
     Returns:
         Metrics dict from ``compute_wetdry_metrics``.
@@ -155,6 +255,7 @@ def run_wetdry_evaluation(
         threshold_mm=threshold_mm,
         title=f"Wet/Dry Evaluation — {split_name}",
         save_path=out_dir / f"wetdry_eval_{split_name}.png",
+        period_noun=period_noun,
     )
     return m
 
@@ -315,6 +416,21 @@ def run_ensemble_inference_from_dir(
             f"regional={rp}x{rp}@{dem_crop['regional_km']}km"
         )
 
+    # Fix F: apply the same climate centre-crop used during training so the
+    # reconstructed model's climate branch matches the saved checkpoint shape.
+    if "reanalysis_patch_size" in hp:
+        if dem_crop is None:
+            dem_crop = {}
+        cps = int(hp["reanalysis_patch_size"])
+        dem_crop["climate_patch_size"] = cps
+        climate_shape = tuple(metadata.get("climate_shape", (15, 3, 3)))
+        if len(climate_shape) == 3:
+            c, h, w = climate_shape
+            # Cannot crop larger than source (mirrors crop_climate_patch guard)
+            eff = min(cps, h, w)
+            metadata["climate_shape"] = (c, eff, eff)
+            print(f"Climate crop: {eff}x{eff}")
+
     split_indices: Dict[str, np.ndarray] = {}
     if splits in ("temporal", "both"):
         split_indices["test_temporal"] = sp.get("test_temporal", np.array([], dtype=int))
@@ -337,6 +453,49 @@ def run_ensemble_inference_from_dir(
     print(f"Found {len(ckpts)} checkpoint(s)")
 
     output_head = hp.get("output_head", "softplus")
+
+    # Fix B: calibrate wet-day probability threshold for bernoulli_gamma head
+    calibrated_prob_threshold: Optional[float] = None
+    if output_head == "bernoulli_gamma":
+        val_cal_idx = sp.get("val_temporal", np.array([], dtype=int))
+        if len(val_cal_idx) > 0:
+            cal_loaders = make_dataloaders(
+                tensors, {"val_cal": val_cal_idx},
+                target_scale=target_scale,
+                batch_size=batch_size,
+                dem_crop_config=dem_crop,
+            )
+            cal_loader = cal_loaders.get("val_cal")
+            if cal_loader is not None and len(cal_loader.dataset) > 0:
+                print("Calibrating wet-day probability threshold on val_temporal ...")
+                all_logits: List[np.ndarray] = []
+                cal_targets_mm: Optional[np.ndarray] = None
+                for ckpt_path in ckpts:
+                    cal_model = create_land_model(hp, metadata).to(device)
+                    cal_model = load_model_state(ckpt_path, cal_model)
+                    lp_arr, tgt_arr = collect_bg_logits(cal_model, cal_loader, device)
+                    all_logits.append(lp_arr)
+                    if cal_targets_mm is None:
+                        cal_targets_mm = tgt_arr * target_scale
+                # Average logits across ensemble before calibrating
+                mean_logits = np.mean(np.stack(all_logits, axis=0), axis=0)
+                calibrated_prob_threshold, cal_ets = calibrate_threshold(
+                    mean_logits, cal_targets_mm, threshold_mm=wet_dry_threshold_mm
+                )
+                print(
+                    f"  Calibrated threshold: p_rain >= {calibrated_prob_threshold:.3f}"
+                    f"  (val ETS={cal_ets:.4f})"
+                )
+                save_json(
+                    {
+                        "prob_threshold": calibrated_prob_threshold,
+                        "val_ets": cal_ets,
+                        "wet_dry_threshold_mm": wet_dry_threshold_mm,
+                        "n_val_samples": int(len(cal_targets_mm)),
+                    },
+                    out_dir / "calibrated_threshold.json",
+                )
+
     all_metrics: dict = {}
     split_outputs: dict = {}
 
@@ -347,7 +506,12 @@ def run_ensemble_inference_from_dir(
         for ckpt_path in ckpts:
             model = create_land_model(hp, metadata).to(device)
             model = load_model_state(ckpt_path, model)
-            yp, yt = predict(model, loader, device, output_head=output_head)
+            if calibrated_prob_threshold is not None:
+                yp, yt = predict_bg_calibrated(
+                    model, loader, device, prob_threshold=calibrated_prob_threshold
+                )
+            else:
+                yp, yt = predict(model, loader, device, output_head=output_head)
             model_preds_mm.append(yp * target_scale)
             if yt_mm_ref is None:
                 yt_mm_ref = yt * target_scale
@@ -413,8 +577,10 @@ def run_ensemble_inference_from_dir(
             )
             all_metrics["test_all"] = m_all
 
-    # --- Wet/dry day evaluation ---
-    print("\n--- Wet/dry day evaluation ---")
+    # --- Wet/dry evaluation ---
+    from Daily_Modeling import config as _cfg
+    period_noun = "week" if _cfg.FREQ == "weekly" else "day"
+    print(f"\n--- Wet/dry {period_noun} evaluation ---")
     wetdry_all_metrics: dict = {}
     for split_name, data in split_outputs.items():
         wd = run_wetdry_evaluation(
@@ -423,6 +589,7 @@ def run_ensemble_inference_from_dir(
             out_dir=out_dir,
             split_name=split_name,
             threshold_mm=wet_dry_threshold_mm,
+            period_noun=period_noun,
         )
         wetdry_all_metrics[split_name] = wd
 
@@ -435,6 +602,7 @@ def run_ensemble_inference_from_dir(
             out_dir=out_dir,
             split_name="test_all",
             threshold_mm=wet_dry_threshold_mm,
+            period_noun=period_noun,
         )
         wetdry_all_metrics["test_all"] = wd_all
 

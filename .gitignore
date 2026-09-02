@@ -15,4 +15,5 @@ other_LAND_files/
 *.pth
 *.npz
 ideas.txt
-*output/
+# *output/
+Daily_Modeling_copy/

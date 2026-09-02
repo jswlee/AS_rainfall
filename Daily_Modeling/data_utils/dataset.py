@@ -12,6 +12,29 @@ from torch.utils.data import Dataset, DataLoader
 from Daily_Modeling import config
 
 
+def crop_climate_patch(
+    patches: torch.Tensor,
+    target_size: int,
+) -> torch.Tensor:
+    """Centre-crop reanalysis patches from (N, C, H, W) or (C, H, W) to target_size.
+
+    Args:
+        patches: (..., C, H, W) tensor of reanalysis patches.
+        target_size: desired spatial size (H=W=target_size).
+
+    Returns:
+        (..., C, target_size, target_size) tensor.
+    """
+    h, w = patches.shape[-2], patches.shape[-1]
+    # Cannot crop to a size larger than (or equal to) the source — return as-is.
+    # Guards against negative-start slicing that silently yields a 1x1 patch.
+    if target_size >= h or target_size >= w:
+        return patches
+    r0 = (h - target_size) // 2
+    c0 = (w - target_size) // 2
+    return patches[..., r0:r0 + target_size, c0:c0 + target_size]
+
+
 def crop_dem_patch(
     patch: torch.Tensor,
     target_size: int,
@@ -43,11 +66,14 @@ def precompute_dem_crops(
     tensors: Dict[str, torch.Tensor],
     dem_crop_config: Optional[dict] = None,
 ) -> Dict[str, torch.Tensor]:
-    """Batch-crop DEM tensors upfront so ``__getitem__`` is pure indexing.
+    """Batch-crop DEM and optionally climate tensors upfront.
 
     Works on both per-station DEM tables (S_stations, C, H, W) and the legacy
-    per-sample layout.  Returns a shallow copy of *tensors* with ``local_dem``
-    and ``regional_dem`` replaced by their cropped versions.
+    per-sample layout.  Returns a shallow copy of *tensors* with ``local_dem``,
+    ``regional_dem``, and optionally ``climate`` replaced by cropped versions.
+
+    Fix F: pass ``climate_patch_size`` in *dem_crop_config* to centre-crop
+    reanalysis patches to a smaller spatial extent (e.g. 3->3, 5->5).
     """
     if dem_crop_config is None:
         return tensors
@@ -63,6 +89,11 @@ def precompute_dem_crops(
             tensors["regional_dem"],
             dem_crop_config["regional_patch_size"],
             dem_crop_config["regional_km"],
+        )
+    # Fix F: centre-crop climate patches to the requested spatial size
+    if "climate_patch_size" in dem_crop_config:
+        out["climate"] = crop_climate_patch(
+            tensors["climate"], dem_crop_config["climate_patch_size"]
         )
     return out
 
@@ -174,6 +205,11 @@ def get_dataset_metadata(
         if "regional_patch_size" in dem_crop_config:
             rp = dem_crop_config["regional_patch_size"]
             meta["regional_dem_shape"] = (n_dem_bands, rp, rp) if n_dem_bands > 1 else (rp, rp)
+        # Fix F: reflect climate crop in metadata
+        if "climate_patch_size" in dem_crop_config:
+            cp = int(dem_crop_config["climate_patch_size"])
+            n_cv = int(c.shape[1])
+            meta["climate_shape"] = (n_cv, cp, cp)
     return meta
 
 
@@ -198,7 +234,7 @@ def load_tensors_from_npz(
         metadata: dict of numpy arrays {stations, years, months, days, variables}.
     """
     if npz_path is None:
-        npz_path = config.ASSEMBLED_DIR / "daily_dataset_station_centered.npz"
+        npz_path = config.DATASET_NPZ
     z = np.load(str(npz_path), allow_pickle=True)
 
     tensors = {
@@ -358,7 +394,7 @@ def print_normalization_report(
     # --- Temporal ---
     temp = tensors["temporal"]
     print(f"\n  temporal: shape={tuple(temp.shape)}")
-    print(f"    min={temp.min():.4f}  max={temp.max():.4f}  (not normalised, one-hot)")
+    print(f"    min={temp.min():.4f}  max={temp.max():.4f}  (not normalised: cols 0-11=one-hot, 12-13=sin/cos)")
 
     # --- Targets ---
     targets = tensors["targets"]

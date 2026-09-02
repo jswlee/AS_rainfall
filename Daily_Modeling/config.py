@@ -69,17 +69,59 @@ def get_dem_path_for_station(station_name: str):
     return DEM_PATHS_BY_REGION[region]
 
 # ---------------------------------------------------------------------------
+# Temporal resolution of the modelling dataset
+# ---------------------------------------------------------------------------
+# "daily" (default) or "weekly" (ISO calendar weeks, Monday-Sunday).
+# Override with the AS_RAINFALL_FREQ environment variable so every script in
+# Daily_Modeling/scripts picks up the matching dataset and output tree.
+FREQ = _os.environ.get("AS_RAINFALL_FREQ", "daily").lower()
+if FREQ not in ("daily", "weekly"):
+    raise ValueError(f"AS_RAINFALL_FREQ must be 'daily' or 'weekly', got '{FREQ}'")
+
+# Minimum daily records required to keep an ISO week when FREQ == "weekly".
+WEEKLY_MIN_DAYS = int(_os.environ.get("AS_RAINFALL_MIN_DAYS_PER_WEEK", "7"))
+
+# ---------------------------------------------------------------------------
 # Output paths (all under Daily_Modeling/output/)
 # ---------------------------------------------------------------------------
+# Everything that depends on the temporal resolution lives under
+# output/<freq>/ so daily and weekly runs never overwrite each other.
+# output/features/ is shared: step 01 builds per-station-day patches that both
+# resolutions are derived from.
 OUTPUT_DIR = _THIS_DIR / "output"
 FEATURES_DIR = OUTPUT_DIR / "features"
-ASSEMBLED_DIR = OUTPUT_DIR / "assembled"
-EDA_DIR = OUTPUT_DIR / "eda"
-TUNING_DIR = OUTPUT_DIR / "tuning"
-RESULTS_DIR = OUTPUT_DIR / "results"
 
-for _d in (OUTPUT_DIR, FEATURES_DIR, ASSEMBLED_DIR, EDA_DIR, TUNING_DIR, RESULTS_DIR):
+FREQ_OUTPUT_DIR = OUTPUT_DIR / FREQ
+ASSEMBLED_DIR = FREQ_OUTPUT_DIR / "assembled"
+EDA_DIR = FREQ_OUTPUT_DIR / "eda"
+TUNING_DIR = FREQ_OUTPUT_DIR / "tuning"
+RESULTS_DIR = FREQ_OUTPUT_DIR / "results"
+
+for _d in (OUTPUT_DIR, FEATURES_DIR, FREQ_OUTPUT_DIR,
+           ASSEMBLED_DIR, EDA_DIR, TUNING_DIR, RESULTS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
+
+DATASET_NPZ = ASSEMBLED_DIR / f"{FREQ}_dataset_station_centered.npz"
+
+
+def assembled_dir_for(freq: str):
+    """Return the assembled-dataset directory for *freq*, creating it.
+
+    Use this instead of ``ASSEMBLED_DIR`` when a caller works with an explicit
+    frequency (e.g. ``02_assemble_dataset --freq weekly``), so the output lands
+    in the right tree regardless of what AS_RAINFALL_FREQ is set to.
+    """
+    freq = freq.lower()
+    if freq not in ("daily", "weekly"):
+        raise ValueError(f"freq must be 'daily' or 'weekly', got '{freq}'")
+    d = OUTPUT_DIR / freq / "assembled"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def dataset_npz_for(freq: str):
+    """Return the assembled NPZ path for *freq*."""
+    return assembled_dir_for(freq) / f"{freq.lower()}_dataset_station_centered.npz"
 
 # ---------------------------------------------------------------------------
 # DEM patch configuration  (same as existing pipeline)
@@ -191,10 +233,10 @@ DAILY_VARIABLE_CONFIGS = {
         "description": "Omega (vertical velocity) 500 hPa",
         "variable": "Omega", "level": 500,
     },
-    # "pottmp_diff_500_1000": {
-    #     "description": "Potential temperature difference 500-1000 hPa",
-    #     "variable": "Potential Temperature", "levels": [500, 1000], "operation": "diff",
-    # },
+    "pottmp_diff_500_1000": {
+        "description": "Potential temperature difference 500-1000 hPa",
+        "variable": "Potential Temperature", "levels": [500, 1000], "operation": "diff",
+    },
     "pottmp_diff_850_1000": {
         "description": "Potential temperature difference 850-1000 hPa",
         "variable": "Potential Temperature", "levels": [850, 1000], "operation": "diff",
@@ -235,6 +277,12 @@ DAILY_VARIABLE_CONFIGS = {
         "depends_on": ["shum_925"],
         "variable": "Meridional Wind", "level": 925,
         "operation": "multiply", "multiply_with": "shum_925",
+    },
+    "wind_div_925": {
+        "description": "Horizontal wind divergence at 925 hPa (du/dx + dv/dy, finite differences)",
+        "operation": "divergence",
+        "u_variable": "Zonal Wind", "u_level": 925,
+        "v_variable": "Meridional Wind", "v_level": 925,
     },
     "skin_temp": {
         "description": "Skin temperature",
@@ -283,6 +331,12 @@ LOSS_TO_HEAD = {
     "tweedie": "softplus",
     "bernoulli_gamma": "bernoulli_gamma",
 }
+
+# Default loss type depends on temporal resolution:
+#   daily  -> bernoulli_gamma (zero-inflated: hurdle model with wet/dry gate)
+#   weekly -> gamma           (almost no zero weeks: strictly positive, right-skewed)
+# The --loss-type CLI flag on 04_tune_land / 06_train_land overrides this.
+DEFAULT_LOSS_TYPE = "gamma" if FREQ == "weekly" else "bernoulli_gamma"
 
 LAND_DEFAULT_HP = {
     # Conservative defaults for ~65k samples (prevents overfitting)

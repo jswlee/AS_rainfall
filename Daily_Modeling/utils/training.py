@@ -51,8 +51,10 @@ class CosineWarmup:
         self.opt = optimizer
         self.warmup = warmup
         self.total = total
-        self.min_lr = min_lr
         self.base_lr = optimizer.param_groups[0]["lr"]
+        # If the absolute floor >= base_lr, fall back to base_lr/10 so cosine
+        # provides meaningful decay without dropping so low the model stalls.
+        self.min_lr = min(min_lr, self.base_lr / 10.0)
 
     def step(self, epoch: int):
         if epoch < self.warmup:
