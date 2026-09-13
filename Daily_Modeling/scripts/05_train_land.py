@@ -1,4 +1,4 @@
-"""Step 6: Train the LAND model with the best hyperparameters.
+"""Step 5: Train the LAND model with the best hyperparameters.
 
 Supports four loss / output-head configurations:
   - mse:             softplus head, MSE loss

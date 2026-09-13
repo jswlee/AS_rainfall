@@ -1,4 +1,4 @@
-"""Step 7: Run ensemble inference for a trained LAND run directory.
+"""Step 6: Run ensemble inference for a trained LAND run directory.
 
 Thin CLI wrapper around ``Daily_Modeling.utils.inference.run_ensemble_inference_from_dir``.
 All inference logic lives in that function; this script is kept only as a
