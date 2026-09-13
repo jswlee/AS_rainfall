@@ -74,7 +74,7 @@ def get_dem_path_for_station(station_name: str):
 # "daily" (default) or "weekly" (ISO calendar weeks, Monday-Sunday).
 # Override with the AS_RAINFALL_FREQ environment variable so every script in
 # Daily_Modeling/scripts picks up the matching dataset and output tree.
-FREQ = _os.environ.get("AS_RAINFALL_FREQ", "daily").lower()
+FREQ = _os.environ.get("AS_RAINFALL_FREQ", "weekly").lower()
 if FREQ not in ("daily", "weekly"):
     raise ValueError(f"AS_RAINFALL_FREQ must be 'daily' or 'weekly', got '{FREQ}'")
 
@@ -340,7 +340,8 @@ DEFAULT_LOSS_TYPE = "gamma" if FREQ == "weekly" else "bernoulli_gamma"
 
 LAND_DEFAULT_HP = {
     # Conservative defaults for ~65k samples (prevents overfitting)
-    "climate_units": 64,      # Was 128 - reduce for small dataset
+    "climate_units": 60,      # Multiple of 30 weekly channels (was 64)
+
     "dem_units": 32,          # Was 64 - reduce DEM complexity
     "dem_patch_size": 10,
     "temporal_units": 8,      # Was 16 - month encoding can be simpler
