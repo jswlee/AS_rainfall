@@ -433,13 +433,8 @@ def build_dem_patches(
 ) -> Dict[str, dict]:
     """Build local + regional DEM patches for each station.
 
-    When ``dem_path`` is None the function uses ``config.get_dem_path_for_station``
-    to select the correct DEM per station (e.g. AS vs HI in aggregate mode).
-    Pass an explicit ``dem_path`` to force a single DEM for all stations.
-
     Args:
-        dem_path:     Override DEM for all stations.  When None, each station
-                      is routed to the DEM matching its region prefix.
+        dem_path:     Override DEM path.  Defaults to ``config.DEM_PATH``.
         local_cfg:    dict with 'patch_size' and 'km_per_cell'.
                       Defaults to ``config.DEM_PATCH_CONFIG["local"]``.
         regional_cfg: same, defaults to ``config.DEM_PATCH_CONFIG["regional"]``.
@@ -451,30 +446,20 @@ def build_dem_patches(
     if regional_cfg is None:
         regional_cfg = config.DEM_PATCH_CONFIG["regional"]
 
+    dem_path = Path(dem_path) if dem_path is not None else config.DEM_PATH
     patches: Dict[str, dict] = {}
 
-    if dem_path is not None:
-        # Single explicit DEM for all stations (AS-only or HI-only runs)
-        dem_groups: Dict[Path, list] = {Path(dem_path): sorted(station_metadata.items())}
-    else:
-        # Group stations by their region-specific DEM path
-        dem_groups = {}
+    with rasterio.open(str(dem_path)) as src:
         for name, meta in sorted(station_metadata.items()):
-            p = config.get_dem_path_for_station(name)
-            dem_groups.setdefault(p, []).append((name, meta))
-
-    for grp_path, station_items in dem_groups.items():
-        with rasterio.open(str(grp_path)) as src:
-            for name, meta in station_items:
-                local = extract_dem_patch(
-                    src, meta["longitude"], meta["latitude"],
-                    local_cfg["patch_size"], local_cfg["km_per_cell"],
-                )
-                regional = extract_dem_patch(
-                    src, meta["longitude"], meta["latitude"],
-                    regional_cfg["patch_size"], regional_cfg["km_per_cell"],
-                )
-                patches[name] = {"local": local, "regional": regional}
+            local = extract_dem_patch(
+                src, meta["longitude"], meta["latitude"],
+                local_cfg["patch_size"], local_cfg["km_per_cell"],
+            )
+            regional = extract_dem_patch(
+                src, meta["longitude"], meta["latitude"],
+                regional_cfg["patch_size"], regional_cfg["km_per_cell"],
+            )
+            patches[name] = {"local": local, "regional": regional}
 
     print(f"Built DEM patches for {len(patches)} stations  "
           f"local={local_cfg['patch_size']}x{local_cfg['patch_size']}@{local_cfg['km_per_cell']}km  "
