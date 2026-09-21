@@ -23,13 +23,8 @@ def main():
              "over ISO calendar weeks (Mon-Sun) and reduces each reanalysis channel "
              "to its within-week mean and std (default: %(default)s)",
     )
-    parser.add_argument(
-        "--min-days-per-week", type=int, default=config.WEEKLY_MIN_DAYS,
-        help="Minimum daily records required to keep a week when --freq weekly "
-             "(default: %(default)s)",
-    )
     args = parser.parse_args()
-    assemble(freq=args.freq, min_days_per_week=args.min_days_per_week)
+    assemble(freq=args.freq)
     if args.freq != config.FREQ:
         print(f"\nNOTE: AS_RAINFALL_FREQ is '{config.FREQ}'.  Set it to '{args.freq}' "
               f"so the downstream scripts read this dataset:\n"

@@ -35,9 +35,6 @@ FREQ = _os.environ.get("AS_RAINFALL_FREQ", "weekly").lower()
 if FREQ not in ("daily", "weekly"):
     raise ValueError(f"AS_RAINFALL_FREQ must be 'daily' or 'weekly', got '{FREQ}'")
 
-# Minimum daily records required to keep an ISO week when FREQ == "weekly".
-WEEKLY_MIN_DAYS = int(_os.environ.get("AS_RAINFALL_MIN_DAYS_PER_WEEK", "7"))
-
 # ---------------------------------------------------------------------------
 # Output paths (all under Daily_Modeling/output/)
 # ---------------------------------------------------------------------------

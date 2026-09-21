@@ -326,35 +326,6 @@ def make_cv_folds(splits, n_folds, cv_mode, rng_seed):
         raise ValueError(f"Unknown cv_mode: {cv_mode}")
 
 
-# ── index sorting & expanding-window folds ─────────────────────────────────
-
-def sorted_sample_indices(indices, years, months, days):
-    """Sort sample indices chronologically by (year, month, day)."""
-    return sorted(indices, key=lambda i: (int(years[i]), int(months[i]), int(days[i])))
-
-
-def expanding_time_folds(indices_sorted, n_folds: int):
-    """Forward-chaining (expanding-window) folds.
-
-    For fold k:
-      train = [0 : b_k]
-      val   = [b_k : b_{k+1}]
-    where b are evenly spaced boundaries.
-    """
-    if n_folds <= 1:
-        return []
-    n = len(indices_sorted)
-    val_size = max(n // (n_folds + 1), 1)
-    folds = []
-    for k in range(1, n_folds + 1):
-        train_end = k * val_size
-        val_end = min((k + 1) * val_size, n)
-        if train_end >= n or train_end >= val_end:
-            break
-        folds.append((indices_sorted[:train_end], indices_sorted[train_end:val_end]))
-    return folds
-
-
 # ── split validation ───────────────────────────────────────────────────────
 
 def validate_test_separation(splits, stations, years, train_yr, val_yr, test_yr):

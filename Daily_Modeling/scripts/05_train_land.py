@@ -38,7 +38,7 @@ from Daily_Modeling.models.losses import get_criterion
 from Daily_Modeling.utils.inference import predict, predict_mm, make_metric_fn, run_ensemble_inference_from_dir
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics, baseline_mean_metrics, per_station_metrics
 from Daily_Modeling.utils.visualization import (
-    plot_model_comparison_table, plot_scatter, plot_split_heatmap, plot_training_history,
+    plot_scatter, plot_split_heatmap, plot_training_history,
 )
 from Daily_Modeling.utils.io_utils import save_json, save_model, save_predictions
 from Daily_Modeling.utils.device import select_device

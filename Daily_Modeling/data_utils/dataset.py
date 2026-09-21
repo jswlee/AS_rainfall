@@ -150,24 +150,6 @@ class RainfallDataset(Dataset):
         return features, target
 
 
-class FlatDataset(Dataset):
-    """Wraps RainfallDataset to return a single flattened feature vector.
-
-    Used by site-specific MLP/GLU models that expect a 1-D input.
-    """
-
-    def __init__(self, base: RainfallDataset):
-        self.base = base
-
-    def __len__(self):
-        return len(self.base)
-
-    def __getitem__(self, idx):
-        feats, target = self.base[idx]
-        parts = [feats[k].view(-1) for k in ("climate", "local_dem", "regional_dem", "temporal")]
-        return torch.cat(parts), target
-
-
 def get_dataset_metadata(
     tensors: Dict[str, torch.Tensor],
     dem_crop_config: Optional[dict] = None,
@@ -394,7 +376,7 @@ def print_normalization_report(
     # --- Temporal ---
     temp = tensors["temporal"]
     print(f"\n  temporal: shape={tuple(temp.shape)}")
-    print(f"    min={temp.min():.4f}  max={temp.max():.4f}  (not normalised: cols 0-11=one-hot, 12-13=sin/cos)")
+    print(f"    min={temp.min():.4f}  max={temp.max():.4f}  (not normalised: one-hot)")
 
     # --- Targets ---
     targets = tensors["targets"]

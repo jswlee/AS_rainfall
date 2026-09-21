@@ -12,19 +12,14 @@ from Daily_Modeling import config
 
 def load_station_metadata(path: Optional[Path] = None) -> Dict[str, dict]:
     """Load station metadata CSV -> {station_name: {latitude, longitude, ...}}."""
-    path = path or config.STATION_METADATA_PATH
-    df = pd.read_csv(path)
+    df = pd.read_csv(path or config.STATION_METADATA_PATH)
     df = df.rename(columns={"Station": "station_name", "LAT": "latitude", "LONG": "longitude"})
     df = df.dropna(subset=["station_name", "latitude", "longitude"])
+    df = df.drop_duplicates(subset=["station_name"])
     df["latitude"] = df["latitude"].astype(float)
     df["longitude"] = df["longitude"].astype(float)
-    df = df.drop_duplicates(subset=["station_name"])
-
-    meta = {}
-    for _, row in df.iterrows():
-        name = row["station_name"]
-        meta[name] = {col: row[col] for col in df.columns if col != "station_name"}
-    return meta
+    df = df.set_index("station_name")
+    return df.to_dict("index")
 
 
 def load_daily_rainfall(

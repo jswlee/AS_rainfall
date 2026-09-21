@@ -8,7 +8,7 @@ rainfall data to produce a ready-to-model ``daily_dataset.npz``.
 """
 
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,21 +21,13 @@ from Daily_Modeling.data_utils.load_raw import (
 
 
 def _month_onehot(months: np.ndarray) -> np.ndarray:
-    """Convert integer months (1-12) to one-hot + cyclical features (N, 14).
+    """Convert integer months (1-12) to one-hot features (N, 12).
 
     Columns 0-11: one-hot (month 1=Jan in col 0).
-    Column 12:    sin(2π * month / 12) — captures circular seasonality.
-    Column 13:    cos(2π * month / 12) — paired with sin for unambiguous angle.
-
-    Fix G: cyclical features allow the model to learn that month 12 and month 1
-    are adjacent without relying on the one-hot to encode their proximity.
     """
     oh = np.zeros((len(months), 12), dtype=np.float32)
     oh[np.arange(len(months)), months - 1] = 1.0
-    angle = 2.0 * np.pi * months.astype(np.float32) / 12.0
-    sin_m = np.sin(angle).reshape(-1, 1)
-    cos_m = np.cos(angle).reshape(-1, 1)
-    return np.concatenate([oh, sin_m, cos_m], axis=1)
+    return oh
 
 
 def aggregate_to_weekly(
@@ -46,7 +38,6 @@ def aggregate_to_weekly(
     days: np.ndarray,
     station_dem_idx: np.ndarray,
     rainfall_mm: np.ndarray,
-    min_days: int = 7,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
            np.ndarray, np.ndarray, np.ndarray]:
     """Collapse station-day samples into station-week samples.
@@ -56,7 +47,8 @@ def aggregate_to_weekly(
     channel is reduced to its within-week mean *and* standard deviation, so
     the channel axis doubles from C to 2C (means first, then stds).
 
-    Weeks with fewer than *min_days* daily records are dropped.
+    Only complete weeks are kept: weeks with fewer than 7 daily records
+    are dropped.
 
     Returns ``(patches, stations, years, months, days, station_dem_idx,
     rainfall_mm, n_days)``.
@@ -97,11 +89,11 @@ def aggregate_to_weekly(
     g_dem_idx = station_dem_idx[first]
     g_week_start = week_start.to_numpy()[first]
 
-    keep = counts >= min_days
+    keep = counts >= 7
     n_dropped = int((~keep).sum())
     print(f"  Weekly aggregation: {len(inv)} station-days -> {n_groups} station-weeks")
     if n_dropped:
-        print(f"    Dropped {n_dropped} incomplete week(s) with < {min_days} daily records")
+        print(f"    Dropped {n_dropped} incomplete week(s) with < 7 daily records")
 
     ws = pd.DatetimeIndex(g_week_start[keep])
     return (
@@ -121,7 +113,6 @@ def assemble(
     reanalysis_npz: Optional[Path] = None,
     dem_npz: Optional[Path] = None,
     freq: str = "daily",
-    min_days_per_week: int = 7,
 ) -> Path:
     """Combine pre-built feature NPZs with rainfall into a single dataset.
 
@@ -168,47 +159,35 @@ def assemble(
     dem_lookup = {str(s): i for i, s in enumerate(dem_station_names)}
     print(f"  DEM: {dem_local_raw.shape[0]} stations")
 
-    # 4. Load rainfall per station into a fast lookup
-    #    Build {station_name: {(y,m,d): rainfall_mm}}
+    # 4. Load rainfall per station
     print("Loading rainfall data ...")
-    rain_lookup: Dict[str, Dict[tuple, float]] = {}
+    rain_frames = []
     for sname in sorted(station_meta):
         df = load_daily_rainfall(sname)
-        if df is None:
-            continue
-        d = {}
-        for _, row in df.iterrows():
-            d[(int(row["year"]), int(row["month"]), int(row["day"]))] = float(row["rainfall_mm"])
-        rain_lookup[sname] = d
-    print(f"  Rainfall loaded for {len(rain_lookup)} stations")
+        if df is not None:
+            df["station_name"] = sname
+            rain_frames.append(df)
+    rain_df = pd.concat(rain_frames, ignore_index=True) if rain_frames else pd.DataFrame(
+        columns=["station_name", "year", "month", "day", "rainfall_mm"]
+    )
+    rain_df = rain_df.astype({"year": "int64", "month": "int64", "day": "int64"})
+    # Last row wins on duplicate dates, matching the old dict-lookup semantics
+    rain_df = rain_df.drop_duplicates(subset=["station_name", "year", "month", "day"], keep="last")
+    print(f"  Rainfall loaded for {len(rain_frames)} stations")
 
-    # 5. Align: for each reanalysis sample, look up DEM + rainfall
+    # 5. Align reanalysis samples with DEM indices and rainfall via merge
     N = len(re_stations)
-    station_dem_idx = np.full(N, -1, dtype=np.int32)   # index into dem_*_raw per sample
-    rainfall_mm = np.full(N, np.nan, dtype=np.float32)
-    keep = np.zeros(N, dtype=bool)
+    meta_df = pd.DataFrame({
+        "station_name": re_stations.astype(str),
+        "year": re_years.astype(int),
+        "month": re_months.astype(int),
+        "day": re_days.astype(int),
+    })
+    meta_df["dem_idx"] = np.array([dem_lookup.get(s, -1) for s in meta_df["station_name"]])
+    merged = meta_df.merge(rain_df, on=["station_name", "year", "month", "day"], how="left")
 
-    for i in range(N):
-        st = str(re_stations[i])
-        y, m, d = int(re_years[i]), int(re_months[i]), int(re_days[i])
-
-        # DEM index
-        di = dem_lookup.get(st)
-        if di is None:
-            continue
-        station_dem_idx[i] = di
-
-        # Rainfall
-        rl = rain_lookup.get(st)
-        if rl is None:
-            continue
-        rain_val = rl.get((y, m, d))
-        if rain_val is None:
-            continue
-        rainfall_mm[i] = rain_val
-        keep[i] = True
-
-    idx = np.where(keep)[0]
+    keep = (merged["dem_idx"] >= 0) & merged["rainfall_mm"].notna()
+    idx = np.where(keep.values)[0]
     print(f"  Aligned {len(idx)}/{N} samples (dropped {N - len(idx)} with missing DEM or rainfall)")
 
     re_patches = re_patches[idx]
@@ -216,8 +195,8 @@ def assemble(
     re_years = re_years[idx]
     re_months = re_months[idx]
     re_days = re_days[idx]
-    station_dem_idx = station_dem_idx[idx]   # (N_aligned,) indices into dem_*_raw
-    rainfall_mm = rainfall_mm[idx]
+    station_dem_idx = merged.loc[keep, "dem_idx"].to_numpy().astype(np.int32)
+    rainfall_mm = merged.loc[keep, "rainfall_mm"].to_numpy().astype(np.float32)
 
     # 6. Optional weekly aggregation (station-days -> station-weeks)
     n_days_per_sample = None
@@ -225,7 +204,7 @@ def assemble(
         (re_patches, re_stations, re_years, re_months, re_days,
          station_dem_idx, rainfall_mm, n_days_per_sample) = aggregate_to_weekly(
             re_patches, re_stations, re_years, re_months, re_days,
-            station_dem_idx, rainfall_mm, min_days=min_days_per_week,
+            station_dem_idx, rainfall_mm,
         )
         # Channel axis doubled: means then stds
         var_names = ([f"{v}_mean" for v in var_names]

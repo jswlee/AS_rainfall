@@ -191,24 +191,18 @@ def build_reanalysis_patches(
             channel_specs.append(("simple", nc, lev))
 
     # Verify all needed cubes exist
-    missing_cubes = set()
+    needed = set()
     for spec in channel_specs:
-        if spec[0] == "diff":
-            if spec[1] not in cubes:
-                missing_cubes.add(spec[1])
-        elif spec[0] == "multiply":
-            if spec[1] not in cubes:
-                missing_cubes.add(spec[1])
-            if spec[2] not in cubes:
-                missing_cubes.add(spec[2])
-        elif spec[0] == "divergence":
-            if spec[1] not in cubes:
-                missing_cubes.add(spec[1])
-            if spec[3] not in cubes:
-                missing_cubes.add(spec[3])
+        op = spec[0]
+        if op == "diff":
+            needed.add(spec[1])
+        elif op == "multiply":
+            needed.update([spec[1], spec[2]])
+        elif op == "divergence":
+            needed.update([spec[1], spec[3]])
         else:
-            if spec[1] not in cubes:
-                missing_cubes.add(spec[1])
+            needed.add(spec[1])
+    missing_cubes = needed - set(cubes)
     if missing_cubes:
         print(f"  WARNING: missing cubes for: {missing_cubes}")
 
