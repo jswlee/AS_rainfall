@@ -12,7 +12,7 @@ spatial+temporal shift of val_spatial.  val_spatial is used for final evaluation
 Evaluates on val_spatial, test_spatial, val_temporal, test_temporal.
 
 Usage:
-    python -m Daily_Modeling.scripts.06_train_land [--hp-dir ...] [--loss-type gamma]
+    python -m Daily_Modeling.scripts.05_train_land [--hp-dir ...] [--loss-type gamma]
 """
 
 import argparse
@@ -36,10 +36,7 @@ from Daily_Modeling.models.land import create_land_model
 from Daily_Modeling.utils.training import train_model
 from Daily_Modeling.models.losses import get_criterion
 from Daily_Modeling.utils.inference import predict, predict_mm, make_metric_fn, run_ensemble_inference_from_dir
-from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics, baseline_mean_metrics, per_station_metrics
-from Daily_Modeling.utils.visualization import (
-    plot_scatter, plot_split_heatmap, plot_training_history,
-)
+from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
 from Daily_Modeling.utils.io_utils import save_json, save_model, save_predictions
 from Daily_Modeling.utils.device import select_device
 
@@ -225,11 +222,6 @@ def main():
 
     var_names = list(meta["variables"]) if len(meta["variables"]) > 0 else None
     print_normalization_report(tensors, stats, splits, variable_names=var_names)
-
-    # Save split heatmap
-    plot_split_heatmap(stations, years, groups, train_yr, val_yr, test_yr,
-                       save_path=config.EDA_DIR / "split_heatmap_land.png",
-                       title="LAND Spatiotemporal Split")
 
     # --- Load HP ---
     if args.hp_dir:
@@ -437,22 +429,6 @@ def main():
                 arch_src = Path(__file__).resolve().parent.parent / "models" / "land.py"
                 if arch_src.exists():
                     shutil.copy2(str(arch_src), str(out_dir / "model_architecture.py"))
-                try:
-                    from Daily_Modeling.utils.visualization import plot_model_architecture  # noqa: PLC0415
-                    dummy_input = {
-                        "climate":     torch.randn(2, *metadata["climate_shape"], device=device),
-                        "local_dem":   torch.randn(2, *metadata["local_dem_shape"], device=device),
-                        "regional_dem": torch.randn(2, *metadata["regional_dem_shape"], device=device),
-                        "temporal":    torch.randn(2, metadata["num_month_features"], device=device),
-                    }
-                    plot_model_architecture(
-                        model, model_name="LAND Model",
-                        input_data=dummy_input,
-                        save_path=out_dir / "architecture_land.png",
-                    )
-                except Exception as e:
-                    print(f"WARNING: architecture diagram failed: {e}")
-
             print(f"\n--- Fold {fold_i+1}/{len(cv_folds)}  Seed {seed_i+1}/{n_seeds} (seed={seed}) ---")
             # Checkpoint directory for this fold/seed
             ckpt_dir = fold_dir / f"checkpoints_seed{seed_i}"
@@ -488,11 +464,7 @@ def main():
 
             # Save individual model
             save_model(model, fold_dir / f"model_seed{seed_i}.pth", hyperparams=hp)
-            plot_training_history(
-                history,
-                title=f"LAND Fold {fold_i} Seed {seed_i} Training History",
-                save_path=fold_dir / f"training_history_seed{seed_i}.png",
-            )
+            save_json(history, fold_dir / f"training_history_seed{seed_i}.json")
 
         # --- Fold evaluation: average predictions across seeds on the fold val set ---
         seed_preds = []
@@ -525,8 +497,6 @@ def main():
             f"CSI@{m.get('csi_threshold_mm', args.csi_threshold_mm):g}mm={csi:.3f}"
         )
 
-        plot_scatter(yt_mm, yp_mm, title=f"LAND Fold {fold_i} CV-val",
-                     save_path=fold_dir / "scatter_cv_val.png")
         save_predictions(yt_mm, yp_mm,
                          stations[val_idx] if len(val_idx) > 0 else np.array([]),
                          fold_dir / "predictions_cv_val.npz")

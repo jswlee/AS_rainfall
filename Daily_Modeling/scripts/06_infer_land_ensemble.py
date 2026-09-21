@@ -5,12 +5,12 @@ All inference logic lives in that function; this script is kept only as a
 convenient entry point for re-running inference on an already-trained run
 without retraining.
 
-Inference is also run automatically at the end of 06_train_land.py, so you
+Inference is also run automatically at the end of 05_train_land.py, so you
 only need this script if you want to re-evaluate a previous run or use
 different ``--splits`` / ``--batch-size`` options.
 
 Usage:
-  python -m Daily_Modeling.scripts.07_infer_land_ensemble \
+  python -m Daily_Modeling.scripts.06_infer_land_ensemble \
     --run-dir Daily_Modeling/output/results/land_final
 """
 

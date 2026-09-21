@@ -41,7 +41,6 @@ from Daily_Modeling.utils.inference import predict_mm, make_metric_fn
 from Daily_Modeling.utils.metrics import compute_metrics, compute_extreme_metrics
 from Daily_Modeling.utils.io_utils import save_json
 from Daily_Modeling.utils.device import select_device
-from Daily_Modeling.utils.visualization import plot_split_heatmap, save_optuna_visualizations
 
 
 def _dist_to_dict(d):
@@ -401,11 +400,6 @@ def main():
     base_metadata = get_dataset_metadata(tensors)
     print(f"Target scale (train target std): {target_scale:.6f} mm")
 
-    # Save split heatmap
-    plot_split_heatmap(stations, years, groups, train_yr, val_yr, test_yr,
-                       save_path=config.EDA_DIR / "split_heatmap_land_tuning.png",
-                       title="LAND Tuning Split")
-
     out_dir = config.TUNING_DIR / args.study_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -495,9 +489,6 @@ def main():
         if t.state == optuna.trial.TrialState.COMPLETE:
             rows.append({"trial": t.number, "value": t.value, **t.params})
     pd.DataFrame(rows).to_csv(out_dir / "all_trials.csv", index=False)
-
-    # --- HP importance & tuning visualisations ---
-    save_optuna_visualizations(study, out_dir)
 
     print(f"Results saved to {out_dir}")
 

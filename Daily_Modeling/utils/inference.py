@@ -1,8 +1,8 @@
 """
 Shared inference utilities for LAND model prediction and metric construction.
 
-Used by tuning (04_tune_land.py), training (06_train_land.py), and inference
-(07_infer_land_ensemble.py) scripts.  run_ensemble_inference_from_dir() is the
+Used by tuning (04_tune_land.py), training (05_train_land.py), and inference
+(06_infer_land_ensemble.py) scripts.  run_ensemble_inference_from_dir() is the
 primary entry point for post-training evaluation on held-out test splits.
 """
 
@@ -213,11 +213,9 @@ def run_wetdry_evaluation(
     threshold_mm: float = 1.0,
     period_noun: str = "day",
 ) -> dict:
-    """Compute and save wet/dry metrics + visualization for one split.
+    """Compute and save wet/dry metrics for one split.
 
-    Saves:
-        ``<out_dir>/wetdry_metrics_<split_name>.json``
-        ``<out_dir>/wetdry_eval_<split_name>.png``
+    Saves ``<out_dir>/wetdry_metrics_<split_name>.json``.
 
     Args:
         y_true: observed rainfall in mm.
@@ -231,7 +229,6 @@ def run_wetdry_evaluation(
         Metrics dict from ``compute_wetdry_metrics``.
     """
     from Daily_Modeling.utils.metrics import compute_wetdry_metrics
-    from Daily_Modeling.utils.visualization import plot_wetdry_evaluation
     from Daily_Modeling.utils.io_utils import save_json
 
     out_dir = Path(out_dir)
@@ -250,13 +247,6 @@ def run_wetdry_evaluation(
         f"  wet_R2={m.get('wet_r2', float('nan')):.4f}"
     )
 
-    plot_wetdry_evaluation(
-        y_true, y_pred,
-        threshold_mm=threshold_mm,
-        title=f"Wet/Dry Evaluation — {split_name}",
-        save_path=out_dir / f"wetdry_eval_{split_name}.png",
-        period_noun=period_noun,
-    )
     return m
 
 
