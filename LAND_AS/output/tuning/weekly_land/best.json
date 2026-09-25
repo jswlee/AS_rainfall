@@ -1,0 +1,10 @@
+{
+  "dem_units": 32,
+  "month_units": 16,
+  "hidden_units": 448,
+  "dropout": 0.4,
+  "batch_size": 256,
+  "learning_rate": 0.0004064644058668378,
+  "weight_decay": 2.2264204303769692e-06,
+  "climate_units": 390
+}

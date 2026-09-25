@@ -36,41 +36,31 @@ class RainDataset(Dataset):
         return features, self.arrays["target"][index] / self.target_scale
 
 
-def _year_ranges(years):
-    ordered = np.sort(years.astype(int))
-    train_end = int(ordered[int(len(ordered) * config.TRAIN_FRACTION) - 1])
-    val_end = int(ordered[int(len(ordered) * (config.TRAIN_FRACTION + config.VAL_FRACTION)) - 1])
-    return (int(ordered[0]), train_end), (train_end + 1, val_end), (val_end + 1, int(ordered[-1]))
+def _station_roles(stations):
+    """Assign each station a role based on config.TEST_STATIONS.
 
-
-def _station_roles(stations, years, val_years, test_years):
+    Test stations are held out temporally (only years after TRAIN_YEAR_END).
+    All remaining stations are train stations. There is no separate 'val'
+    role -- validation is done via leave-one-station-out CV over the train
+    stations.
+    """
+    test = set(config.TEST_STATIONS)
     names = sorted(set(stations.astype(str)))
-    ranges = {
-        name: (int(years[stations.astype(str) == name].min()), int(years[stations.astype(str) == name].max()))
-        for name in names
-    }
-    rng = np.random.default_rng(config.SEED)
-    test_eligible = [name for name in names if ranges[name][0] <= test_years[1] and ranges[name][1] >= test_years[0]]
-    test = set(rng.permutation(test_eligible)[:config.N_TEST_STATIONS])
-    val_eligible = [name for name in names if name not in test and ranges[name][0] <= val_years[1] and ranges[name][1] >= val_years[0]]
-    val = set(rng.permutation(val_eligible)[:config.N_VAL_STATIONS])
-    return {name: "test" if name in test else "val" if name in val else "train" for name in names}
+    for name in test:
+        if name not in names:
+            raise ValueError(f"Configured test station '{name}' not found in dataset")
+    return {name: "test" if name in test else "train" for name in names}
 
 
 def _split(stations, years):
-    train_years, val_years, test_years = _year_ranges(years)
-    roles = _station_roles(stations, years, val_years, test_years)
+    roles = _station_roles(stations)
     role = np.asarray([roles[str(station)] for station in stations])
     index = np.arange(len(years))
-    between = lambda values, bounds: (values >= bounds[0]) & (values <= bounds[1])
     splits = {
-        "train": index[(role == "train") & between(years, train_years)],
-        "val_temporal": index[(role == "train") & between(years, val_years)],
-        "val_spatial": index[(role == "val") & between(years, val_years)],
-        "test_temporal": index[(role == "train") & between(years, test_years)],
-        "test_spatial": index[(role == "test") & between(years, test_years)],
+        "train": index[(role == "train") & (years <= config.TRAIN_YEAR_END)],
+        "test": index[(role == "test") & (years > config.TRAIN_YEAR_END)],
     }
-    return splits, roles, {"train": train_years, "val": val_years, "test": test_years}
+    return splits, roles
 
 
 def _channel_stats(values, land_only=False):
@@ -88,7 +78,7 @@ def load_data(path=config.DATASET_PATH):
 
     stations = raw["stations"].astype(str)
     years = raw["years"].astype(int)
-    splits, roles, year_ranges = _split(stations, years)
+    splits, roles = _split(stations, years)
     climate = raw["reanalysis_patches"].astype(np.float32)
     local_dem = raw["dem_local_raw"].astype(np.float32)
     regional_dem = raw["dem_regional_raw"].astype(np.float32)
@@ -117,7 +107,7 @@ def load_data(path=config.DATASET_PATH):
     }
     metadata = {
         "stations": stations, "years": years, "months": raw["months"].astype(int),
-        "variables": raw.get("variables", np.asarray([])), "roles": roles, "year_ranges": year_ranges,
+        "variables": raw.get("variables", np.asarray([])), "roles": roles,
     }
     return DataBundle(arrays, metadata, splits, stats)
 
@@ -132,14 +122,67 @@ def loaders(bundle, split_indices, batch_size, shuffle_train=True):
     }
 
 
-def cv_folds(bundle, count=3):
-    if count < 1:
-        raise ValueError("count must be at least 1")
-    temporal_count = count // 2
-    spatial_count = count - temporal_count
-    temporal = np.array_split(bundle.splits["val_temporal"], temporal_count) if temporal_count else []
-    spatial = np.array_split(bundle.splits["val_spatial"], spatial_count) if spatial_count else []
-    return [(bundle.splits["train"], fold) for fold in temporal + spatial if len(fold)]
+def cv_folds(bundle, count=None, mode="loso"):
+    """Build cross-validation folds over train stations.
+
+    Parameters
+    ----------
+    bundle : DataBundle
+        Data bundle returned by ``load_data``.
+    count : int | None
+        Number of folds. For ``mode='loso'`` this is ignored (one fold per
+        train station). For ``mode='kfold'`` it defaults to 3.
+    mode : {'loso', 'kfold'}
+        - 'loso': Leave-One-Station-Out -- each fold holds out one train station.
+        - 'kfold': Spatial k-fold -- train stations are partitioned into ``count``
+          disjoint groups; each fold uses one group as validation and the rest
+          as training.
+
+    Returns
+    -------
+    list[tuple[np.ndarray, np.ndarray]]
+        (train_indices, val_indices) for each fold.
+    """
+    train_indices = bundle.splits["train"]
+    stations = bundle.metadata["stations"]
+    train_stations = np.asarray(sorted(set(stations[train_indices].astype(str))), dtype=str)
+
+    if mode == "loso":
+        folds = []
+        for held_out in train_stations:
+            val_mask = np.isin(stations[train_indices], held_out)
+            fold_train = train_indices[~val_mask]
+            fold_val = train_indices[val_mask]
+            if len(fold_val) > 0:
+                folds.append((fold_train, fold_val))
+        return folds
+
+    if mode == "kfold":
+        count = count if count is not None else 3
+        if count > len(train_stations):
+            count = len(train_stations)
+        # Balance groups by sample count: sort stations descending by size and
+        # deal them into groups serpentine-style so validation sets are ~equal.
+        counts = {
+            station: int(np.sum(stations[train_indices] == station))
+            for station in train_stations
+        }
+        ordered = sorted(train_stations, key=lambda s: (-counts[s], s))
+        groups = [[] for _ in range(count)]
+        for position, station in enumerate(ordered):
+            cycle, offset = divmod(position, count)
+            group_index = offset if cycle % 2 == 0 else count - 1 - offset
+            groups[group_index].append(station)
+        folds = []
+        for group in groups:
+            val_mask = np.isin(stations[train_indices], group)
+            fold_train = train_indices[~val_mask]
+            fold_val = train_indices[val_mask]
+            if len(fold_val) > 0:
+                folds.append((fold_train, fold_val))
+        return folds
+
+    raise ValueError(f"Unknown cv_folds mode: {mode!r}. Use 'loso' or 'kfold'.")
 
 
 def model_metadata(bundle):

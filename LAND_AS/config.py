@@ -10,10 +10,16 @@ TUNING_DIR = OUTPUT_DIR / "tuning"
 RUNS_DIR = OUTPUT_DIR / "runs"
 
 SEED = 42
-N_VAL_STATIONS = 5
-N_TEST_STATIONS = 3
-TRAIN_FRACTION = 0.70
-VAL_FRACTION = 0.20
+
+# Strict spatiotemporal train/test split. Train and test are disjoint in both
+# station ID and year. Training uses the stations below during years up to and
+# including TRAIN_YEAR_END; testing uses TEST_STATIONS during years after
+# TRAIN_YEAR_END.
+TRAIN_YEAR_END = 2016
+TEST_STATIONS = ["aasu_UH", "afono_UH", "aunuu_UH", "poloa_UH", "vaipito_UH"]
+
+# Kept for backwards compatibility with old notebooks / code that reference it.
+N_TEST_STATIONS = len(TEST_STATIONS)
 
 DEFAULTS = {
     "climate_units": 120,

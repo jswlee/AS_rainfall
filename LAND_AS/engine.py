@@ -16,12 +16,15 @@ def device():
     return torch.device("cpu")
 
 
-def fit(model, train_loader, val_loader, epochs, patience, learning_rate, weight_decay, target_scale, target_device=None):
+def fit(model, train_loader, val_loader, epochs, patience, learning_rate, weight_decay, target_scale, target_device=None, use_cosine_scheduler=True):
     target_device = target_device or device()
     model.to(target_device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = None
+    if use_cosine_scheduler:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=learning_rate * 0.01)
     best_state, best_mae, stale = None, float("inf"), 0
-    history = {"train_loss": [], "val_mae_mm": []}
+    history = {"train_loss": [], "val_mae_mm": [], "learning_rate": []}
 
     for epoch in range(epochs):
         model.train()
@@ -35,17 +38,22 @@ def fit(model, train_loader, val_loader, epochs, patience, learning_rate, weight
             optimizer.step()
             losses.append(loss.item())
 
+        current_lr = optimizer.param_groups[0]["lr"]
+        if scheduler is not None:
+            scheduler.step()
+
         observed, predicted = predict(model, val_loader, target_scale, target_device)
         val_mae = float(np.mean(np.abs(predicted - observed)))
         history["train_loss"].append(float(np.mean(losses)))
         history["val_mae_mm"].append(val_mae)
+        history["learning_rate"].append(current_lr)
         if val_mae < best_mae:
             best_mae, stale = val_mae, 0
             best_state = copy.deepcopy(model.state_dict())
         else:
             stale += 1
         if epoch == 0 or (epoch + 1) % 10 == 0:
-            print(f"epoch={epoch + 1} loss={history['train_loss'][-1]:.4f} val_mae={val_mae:.3f} mm")
+            print(f"epoch={epoch + 1} loss={history['train_loss'][-1]:.4f} val_mae={val_mae:.3f} mm lr={current_lr:.2e}")
         if stale >= patience:
             break
 

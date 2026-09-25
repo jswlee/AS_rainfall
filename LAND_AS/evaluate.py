@@ -27,7 +27,7 @@ def main():
     metadata = model_metadata(bundle)
     test_loaders = loaders(
         bundle,
-        {name: index for name, index in bundle.splits.items() if name.startswith("test_")},
+        {name: index for name, index in bundle.splits.items() if name.startswith("test")},
         args.batch_size,
         shuffle_train=False,
     )
