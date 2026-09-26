@@ -1,0 +1,29 @@
+{
+  "gamma_run": "weekly_land_v5",
+  "huber_run": "weekly_land_v5_huber_d025",
+  "primary_objective": "mse",
+  "selected_huber_weight": 0.339,
+  "weights_by_objective": {
+    "mse": 0.339,
+    "mae": 0.0,
+    "balanced": 0.201
+  },
+  "selected_oof_row": {
+    "huber_weight": 0.339,
+    "mse": 1376.8985281426765,
+    "rmse": 37.10658335312854,
+    "mae": 25.64258709060693,
+    "bias": 5.152937990968546,
+    "r2": 0.7580234622689958,
+    "spearman_r": 0.8378269972329632,
+    "pctl_obs_mm": 292.25240478515633,
+    "pctl_pred_mm": 268.1456003326417,
+    "pctl_rel_bias": -0.08248624838600133,
+    "csi_50mm": 0.7326663564448581,
+    "mse_objective": 1376.8985281426765,
+    "mae_objective": 25.64258709060693,
+    "balanced_objective": 0.3330885694452773
+  },
+  "oof_samples": 6686,
+  "test_samples": 1188
+}

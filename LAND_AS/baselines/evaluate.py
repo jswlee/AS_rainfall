@@ -2,16 +2,14 @@
 
 Writes metrics with the same schema as ``evaluate.py`` output so results can
 be compared directly: ``output/baselines/test_metrics.json`` maps each
-baseline name to its ``regression_metrics`` dict, per-station breakdowns go
-to ``test_metrics_by_station.json`` (baselines plus the ``--run`` model when
-its saved predictions exist), and per-fold site-specific comparisons go to
-``fold_metrics.json``.
+baseline name to its ``regression_metrics`` dict, per-station breakdowns for
+baselines and every selected run/blend go to ``test_metrics_by_station.json``,
+and per-fold site-specific comparisons go to ``fold_metrics.json``.
 
-Usage: python -m LAND_AS.baselines.evaluate [--run weekly_land_v3] [--folds]
+Usage: python -m LAND_AS.baselines.evaluate [--all-runs] [--run NAME] [--folds]
 """
 
 import argparse
-import json
 
 import numpy as np
 
@@ -37,9 +35,58 @@ def per_station(observed, predicted, stations):
     return out
 
 
+def _prediction_sources(include_all, run_names):
+    """Yield ``(display_name, kind, prediction_path)`` for evaluated outputs."""
+    for name in run_names or []:
+        run_path = config.RUNS_DIR / name / "evaluation" / "test_predictions.npz"
+        blend_path = config.OUTPUT_DIR / "blends" / name / "test_predictions.npz"
+        if blend_path.exists() and not run_path.exists():
+            yield name, "blend", blend_path
+        else:
+            yield name, "run", run_path
+    if not include_all:
+        return
+    for path in sorted(config.RUNS_DIR.glob("*/evaluation/test_predictions.npz")):
+        yield path.parents[1].name, "run", path
+    for path in sorted((config.OUTPUT_DIR / "blends").glob("*/test_predictions.npz")):
+        yield path.parent.name, "blend", path
+
+
+def _load_model_predictions(observed, stations, include_all, run_names):
+    """Load aligned run/blend predictions and compute consistent metrics."""
+    model_metrics, by_station, predictions = {}, {}, {}
+    for name, kind, path in _prediction_sources(include_all, run_names):
+        if name in model_metrics:
+            continue
+        if not path.exists():
+            print(f"no saved predictions found for {kind} '{name}'")
+            continue
+        with np.load(path, allow_pickle=True) as z:
+            current_observed = z["observed"]
+            current_stations = z["stations"]
+            predicted = z["predicted"]
+        if not np.allclose(current_observed, observed):
+            print(f"skipping {name}: observations do not align with baseline test set")
+            continue
+        if not np.array_equal(current_stations.astype(str), stations.astype(str)):
+            print(f"skipping {name}: stations do not align with baseline test set")
+            continue
+        predictions[name] = predicted
+        model_metrics[name] = {
+            "kind": kind,
+            **regression_metrics(current_observed, predicted),
+            **extreme_metrics(current_observed, predicted),
+        }
+        by_station[name] = per_station(current_observed, predicted, current_stations)
+    return model_metrics, by_station, predictions
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate pooled and site-specific baselines.")
-    parser.add_argument("--run", default=None, help="run name whose test metrics to include alongside")
+    parser.add_argument("--run", action="append", default=[],
+                        help="run/blend name whose test metrics to include; repeatable")
+    parser.add_argument("--all-runs", action="store_true",
+                        help="include every evaluated output under runs/ and blends/")
     parser.add_argument("--folds", action="store_true", help="also run per-LOSO-fold station climatology")
     args = parser.parse_args()
 
@@ -64,24 +111,31 @@ def main():
         **{f"pred_{name}": pred for name, pred in predictions.items()},
     )
 
-    # Per-station breakdown: every baseline plus the --run model's saved
-    # ensemble predictions, so dispersion/variance differences are visible.
+    # Per-station breakdown: every baseline plus saved run/blend ensemble
+    # predictions, so dispersion/variance differences are directly comparable.
     by_station = {name: per_station(observed, pred, test_stations) for name, pred in predictions.items()}
-    if args.run:
-        run_eval = config.RUNS_DIR / args.run / "evaluation"
-        run_predictions = run_eval / "test_predictions.npz"
-        if run_predictions.exists():
-            with np.load(run_predictions) as z:
-                by_station[args.run] = per_station(z["observed"], z["predicted"], z["stations"])
-            run_metrics = run_eval / "test_metrics.json"
-            if run_metrics.exists():
-                print(f"\n{args.run} (test): {json.loads(run_metrics.read_text())}")
-        else:
-            print(f"\nno saved predictions found for run '{args.run}'")
+    model_metrics, model_by_station, model_predictions = _load_model_predictions(
+        observed, test_stations, args.all_runs, args.run
+    )
+    by_station.update(model_by_station)
     save_json(by_station, output / "test_metrics_by_station.json")
+    save_json(model_metrics, output / "model_metrics.json")
+    if model_predictions:
+        np.savez_compressed(
+            output / "model_predictions.npz",
+            observed=observed, stations=test_stations,
+            years=bundle.metadata["years"][test_idx],
+            **{f"pred_{name}": pred for name, pred in model_predictions.items()},
+        )
+    for name, metrics in model_metrics.items():
+        print(f"{name:>38s}: MAE={metrics['mae']:6.2f}  R2={metrics['r2']:6.3f}  "
+              f"rho={metrics['spearman_r']:6.3f}  bias={metrics['bias']:+6.2f}")
 
-    # Compact per-station MAE / dispersion table for the interesting models.
-    rows = ["gbm", "tweedie_glm", "ridge", args.run] if args.run else ["gbm", "tweedie_glm", "ridge"]
+    # Compact per-station MAE / dispersion table for the strongest references.
+    preferred = ["gbm", "tweedie_glm", "ridge", "weekly_land_v5",
+                 "weekly_land_v5_huber_rw_msemon", "v5_gamma_huber_cv_mse"]
+    rows = [name for name in preferred if name in by_station]
+    rows += [name for name in args.run if name in by_station and name not in rows]
     rows = [r for r in rows if r in by_station]
     stations = sorted(set(test_stations.astype(str)))
     print(f"\n{'station':<12}" + "".join(f"{r:>14}" for r in rows) + f"{'obs_std':>10}")
