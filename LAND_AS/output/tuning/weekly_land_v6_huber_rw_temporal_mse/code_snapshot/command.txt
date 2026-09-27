@@ -1,0 +1,1 @@
+C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\tune.py --study weekly_land_v6_huber_rw_temporal_mse --model-type huber --loss-type huber_weighted --huber-delta 0.5 --opt-metric mse --cv-mode temporal --folds 3 --fold-agg median --search-space core --trials 40 --epochs 500 --patience 50 --min-epochs 30

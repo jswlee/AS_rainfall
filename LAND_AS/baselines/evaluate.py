@@ -10,6 +10,7 @@ Usage: python -m LAND_AS.baselines.evaluate [--all-runs] [--run NAME] [--folds]
 """
 
 import argparse
+import csv
 
 import numpy as np
 
@@ -35,6 +36,67 @@ def per_station(observed, predicted, stations):
     return out
 
 
+def write_station_tables(by_station, output_dir):
+    """Write long-form CSV and model-by-station Markdown comparison tables."""
+    fields = [
+        "model", "station", "n", "mse", "rmse", "mae", "bias", "r2",
+        "spearman_r", "obs_std", "pred_std",
+    ]
+    rows = []
+    for model_name, station_rows in by_station.items():
+        for station, values in station_rows.items():
+            row = {"model": model_name, "station": station}
+            for key, value in values.items():
+                if isinstance(value, (int, np.integer)):
+                    row[key] = int(value)
+                else:
+                    value = float(value)
+                    row[key] = value if np.isfinite(value) else ""
+            rows.append(row)
+
+    csv_path = output_dir / "test_metrics_by_station.csv"
+    with csv_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    model_names = list(by_station)
+    station_names = sorted({row["station"] for row in rows})
+    table_metrics = ["mae", "rmse", "bias", "r2", "spearman_r", "obs_std", "pred_std"]
+
+    def cell(station, model_name, metric):
+        value = by_station.get(model_name, {}).get(station, {}).get(metric)
+        if value is None:
+            return ""
+        value = float(value)
+        if not np.isfinite(value):
+            return ""
+        if metric == "n":
+            return str(int(value))
+        if metric in {"r2", "spearman_r"}:
+            return f"{value:.3f}"
+        return f"{value:.2f}"
+
+    lines = [
+        "# Test metrics by station",
+        "",
+        "Each table is stations x models. Rainfall units are mm/week.",
+    ]
+    for metric in table_metrics:
+        lines.extend(["", f"## {metric}", ""])
+        lines.append("| station | " + " | ".join(model_names) + " |")
+        lines.append("|---" * (len(model_names) + 1) + "|")
+        for station in station_names:
+            lines.append(
+                "| " + station + " | "
+                + " | ".join(cell(station, model_name, metric) for model_name in model_names)
+                + " |"
+            )
+    md_path = output_dir / "test_metrics_by_station.md"
+    md_path.write_text("\n".join(lines) + "\n")
+    return csv_path, md_path
+
+
 def _prediction_sources(include_all, run_names):
     """Yield ``(display_name, kind, prediction_path)`` for evaluated outputs."""
     for name in run_names or []:
@@ -52,7 +114,7 @@ def _prediction_sources(include_all, run_names):
         yield path.parent.name, "blend", path
 
 
-def _load_model_predictions(observed, stations, include_all, run_names):
+def _load_model_predictions(observed, stations, years, include_all, run_names):
     """Load aligned run/blend predictions and compute consistent metrics."""
     model_metrics, by_station, predictions = {}, {}, {}
     for name, kind, path in _prediction_sources(include_all, run_names):
@@ -64,12 +126,18 @@ def _load_model_predictions(observed, stations, include_all, run_names):
         with np.load(path, allow_pickle=True) as z:
             current_observed = z["observed"]
             current_stations = z["stations"]
+            current_years = z["years"] if "years" in z.files else None
             predicted = z["predicted"]
         if not np.allclose(current_observed, observed):
             print(f"skipping {name}: observations do not align with baseline test set")
             continue
         if not np.array_equal(current_stations.astype(str), stations.astype(str)):
             print(f"skipping {name}: stations do not align with baseline test set")
+            continue
+        if current_years is not None and not np.array_equal(
+            current_years.astype(int), np.asarray(years).astype(int)
+        ):
+            print(f"skipping {name}: years do not align with baseline test set")
             continue
         predictions[name] = predicted
         model_metrics[name] = {
@@ -115,10 +183,11 @@ def main():
     # predictions, so dispersion/variance differences are directly comparable.
     by_station = {name: per_station(observed, pred, test_stations) for name, pred in predictions.items()}
     model_metrics, model_by_station, model_predictions = _load_model_predictions(
-        observed, test_stations, args.all_runs, args.run
+        observed, test_stations, bundle.metadata["years"][test_idx], args.all_runs, args.run
     )
     by_station.update(model_by_station)
     save_json(by_station, output / "test_metrics_by_station.json")
+    station_csv, station_md = write_station_tables(by_station, output)
     save_json(model_metrics, output / "model_metrics.json")
     if model_predictions:
         np.savez_compressed(
@@ -138,13 +207,15 @@ def main():
     rows += [name for name in args.run if name in by_station and name not in rows]
     rows = [r for r in rows if r in by_station]
     stations = sorted(set(test_stations.astype(str)))
-    print(f"\n{'station':<12}" + "".join(f"{r:>14}" for r in rows) + f"{'obs_std':>10}")
+    col_width = max(len(r) for r in rows) + 2
+    print(f"\n{'station':<12}" + "".join(f"{r:>{col_width}}" for r in rows) + f"{'obs_std':>10}")
     for station in stations:
         line = f"{station:<12}" + "".join(
-            f"{by_station[r][station]['mae']:>14.1f}" for r in rows)
+            f"{by_station[r][station]['mae']:>{col_width}.1f}" for r in rows)
         line += f"{by_station[rows[0]][station]['obs_std']:>10.1f}"
         print(line)
-    print("\nMAE per station above; see test_metrics_by_station.json for pred_std/R2/rho per station")
+    print("\nMAE per station above")
+    print(f"station tables written to {station_csv} and {station_md}")
 
     if args.folds:
         fold_results = []

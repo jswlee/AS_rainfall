@@ -26,6 +26,31 @@ REANALYSIS_DIR = _AS_DIR / "climate_variables_daily_1980-2024"
 DAILY_RAINFALL_DIR = _AS_DIR / "final_rainfall_per_station"
 
 # ---------------------------------------------------------------------------
+# Rainfall quality control (applied in load_daily_rainfall)
+# ---------------------------------------------------------------------------
+# Stations excluded entirely, based on the eda_scripts/rainfall_* audit:
+#   aunuu        reports in 0.1-inch increments (min nonzero = 2.54 mm), so
+#                drizzle days read as zero -> 59% daily / 12.4% weekly zeros,
+#                while co-located aunuu_UH (0.254 mm resolution) has none.
+#   vaipito2000  record collapses over time (1970s-90s daily median = 0,
+#                51-70% zero days, weekly mean ~40 mm vs ~82 mm measured by
+#                co-located vaipito_res / vaipito_UH) -> systematically biased
+#                low, not merely zero-inflated.
+QC_EXCLUDE_STATIONS = frozenset({"aunuu", "vaipito2000"})
+
+# Per-station date ranges (inclusive, YYYY-MM-DD) reclassified to missing.
+# afono_UH recorded exactly 0.000 every day for 30-53 consecutive days while
+# neighbouring gauges (vaipito_UH, aunuu_UH, siufaga/toa_ridge_WRCC) recorded
+# 3-6 mm/day and shared none of these "dry" weeks -> gauge-offline-as-zero.
+QC_MASK_DATE_RANGES = {
+    "afono_UH": [
+        ("2022-08-14", "2022-10-05"),
+        ("2022-10-18", "2022-11-16"),
+        ("2024-07-12", "2024-08-15"),
+    ],
+}
+
+# ---------------------------------------------------------------------------
 # Temporal resolution of the modelling dataset
 # ---------------------------------------------------------------------------
 # "daily" (default) or "weekly" (ISO calendar weeks, Monday-Sunday).

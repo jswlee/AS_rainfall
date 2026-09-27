@@ -1,0 +1,30 @@
+{
+  "station_roles": {
+    "aasu_UH": "test",
+    "aasufou80": "train",
+    "aasufou90": "train",
+    "afono_UH": "test",
+    "airport5101": "train",
+    "airport80": "train",
+    "aoloafou": "train",
+    "aua": "train",
+    "aunuu": "train",
+    "aunuu_UH": "test",
+    "fagaitua": "train",
+    "iliili": "train",
+    "malaeimi": "train",
+    "malaeimi_1691": "train",
+    "maloata": "train",
+    "masefau": "train",
+    "matatula": "train",
+    "mt_alava": "train",
+    "pioa_afono": "train",
+    "poloa_UH": "test",
+    "satala": "train",
+    "siufaga_WRCC": "train",
+    "toa_ridge_WRCC": "train",
+    "vaipito2000": "train",
+    "vaipito_UH": "test",
+    "vaipito_res": "train"
+  }
+}

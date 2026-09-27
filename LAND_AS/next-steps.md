@@ -23,44 +23,94 @@ most relevant ideas are:
   (`results/*.ipynb`, `results/climatology.py`,
   `land/visualization_utils.py`).
 
+`Daily_Modeling` is also relevant. `LAND_AS.prepare` already imports its weekly
+aggregation, so the current dataset already uses complete ISO weeks and doubles
+each reanalysis channel into within-week means plus within-week standard
+deviations. `LAND_AS` now also supports fold-local normalization, temporal year
+blocks, and `mean`/`median` fold aggregation in `tune.py`. The most useful
+remaining imports are optimization metrics beyond MAE/MSE (CSI and percentile
+bias), Tweedie/Bernoulli-Gamma losses, and more systematic architecture search.
+Do not compare its reported metrics directly with `LAND_AS`: it uses a
+different split and does not include the same rainfall-lag feature contract.
+
+## Immediate finding: low-end target shift
+
+The data-prep notebook now includes a dedicated low-end audit
+(`notebooks/01_data_prep_eda.ipynb`). The key result is that the training/test
+difference is not just a temporal rainfall-regime difference:
+
+- training: 197/6,686 exact-zero weeks (2.95%);
+- post-2016 test stations: 17/1,188 exact-zero weeks (1.43%);
+- post-2016 rows for the two training WRCC stations: 2/734 (0.27%);
+- those same WRCC stations had a 0.73% pre-2017 zero rate.
+
+Most training zeros come from a small set of legacy gauges; `pioa_afono`,
+`vaipito2000`, `aunuu`, `fagaitua`, and `vaipito_res` contribute about 66% of
+them. Complete-week aggregation looks correct. The dominant issue is therefore
+station/network heterogeneity plus a smaller temporal component.
+
+This changes the experiment order: source/site quality control and
+station-sensitivity ablations are now higher priority than another scalar loss
+sweep. A hurdle/Bernoulli-Gamma model remains possible, but a leakage-free
+occurrence classifier improves existing OOF amount predictions by only about
+0.2-0.3 mm MAE and still predicts tens of millimeters on dry weeks.
+
 ## 1. Highest-priority controlled experiments
 
-### 1.1 Huber delta sweep
+### 1.1 Source and site quality control
 
-Current scalar runs use `--huber-delta 0.5`. Larger values make the objective
-more MSE-like for ordinary errors while retaining a linear tail penalty. This
-should be tested before changing the architecture.
+Before deleting stations or adding an occurrence head, inspect the high-zero
+legacy records directly:
 
-Run each candidate under a separate name:
+- `aunuu`
+- `vaipito2000`
+- `pioa_afono`
+- `fagaitua`
+- `vaipito_res`
 
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_d025 `
-  --huber-delta 0.25 `
-  --loss-type huber_weighted `
-  --monitor mse `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
+Questions to answer:
 
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_d1 `
-  --huber-delta 1.0 `
-  --loss-type huber_weighted `
-  --monitor mse `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
+- are missing observations encoded as zero?
+- are multi-day accumulations represented by zeros followed by a large total?
+- does the zero rate change at a gauge move, source change, or unit change?
+- are dry weeks physically plausible given neighboring stations and atmosphere?
+- why does `aunuu` differ so sharply from `aunuu_UH`?
 
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_d2 `
-  --huber-delta 2.0 `
-  --loss-type huber_weighted `
-  --monitor mse `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
-```
+The output should be a station-level QC table with evidence, not merely a list
+of stations to drop.
 
-Acceptance: better LOSO out-of-fold MSE/MAE than
-`weekly_land_v5_huber_rw_msemon`, without materially worse OOF high-quantile
-bias. Use test metrics only after the OOF winner is selected.
+### 1.2 Station-sensitivity ablation
 
-### 1.2 Rainfall-weight strength
+After QC, train a controlled run excluding the stations whose dry behavior is
+least trustworthy or least transferable. Start with the smallest defensible
+removal set (for example `aunuu` and `vaipito2000`) rather than dropping all
+high-zero stations.
+
+Evaluation should include:
+
+- ordinary LOSO OOF metrics;
+- OOF metrics for retained versus removed stations;
+- predicted probability below 1/5/10 mm;
+- mean prediction on observed dry weeks;
+- post-2016 metrics only after the ablation is selected.
+
+This tests whether the legacy dry-week tail is helping the model learn real
+occurrence behavior or teaching it an untransferable low-rain mass.
+
+### 1.3 Huber delta sweep
+
+The initial delta sweep is now complete (`delta=0.25`, `1.0`, `2.0` against the
+retained `0.5` variants). It changed mostly the bias/extreme tradeoff and did
+not produce a decisive OOF or test improvement. A further sweep is therefore
+lower priority unless paired with the weighted loss and MSE monitor under the
+same seeds.
+
+The completed sweep showed that Huber's robustness parameter mostly moves the
+MAE/bias/extreme tradeoff rather than solving the low-end distribution problem.
+Do not run another delta grid until a stronger feature or data change is
+available.
+
+### 1.4 Rainfall-weight strength
 
 The current weighted loss uses `log1p(target)` in normalized-target units. A
 natural extension is an explicit weight exponent or cap:
@@ -77,7 +127,7 @@ Why try it: ordinary Huber improved MAE but became negatively biased; the
 present `log1p` weight corrected that bias. The correct next question is how
 much wet-week emphasis is optimal, not merely whether weighting helps.
 
-### 1.3 Increase ensemble size
+### 1.5 Increase ensemble size
 
 The original LAND experiments used ten ensemble members per setting. The
 current American Samoa runs use three seeds per LOSO fold. Five or seven seeds
@@ -96,7 +146,7 @@ Existing checkpoints are skipped; seeds 45 and 46 are added. Also evaluate seed
 dispersion, not just ensemble mean performance. If seed spread is large, model
 selection is not yet stable enough for subtle architecture changes.
 
-### 1.4 Station-balanced sampling
+### 1.6 Station-balanced sampling
 
 `--balanced-stations` already exists and gives each training station equal
 expected representation. This is a defensible experiment because the target is
@@ -115,7 +165,7 @@ down-weighting their information.
 Acceptance should be based on mean and worst-station OOF metrics, not only
 pooled OOF metrics.
 
-### 1.5 Compare checkpoint monitors under paired folds
+### 1.7 Compare checkpoint monitors under paired folds
 
 `--monitor mae` and `--monitor mse` do not change the loss; they choose which
 validation score retains the checkpoint. The weighted-Huber/MSE-monitor run is
@@ -201,21 +251,41 @@ Implementation notes:
 This is a stronger comparison than the GLM alone because it isolates the effect
 of learned spatial features.
 
-### 3.2 Zero-inflated Gamma or hurdle model
+### 3.2 Bernoulli-Gamma / hurdle model
 
 A two-head model can predict:
 
 1. probability of a wet week;
 2. positive rainfall amount conditional on a wet week.
 
-This is scientifically appealing for rainfall, but only worthwhile if the
-weekly target contains enough zero or near-zero weeks. First count exact and
-near-zero weeks in the assembled dataset. If zeros are rare, a hurdle model adds
-complexity without enough information to train the occurrence head.
+`Daily_Modeling` implements this as `bernoulli_gamma`
+(`Daily_Modeling/models/losses.py`). It is scientifically defensible, but the
+weekly American Samoa target is only mildly zero-inflated:
 
-The original LAND implementation assumes a continuous Gamma response and
-therefore does not directly solve exact-zero inflation either. A hurdle model
-would be a departure, not a replication.
+```text
+training weeks: 197 / 6686 exact zeros (2.95%)
+test weeks:      17 / 1188 exact zeros (1.43%)
+```
+
+The existing Gamma loss drops dry weeks from the amount fit. A Bernoulli-Gamma
+model would use those weeks to train an occurrence head, but the occurrence
+signal is sparse at weekly resolution. The new leakage-free diagnostic in
+`01_data_prep_eda.ipynb` finds LOSO wet/dry AUC around `0.88`, yet probability
+scaling only reduces OOF MAE by about `0.2-0.3 mm` and does not make dry-week
+predictions close to zero. `Daily_Modeling`'s own weekly tuning also favors
+ordinary Gamma over Bernoulli-Gamma. None of this rules out a hurdle model, but
+it means occurrence alone is unlikely to resolve the train/test low-end shift.
+
+If tested, keep it as a controlled challenger and compare:
+
+- overall MAE/RMSE/R2 and bias;
+- wet/dry POD, FAR, CSI, ETS, and HSS;
+- conditional wet-week amount error;
+- upper-quantile bias;
+- seed/station-fold variance.
+
+Fit wet/dry probability thresholds and `lambda_bce` only on LOSO validation
+predictions, never on the post-2016 test stations.
 
 ### 3.3 Quantile regression
 
@@ -286,11 +356,18 @@ Persistence is weak overall, but antecedent conditions may still matter in
 interaction with atmosphere and terrain. Existing rainfall lags can be extended
 with:
 
+- lagged `dry_days` or `wet_days` within each prior week;
 - two-week accumulated rainfall;
 - four-week accumulated rainfall;
 - previous-week anomaly from station climatology;
 - count or duration of recent wet weeks;
 - a missingness-aware summary rather than raw lags only.
+
+The first item is the most directly motivated by the low-end audit: the current
+model sees that the previous week totaled, for example, 10 mm, but not whether
+that total occurred in one day or was spread across several days. Lagged
+within-week occurrence counts could therefore improve dry-spell persistence
+without exposing current-week target information.
 
 These features are easy to evaluate in Ridge/GBM before adding them to LAND.
 
@@ -325,6 +402,13 @@ nested station-year folds           → joint transfer
 
 No new test evaluation is needed to implement this. It is a better selection
 criterion for methods intended to work after 2016.
+
+The unused post-2016 WRCC rows should remain a diagnostic bridge, not be folded
+into training before evaluation. They are useful for checking whether a selected
+method improves temporal extrapolation independently of the five UH test
+stations. If source-aware features are ever added, remember that the UH observing
+network does not occur in training, so network identity alone cannot explain the
+final test transfer.
 
 ### 5.2 Station-cluster uncertainty intervals
 
@@ -403,25 +487,33 @@ predictions.
 
 ## 8. Recommended order
 
-1. Finish the Huber delta and weight-strength sweep.
-2. Add five seeds to the best loss formulation.
-3. Build OOF predictions for Ridge/GBM and test a leakage-free multi-model
+1. Complete station/source QC for the high-zero legacy gauges and document
+   whether their zeros are physical observations or reporting artifacts.
+2. Run the smallest defensible station-sensitivity ablation; keep the removed
+   stations in validation reports rather than silently dropping them.
+3. Evaluate the completed v6 spatial and temporal candidates under one common
+   LOSO finalist protocol. Do not compare raw spatial and temporal tuning MSE.
+4. Add lagged `dry_days`/`wet_days` features, first to Ridge/GBM and then to
+   LAND only if the baselines improve on OOF low-end diagnostics.
+5. Increase the leading formulation from three to five seeds.
+6. Build OOF predictions for Ridge/GBM and test a leakage-free multi-model
    blend.
-4. Add station-balanced sampling if equal station influence is scientifically
-   desired.
-5. Add temporal and station-year validation summaries.
-6. Revisit daily atmospheric encoding under the v5-sized scalar setup.
-7. Consider neural Tweedie, quantile regression, or a hurdle head.
-8. Consider Hawaii transfer only after the AS evaluation workflow is stable.
+7. Add station-year and expanding-window temporal validation summaries.
+8. Revisit daily atmospheric encoding under the v5-sized scalar setup.
+9. Consider neural Tweedie, quantile regression, or a controlled hurdle head.
+10. Consider Hawaii transfer only after the AS source/validation issues are
+    stable enough that domain shift can be interpreted.
 
 ## 9. Promotion criteria
 
 A new model should not replace the current candidates unless it:
 
 - improves OOF MAE or MSE under paired station folds;
+- improves or preserves OOF low-end diagnostics (`<1/5/10 mm` rates and mean
+  prediction on dry weeks);
 - does not materially worsen OOF bias or high-quantile bias;
 - remains competitive under station-cluster bootstrap intervals;
-- has acceptable worst-station performance;
+- has acceptable worst-station and worst-source-group performance;
 - retains a test prediction file aligned to the same observed/station arrays;
 - includes code, environment, data-hash, and command provenance.
 

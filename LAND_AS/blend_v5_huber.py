@@ -1,5 +1,6 @@
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import numpy as np
 import torch
 
 from LAND_AS import config
-from LAND_AS.data import crop_from_hp, cv_folds, load_data, loaders, model_metadata
+from LAND_AS.data import crop_from_hp, cv_folds, load_data, loaders, model_metadata, normalized_bundle
 from LAND_AS.engine import device, predict, save_json
 from LAND_AS.metrics import extreme_metrics, regression_metrics
 from LAND_AS.model import build_model
@@ -56,14 +57,43 @@ def _oof_predictions(run_dir, bundle, folds, batch_size, cache_path):
         str(path.relative_to(run_dir)) for fold_dir in fold_dirs
         for path in sorted(fold_dir.glob("seed_*.pt"))
     ])
+    normalization = np.asarray([
+        path.with_name(f"{path.stem}_normalization.json").exists()
+        for fold_dir in fold_dirs
+        for path in sorted(fold_dir.glob("seed_*.pt"))
+    ])
+    run_normalization = run_dir / "normalization.json"
+    normalization_digest = (
+        hashlib.sha256(run_normalization.read_bytes()).hexdigest()
+        if run_normalization.exists() else "none"
+    )
     if cache_path.exists():
         cached = np.load(cache_path, allow_pickle=True)
-        if "checkpoints" in cached.files and np.array_equal(cached["checkpoints"], checkpoint_names):
+        cached_normalization = (
+            cached["fold_normalization"] if "fold_normalization" in cached.files
+            else np.zeros(len(normalization), dtype=bool)
+        )
+        cached_digest = (
+            str(cached["normalization_digest"].item())
+            if "normalization_digest" in cached.files else "none"
+        )
+        cache_ok = (
+            "checkpoints" in cached.files
+            and np.array_equal(cached["checkpoints"], checkpoint_names)
+            and np.array_equal(cached_normalization, normalization)
+            and cached_digest == normalization_digest
+        )
+        if cache_ok:
             return cached["indices"], cached["observed"], cached["predicted"]
         print(f"checkpoint set changed; rebuilding OOF cache {cache_path.name}")
 
     hp = json.loads((run_dir / "hyperparameters.json").read_text())
-    metadata = model_metadata(bundle, hp.get("climate_patch"), hp.get("climate_lag_weeks"), hp.get("rain_lag_weeks"))
+    default_bundle = (
+        normalized_bundle(bundle, stats=json.loads(run_normalization.read_text()))
+        if run_normalization.exists()
+        else bundle
+    )
+    metadata = model_metadata(default_bundle, hp.get("climate_patch"), hp.get("climate_lag_weeks"), hp.get("rain_lag_weeks"))
     target_device = device()
     all_indices, all_observed, all_predicted = [], [], []
 
@@ -77,15 +107,25 @@ def _oof_predictions(run_dir, bundle, folds, batch_size, cache_path):
         checkpoints = sorted(fold_dir.glob("seed_*.pt"))
         if not checkpoints:
             raise FileNotFoundError(f"No checkpoints found in {fold_dir}")
-        loader = loaders(
-            bundle, {"val": val_index}, batch_size, shuffle_train=False, crop=crop_from_hp(hp)
+        default_loader = loaders(
+            default_bundle, {"val": val_index}, batch_size, shuffle_train=False, crop=crop_from_hp(hp)
         )["val"]
+        normalized_loader = None
         predictions = []
         observed = None
         for checkpoint in checkpoints:
+            loader, target_scale = default_loader, default_bundle.stats["target_scale"]
+            if checkpoint.with_name(f"{checkpoint.stem}_normalization.json").exists():
+                if normalized_loader is None:
+                    fold_bundle = normalized_bundle(bundle, train_index)
+                    normalized_loader = loaders(
+                        fold_bundle, {"val": val_index}, batch_size,
+                        shuffle_train=False, crop=crop_from_hp(hp),
+                    )["val"]
+                loader, target_scale = normalized_loader, fold_bundle.stats["target_scale"]
             model = build_model(hp, metadata).to(target_device)
             model.load_state_dict(torch.load(checkpoint, map_location=target_device, weights_only=True)["state_dict"])
-            current_observed, prediction = predict(model, loader, bundle.stats["target_scale"], target_device)
+            current_observed, prediction = predict(model, loader, target_scale, target_device)
             observed = current_observed
             predictions.append(prediction)
         all_indices.append(val_index)
@@ -98,7 +138,8 @@ def _oof_predictions(run_dir, bundle, folds, batch_size, cache_path):
     predicted = np.concatenate(all_predicted)
     np.savez_compressed(
         cache_path, indices=indices, observed=observed, predicted=predicted,
-        checkpoints=checkpoint_names,
+        checkpoints=checkpoint_names, fold_normalization=normalization,
+        normalization_digest=normalization_digest,
     )
     return indices, observed, predicted
 

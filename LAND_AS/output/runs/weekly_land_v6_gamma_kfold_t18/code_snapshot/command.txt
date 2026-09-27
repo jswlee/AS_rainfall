@@ -1,0 +1,1 @@
+C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\train.py --study weekly_land_v6_gamma_kfold_mse --trial 18 --run weekly_land_v6_gamma_kfold_t18 --seeds 3 --epochs 500 --patience 50 --workers 4

@@ -135,13 +135,21 @@ Rebuild it with:
 - The selected v5 hyperparameters use `rain_lag_weeks=2`, so only the first two
   rainfall lags remain in the runtime feature vector.
 
-Normalization uses only the pre-2017 training split:
+The default bundle uses only the pre-2017 training split for normalization:
 
 - atmospheric channels: per-channel train mean/std;
 - DEM channels: land-pixel mean/std;
 - target: standard deviation of training rainfall.
 
-The saved `normalization.json` and `split.json` in each run record these
+For cross-validation, `normalized_bundle()` rebuilds these statistics using each
+fold's own training rows. This mirrors `Daily_Modeling`'s fold-local
+normalization and prevents a temporal or LOSO validation fold from influencing
+its own feature scaling. New checkpoints write `seed_<N>_normalization.json`;
+evaluation and OOF blending use that per-checkpoint marker to select fold-local
+scaling. Older checkpoints without the marker retain their original
+global-training normalization for backward compatibility.
+
+The run-level `normalization.json` and `split.json` record the all-training-row
 settings for reproduction.
 
 ## 4. LAND_AS architecture
@@ -220,6 +228,24 @@ selects which one controls early stopping and checkpoint retention:
   misses and can improve RMSE/extreme-week behavior.
 
 This affects checkpoint selection, not the form of the training loss.
+
+### 4.6 Why Gamma remains ahead of Bernoulli-Gamma
+
+A Bernoulli-Gamma/hurdle model would learn separate occurrence and positive-amount
+components. That is appropriate for zero-inflated daily rainfall, but weekly
+American Samoa totals are rarely exactly dry:
+
+- training rows: 197 exact zeros in 6,686 samples (2.95%);
+- test rows: 17 exact zeros in 1,188 samples (1.43%).
+
+The current Gamma loss already excludes those rare dry weeks from the amount fit.
+A Bernoulli occurrence head would therefore receive sparse weekly supervision and
+add another output, threshold, and calibration decision for a phenomenon that is
+not currently the dominant error source. `Daily_Modeling` makes the same
+practical distinction: Bernoulli-Gamma is the daily default, while ordinary Gamma
+is the weekly default. Its weekly tuning also favored Gamma over Bernoulli-Gamma.
+Bernoulli-Gamma remains a valid controlled challenger, but it should not replace
+Gamma without leakage-free validation showing an improvement.
 
 ## 5. Baselines and why they are included
 
@@ -358,7 +384,9 @@ Outputs:
 ```text
 LAND_AS/output/baselines/
 ├── test_metrics.json              # pooled test-set baselines
-├── test_metrics_by_station.json   # baselines + all runs/blends by station
+├── test_metrics_by_station.json   # strict JSON: baselines + runs/blends by station
+├── test_metrics_by_station.csv    # long-form table for Excel/pandas
+├── test_metrics_by_station.md     # stations x models metric tables
 ├── test_predictions.npz           # baseline predictions only
 ├── model_metrics.json             # overall metrics for runs and blends
 ├── model_predictions.npz          # aligned predictions for runs and blends
@@ -405,6 +433,74 @@ current-week atmospheric channels and no climate lag. The persisted run
 hyperparameters already contain `climate_units=390`.
 
 Inspect the study with `LAND_AS/notebooks/02_tuning_eda.ipynb`.
+
+### New controlled tuning rounds
+
+`LAND_AS.tune` now supports the `Daily_Modeling`-inspired controls that matter
+most here: spatial versus temporal validation folds, mean/median fold
+aggregation, Gamma versus scalar Huber heads, weighted losses, Huber delta, and
+station-balanced sampling.
+
+A fast spatial screen, using the same three-station-group style as the retained
+v5 study:
+
+```powershell
+.\venv\Scripts\python.exe -m LAND_AS.tune `
+  --study weekly_land_v6_gamma_kfold_mse `
+  --model-type gamma `
+  --rainfall-weight `
+  --opt-metric mse `
+  --cv-mode kfold --folds 3 --fold-agg median `
+  --search-space core `
+  --trials 40 --epochs 500 --patience 50 --min-epochs 30
+```
+
+A temporal screen for the current weighted-Huber loss:
+
+```powershell
+.\venv\Scripts\python.exe -m LAND_AS.tune `
+  --study weekly_land_v6_huber_rw_temporal_mse `
+  --model-type huber `
+  --loss-type huber_weighted `
+  --huber-delta 0.5 `
+  --opt-metric mse `
+  --cv-mode temporal --folds 3 --fold-agg median `
+  --search-space core `
+  --trials 40 --epochs 500 --patience 50 --min-epochs 30
+```
+
+After a study finishes, train its selected configuration under the standard
+21-fold LOSO protocol:
+
+```powershell
+.\venv\Scripts\python.exe -m LAND_AS.train `
+  --study weekly_land_v6_huber_rw_temporal_mse `
+  --trial 36 `
+  --run weekly_land_v6_huber_rw_t36 `
+  --seeds 3 --epochs 500 --patience 50 --workers 4
+```
+
+The completed v6 studies are:
+
+| Study | CV mode | Raw winner | Fold-normalized winner | Trained run |
+|---|---|---:|---:|---|
+| `weekly_land_v6_gamma_kfold_mse` | spatial 3-fold | trial 18 | trial 18 | `weekly_land_v6_gamma_kfold_t18` |
+| `weekly_land_v6_gamma_temporal_mse` | temporal 3-fold | trial 12 | trial 17 | `weekly_land_v6_gamma_temporal_mse` (trial 12) |
+| `weekly_land_v6_huber_rw_temporal_mse` | temporal 3-fold | trial 22 | trial 36 | `weekly_land_v6_huber_rw_temporal_mse` (trial 22), `weekly_land_v6_huber_rw_t36` |
+
+`--cv-mode both` is available but expensive: it combines 21 LOSO folds with the
+requested number of temporal folds. Prefer it only for finalist validation, not
+broad Optuna search.
+
+Do not compare raw Optuna objectives across `cv-mode` values. Spatial groups and
+temporal blocks have different validation variance, station coverage, and
+difficulty, so a temporal MSE around 3,200 is not directly worse than a spatial
+MSE around 1,600. Use `--opt-metric mse_ratio` for a dimensionless score equal
+to validation MSE divided by the fold's train-mean climatology MSE, or evaluate
+finalists under one common validation protocol.
+
+If a post-hoc fold-normalized ranking selects a non-default Optuna trial, train it
+explicitly with `--trial N` instead of relying on the raw-objective best trial.
 
 ## 8. Training and evaluation commands
 
@@ -546,27 +642,50 @@ The test set is not used to select the weight.
 | Run | Change from v5 | Selection monitor |
 |---|---|---|
 | `weekly_land_v5` | Original Gamma NLL | v5-era MAE early stopping |
-| `weekly_land_v5_huber` | Scalar softplus output + Huber | MAE |
+| `weekly_land_v5_huber` | Scalar softplus output + Huber (`delta=0.5`) | MAE |
+| `weekly_land_v5_huber_d025` | Scalar Huber, `delta=0.25` | MAE |
+| `weekly_land_v5_huber_d1` | Scalar Huber, `delta=1.0` | MAE |
+| `weekly_land_v5_huber_d2` | Scalar Huber, `delta=2.0` | MAE |
 | `weekly_land_v5_huber_rw` | `huber_weighted` loss | MAE |
 | `weekly_land_v5_huber_rw_msemon` | `huber_weighted` loss | MSE |
+| `weekly_land_v6_gamma_kfold_t18` | Retuned Gamma from spatial k-fold trial 18 | MSE |
+| `weekly_land_v6_gamma_temporal_mse` | Retuned Gamma from temporal raw-MSE trial | MSE |
+| `weekly_land_v6_huber_rw_temporal_mse` | Retuned weighted Huber, raw temporal best | MSE |
+| `weekly_land_v6_huber_rw_t36` | Retuned weighted Huber, fold-normalized temporal trial 36 | MSE |
 
-All four use the same v5 atmospheric, terrain, month, and lag feature settings
-and the same 21-fold LOSO protocol.
+The seven v5 variants use the same v5 atmospheric, terrain, month, and lag
+feature settings. The four v6 finalists use tuned hyperparameters but are all
+trained and evaluated under the standard 21-fold LOSO protocol.
 
 ### 10.2 Overall test metrics
+
+Metrics below evaluate each retained checkpoint with the normalization
+statistics saved for that run. New runs will instead use per-checkpoint
+fold-local normalization. Baselines are rebuilt on the corrected training-station
+scaler.
 
 | Model | RMSE | MAE | Bias | R2 | Spearman | 98th-pct bias | CSI >=50 mm |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Ridge baseline | 49.353 | 35.902 | +1.021 | 0.480 | 0.683 | -22.32% | 0.646 |
 | GBM baseline | 50.365 | 34.293 | -6.641 | 0.458 | 0.671 | -23.48% | 0.632 |
 | Tweedie GLM baseline | 55.322 | 35.528 | -12.044 | 0.346 | 0.724 | -14.93% | 0.660 |
-| Gamma v5 | 50.843 | 36.039 | -0.005 | 0.448 | 0.662 | -22.67% | 0.643 |
-| Huber | 50.746 | 34.970 | -6.927 | 0.450 | 0.664 | -25.55% | 0.636 |
+| Gamma v5 | 50.829 | 36.067 | +0.101 | 0.448 | 0.661 | -23.16% | 0.642 |
+| Huber (`delta=0.5`) | 50.746 | 34.970 | -6.927 | 0.450 | 0.664 | -25.55% | 0.636 |
+| Huber (`delta=0.25`) | 50.695 | 35.929 | +1.266 | 0.451 | 0.665 | -25.65% | 0.628 |
+| Huber (`delta=1.0`) | 50.873 | 36.152 | +0.734 | 0.447 | 0.656 | -23.85% | 0.632 |
+| Huber (`delta=2.0`) | 50.838 | 36.170 | +0.562 | 0.448 | 0.657 | -25.33% | 0.636 |
 | Weighted Huber | 50.495 | 35.561 | -0.653 | 0.455 | 0.666 | -24.15% | 0.632 |
 | Weighted Huber + MSE monitor | 50.373 | 35.749 | +0.827 | 0.458 | 0.667 | -24.20% | 0.632 |
-| Gamma + Huber blend | 50.363 | 35.008 | -4.726 | 0.458 | 0.667 | -25.90% | 0.642 |
-| Gamma + weighted-Huber blend | 50.488 | 35.710 | -0.175 | 0.456 | 0.665 | -24.12% | 0.637 |
-| Gamma + weighted-Huber-MSE blend | 50.436 | 35.737 | +0.229 | 0.457 | 0.666 | -24.02% | 0.635 |
+| v6 Gamma spatial k-fold t18 | 51.035 | 35.412 | -4.480 | 0.444 | 0.666 | -28.31% | 0.636 |
+| v6 Gamma temporal | 50.702 | 35.433 | -3.091 | 0.451 | 0.676 | -28.73% | 0.652 |
+| v6 weighted Huber temporal | 50.285 | 35.846 | -0.143 | 0.460 | 0.668 | -26.26% | 0.642 |
+| v6 weighted Huber temporal t36 | 49.584 | 35.612 | +1.719 | 0.475 | 0.675 | -22.76% | 0.644 |
+| Gamma + Huber blend | 50.353 | 35.017 | -4.594 | 0.458 | 0.667 | -26.00% | 0.638 |
+| Gamma + Huber `d025` blend | 50.498 | 35.802 | +0.463 | 0.455 | 0.665 | -24.09% | 0.635 |
+| Gamma + Huber `d1` blend | 50.565 | 35.849 | +0.271 | 0.454 | 0.663 | -23.61% | 0.635 |
+| Gamma + Huber `d2` blend | 50.568 | 35.853 | +0.213 | 0.454 | 0.664 | -23.77% | 0.637 |
+| Gamma + weighted-Huber blend | 50.521 | 35.772 | -0.073 | 0.455 | 0.665 | -23.91% | 0.638 |
+| Gamma + weighted-Huber-MSE blend | 50.469 | 35.793 | +0.282 | 0.456 | 0.665 | -24.05% | 0.636 |
 
 ### 10.3 Interpretation
 
@@ -574,6 +693,9 @@ and the same 21-fold LOSO protocol.
   best neural model for high-end magnitude and CSI.
 - Ordinary Huber improves typical MAE but develops a consistent negative bias
   and underpredicts extremes more strongly.
+- The `delta=0.25`, `1.0`, and `2.0` Huber sweep confirms that the loss change
+  mostly moves the bias/extreme tradeoff rather than producing a large overall
+  accuracy gain.
 - Rainfall-weighted Huber mostly removes that negative bias and improves RMSE,
   supporting the hypothesis that the scalar Huber objective needed more wet-week
   influence.
@@ -583,19 +705,37 @@ and the same 21-fold LOSO protocol.
   lower MAE, but remains negatively biased and weak at the 98th percentile.
 - Ridge and GBM are not merely sanity checks: they are competitive alternatives
   and should remain in every comparison table.
+- The tuned spatial Gamma finalist does not improve on v5 and has more negative
+  bias, suggesting that the k-fold search is not producing a better transferable
+  configuration.
+- The tuned temporal Gamma candidate improves ranking and CSI but still has a
+  material negative bias and weak upper-tail magnitude.
+- The fold-normalized temporal weighted-Huber trial (`t36`) is the strongest
+  neural RMSE/R2 candidate so far, though Ridge remains slightly better on both
+  aggregate metrics.
 - No neural model currently dominates the comparison across all metrics.
 
 The leading candidates depend on the intended objective:
 
 - lowest neural MAE: `v5_gamma_huber_cv_mse` or `weekly_land_v5_huber`;
-- best neural calibration balance: `weekly_land_v5_huber_rw_msemon`;
-- strongest neural extreme/CSI behavior: `weekly_land_v5`;
+- best neural RMSE/R2 balance: `weekly_land_v6_huber_rw_t36`;
+- strongest neural CSI: `weekly_land_v6_gamma_temporal_mse`;
+- best v5 calibration balance: `weekly_land_v5_huber_rw_msemon`;
 - simplest competitive model: `ridge`;
 - lowest tabular-baseline MAE: `gbm`.
 
 ## 11. Per-station differences
 
-Overall scores hide station-level differences. Use:
+Overall scores hide station-level differences. Use either of these files:
+
+```text
+LAND_AS/output/baselines/test_metrics_by_station.md
+LAND_AS/output/baselines/test_metrics_by_station.csv
+```
+
+The Markdown file provides a station-by-model table for each metric, while the
+CSV is the complete long-form table for filtering/pivoting. The canonical
+machine-readable source remains:
 
 ```text
 LAND_AS/output/baselines/test_metrics_by_station.json
@@ -616,7 +756,55 @@ Use `LAND_AS/notebooks/04_results_comparison.ipynb` to inspect station heatmaps,
 per-station errors, observed/predicted variance, QQ plots, and time-series
 behavior.
 
-## 12. Historical experiments not retained
+## 12. Low-end rainfall audit
+
+`LAND_AS/notebooks/01_data_prep_eda.ipynb` contains a dedicated low-end
+distribution diagnostic. It compares the pre-2017 training rows, post-2016 test
+stations, and 734 unused post-2016 "bridge" rows for the two WRCC training
+stations (`siufaga_WRCC` and `toa_ridge_WRCC`).
+
+Key findings:
+
+- Training has 197/6,686 exact-zero weeks (2.95%); test has 17/1,188 (1.43%).
+- The post-2016 bridge group has only 2/734 exact-zero weeks (0.27%).
+- The same two bridge stations had a 0.73% pre-2017 zero rate, so the same-site
+  temporal shift is much smaller than the difference between the training pool
+  and bridge/test periods.
+- Training zeros are concentrated in a few legacy stations. `pioa_afono`,
+  `vaipito2000`, `aunuu`, `fagaitua`, and `vaipito_res` contribute about 66% of
+  the exact-zero training weeks.
+- `aunuu` is especially heterogeneous: the legacy daily gauge has a 12.4%
+  weekly zero rate, while the nearby modern `aunuu_UH` record has no observed
+  zero weeks in 51 complete weeks.
+- Weekly aggregation keeps only complete seven-day weeks and is not the obvious
+  source of the discrepancy. The raw `vaipito2000` record contributes another
+  772 complete weeks before the 1980 reanalysis start date; those are audited
+  separately as `pre_1980_excluded` and are not model rows.
+
+The implication is that the low-end discrepancy is primarily a station/source
+composition issue, with a smaller temporal component, rather than an isolated
+preprocessing bug. Historical daily gauges have much wider heterogeneity in
+zero rates, units, record length, and reporting resolution than the modern UH
+test stations. The strict split therefore asks the model to extrapolate across
+both location and observing network.
+
+The same notebook also evaluates whether a dry-week occurrence head is likely
+to fix this. Leakage-free LOSO wet/dry classifiers achieve ROC AUC around 0.88,
+but dry-event precision/recall remain constrained by the rare-event rate.
+Probability-scaling the existing amount predictions improves OOF MAE by only
+about 0.2-0.3 mm and leaves predicted dry-week rainfall near 20-27 mm. This
+supports keeping Bernoulli-Gamma/hurdle models as controlled challengers rather
+than treating occurrence as the dominant error source.
+
+Promotion should therefore include low-end diagnostics, not just pooled MAE:
+
+- predicted probability below 1, 5, and 10 mm;
+- mean prediction on observed dry weeks;
+- dry-event precision/recall;
+- conditional bias and MAE by observed-rainfall bins;
+- station/source-group sensitivity.
+
+## 13. Historical experiments not retained
 
 Earlier exploratory code and outputs were removed from the active tree. The
 main lessons were:
@@ -633,7 +821,7 @@ main lessons were:
 Those deleted experiments are not represented in the current output tree and
 should not be cited as active model candidates.
 
-## 13. Reproducibility
+## 14. Reproducibility
 
 Training, evaluation, and blending write source snapshots:
 
@@ -663,11 +851,11 @@ Run metadata also includes:
 The original `weekly_land_v5` predates the snapshot system, so it has
 `reproduction.json` documenting the reconstructed command and Optuna provenance.
 
-## 14. Notebook guide
+## 15. Notebook guide
 
 ```text
 LAND_AS/notebooks/
-├── 01_data_prep_eda.ipynb          # raw and prepared data inspection
+├── 01_data_prep_eda.ipynb          # raw/prepared data + low-end shift audit
 ├── 02_tuning_eda.ipynb             # v5 Optuna study and split diagnostics
 ├── 03_training_eda.ipynb           # LOSO histories and run evaluation
 ├── 04_results_comparison.ipynb     # baselines, runs, and blends together
@@ -679,14 +867,15 @@ The fifth notebook adapts figure ideas from the original repository's
 `results_III.ipynb`, `topography_alignment.ipynb`, and `rah_comparison.ipynb`.
 It uses American Samoa data rather than the Hawaii-specific map/GCM files.
 
-## 15. Output map
+## 16. Output map
 
 ```text
 LAND_AS/output/
 ├── baselines/   # pooled baselines + aligned model comparisons
 ├── blends/      # leakage-free Gamma/Huber blend outputs
+├── figures/     # notebook-generated diagnostic figures
 ├── runs/        # retained LOSO ensembles and evaluations
-└── tuning/      # retained v5 Optuna study
+└── tuning/      # retained Optuna studies
 ```
 
 The main entry points are:
@@ -708,7 +897,7 @@ LAND_AS/baselines/evaluate.py # baseline and aligned-model metrics
 `LAND_AS/next-steps.md` documents the recommended future experiments and the
 validation controls required before any new candidate is promoted.
 
-## 16. Practical decision rule
+## 17. Practical decision rule
 
 A candidate should not be promoted on one metric. Compare at least:
 
@@ -717,6 +906,8 @@ A candidate should not be promoted on one metric. Compare at least:
 - R2 and Spearman rank correlation;
 - 98th-percentile predicted/observed ratio;
 - CSI above 50 mm;
+- low-end rates below 1/5/10 mm and mean prediction on observed dry weeks;
+- conditional error by observed-rainfall bins;
 - station-level errors;
 - predicted variance by station.
 
