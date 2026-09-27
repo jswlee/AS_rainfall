@@ -57,19 +57,25 @@ checkpoint selection, blend-weight selection, or calibration.
 
 ### 3.1 Raw inputs
 
-`LAND_AS.prepare` calls the shared `Daily_Modeling` data builders. It expects:
+`LAND_AS.prepare` calls the data builders vendored under
+`LAND_AS/daily_modeling/` (copied from `Daily_Modeling` so this package is
+self-contained). It expects:
 
 - station metadata: `raw_data/AS/station_locations.csv`
 - daily station rainfall CSVs: `raw_data/AS/final_rainfall_per_station/`
 - daily reanalysis NetCDFs: `raw_data/AS/climate_variables_daily_1980-2024/`
 - terrain raster: `raw_data/AS/DEM/10m_tutuila_3band.tif`
 
+Raw data is located at `<repo root>/raw_data/AS` (monorepo layout) or
+`LAND_AS/raw_data/AS` (standalone layout) — whichever exists.
+
 Station metadata supplies latitude, longitude, elevation, source, and record
 bounds. Rainfall CSVs are converted to millimeters when needed.
 
 Two data-quality rules are applied at load time by
-`Daily_Modeling.data_utils.load_raw.load_daily_rainfall` (rules live in
-`Daily_Modeling/config.py`, evidence in `eda_scripts/rainfall_*.py`):
+`LAND_AS.daily_modeling.data_utils.load_raw.load_daily_rainfall` (rules live
+in `LAND_AS/daily_modeling/config.py`, evidence in
+`eda_scripts/rainfall_*.py`):
 
 - `aunuu` and `vaipito2000` are excluded entirely. `aunuu` reports in 0.1-inch
   increments (its minimum nonzero daily value is 2.54 mm), so drizzle days read
@@ -111,7 +117,7 @@ Runtime hyperparameters can crop or subsample these patches.
 
 ### 3.3 Weekly assembly
 
-`Daily_Modeling.data_utils.assemble_dataset.assemble(..., freq="weekly")` then
+`LAND_AS.daily_modeling.data_utils.assemble_dataset.assemble(..., freq="weekly")` then
 joins reanalysis, terrain, rainfall, and calendar fields and aggregates daily
 samples to ISO weeks.
 
@@ -1005,6 +1011,14 @@ reporting floors; whether to remove more is the station-sensitivity question in
   (`QC_EXCLUDE_STATIONS` + rebuild, 666 weeks / one LOSO fold lost) rather than
   removed outright.
 
+The ablation has now been run (`weekly_land_v6_huber_rw_t36_qc_nopioa_v2`,
+same t36 config, 18 folds): test RMSE worsened 49.32 to 50.02, MAE 35.46 to
+35.77, and R2 fell 0.480 to 0.465 — far above the ~0.01 mm run-to-run noise
+measured by an accidental identical-config rerun. Excluding `pioa_afono` loses
+more signal than artifact, so it is retained. The conclusion generalizes
+cautiously to the other co-occurring legacy gauges: further exclusions should
+be individually justified, not batched.
+
 The same notebook also evaluates whether a dry-week occurrence head is likely
 to fix this. Leakage-free LOSO wet/dry classifiers achieve ROC AUC around 0.88,
 but dry-event precision/recall remain constrained by the rare-event rate.
@@ -1100,6 +1114,7 @@ The main entry points are:
 
 ```text
 LAND_AS/prepare.py            # build feature caches and weekly NPZ
+LAND_AS/daily_modeling/       # vendored Daily_Modeling data builders + QC config
 LAND_AS/data.py               # split, lag features, crops, loaders, LOSO
 LAND_AS/model.py              # Gamma and Huber LAND heads/losses
 LAND_AS/engine.py             # fit, predict, metrics helpers

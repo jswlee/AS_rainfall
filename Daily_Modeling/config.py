@@ -36,7 +36,7 @@ DAILY_RAINFALL_DIR = _AS_DIR / "final_rainfall_per_station"
 #                51-70% zero days, weekly mean ~40 mm vs ~82 mm measured by
 #                co-located vaipito_res / vaipito_UH) -> systematically biased
 #                low, not merely zero-inflated.
-QC_EXCLUDE_STATIONS = frozenset({"aunuu", "vaipito2000", "pioa_afono"})
+QC_EXCLUDE_STATIONS = frozenset({"aunuu", "vaipito2000"})
 
 # Per-station date ranges (inclusive, YYYY-MM-DD) reclassified to missing.
 # afono_UH recorded exactly 0.000 every day for 30-53 consecutive days while

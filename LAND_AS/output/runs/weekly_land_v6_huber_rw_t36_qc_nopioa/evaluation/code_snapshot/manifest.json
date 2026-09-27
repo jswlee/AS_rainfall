@@ -1,9 +1,9 @@
 {
-  "created_utc": "2026-09-27T18:25:36.224434+00:00",
+  "created_utc": "2026-09-27T19:05:12.286165+00:00",
   "command": [
     "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\LAND_AS\\evaluate.py",
     "--run",
-    "weekly_land_v6_huber_rw_t36_qc_nopioa"
+    "weekly_land_v6_huber_rw_t36_qc_nopioa_v2"
   ],
   "cwd": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall",
   "python": {
@@ -15,13 +15,13 @@
   "git": {
     "commit": "f2d283106275eabf1f4e3a70389616d64272ac07",
     "dirty": true,
-    "status": "M Daily_Modeling/data_utils/load_raw.py\n M LAND_AS/README.md\n M LAND_AS/next-steps.md\n M LAND_AS/notebooks/01_data_prep_eda.ipynb\n M LAND_AS/output/baselines/fold_metrics.json\n M LAND_AS/output/baselines/model_metrics.json\n M LAND_AS/output/baselines/test_metrics.json\n M LAND_AS/output/baselines/test_metrics_by_station.csv\n M LAND_AS/output/baselines/test_metrics_by_station.json\n M LAND_AS/output/baselines/test_metrics_by_station.md\n?? LAND_AS/output/blends/v5_qc_gamma_huber_cv_mse/\n?? LAND_AS/output/runs/weekly_land_v5_huber_rw_msemon_qc/\n?? LAND_AS/output/runs/weekly_land_v5_qc/\n?? LAND_AS/output/runs/weekly_land_v6_huber_rw_t36_qc/\n?? LAND_AS/output/runs/weekly_land_v6_huber_rw_t36_qc_nopioa/\n?? LAND_AS/output/tuning/weekly_land_v7_huber_rw_temporal_broad/"
+    "status": "M Daily_Modeling/config.py\n M Daily_Modeling/data_utils/load_raw.py\n M LAND_AS/README.md\n M LAND_AS/next-steps.md\n M LAND_AS/notebooks/01_data_prep_eda.ipynb\n M LAND_AS/output/baselines/fold_metrics.json\n M LAND_AS/output/baselines/model_metrics.json\n M LAND_AS/output/baselines/test_metrics.json\n M LAND_AS/output/baselines/test_metrics_by_station.csv\n M LAND_AS/output/baselines/test_metrics_by_station.json\n M LAND_AS/output/baselines/test_metrics_by_station.md\n?? LAND_AS/output/blends/v5_qc_gamma_huber_cv_mse/\n?? LAND_AS/output/runs/weekly_land_v5_huber_rw_msemon_qc/\n?? LAND_AS/output/runs/weekly_land_v5_qc/\n?? LAND_AS/output/runs/weekly_land_v6_huber_rw_t36_qc/\n?? LAND_AS/output/runs/weekly_land_v6_huber_rw_t36_qc_nopioa/\n?? LAND_AS/output/runs/weekly_land_v6_huber_rw_t36_qc_nopioa_v2/\n?? LAND_AS/output/tuning/weekly_land_v7_huber_rw_temporal_broad/"
   },
   "dataset": {
     "path": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\LAND_AS\\data\\weekly_dataset.npz",
     "exists": true,
-    "sha256": "22bd2938cb08646a9b81df83d7eb83a89dc02555a27c3f0a1b030e79f135fb4d",
-    "size_bytes": 8260113
+    "sha256": "d46ac3709a4659939e5e76d1a773f80f36fe54f1c6eb293bda7d2c004651cf71",
+    "size_bytes": 7578920
   },
   "packages": {
     "numpy": "2.3.3",

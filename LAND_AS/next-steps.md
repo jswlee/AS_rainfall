@@ -23,15 +23,18 @@ most relevant ideas are:
   (`results/*.ipynb`, `results/climatology.py`,
   `land/visualization_utils.py`).
 
-`Daily_Modeling` is also relevant. `LAND_AS.prepare` already imports its weekly
-aggregation, so the current dataset already uses complete ISO weeks and doubles
-each reanalysis channel into within-week means plus within-week standard
-deviations. `LAND_AS` now also supports fold-local normalization, temporal year
-blocks, and `mean`/`median` fold aggregation in `tune.py`. The most useful
-remaining imports are optimization metrics beyond MAE/MSE (CSI and percentile
-bias), Tweedie/Bernoulli-Gamma losses, and more systematic architecture search.
-Do not compare its reported metrics directly with `LAND_AS`: it uses a
-different split and does not include the same rainfall-lag feature contract.
+`Daily_Modeling` is also relevant, though `LAND_AS` no longer imports it at
+runtime: the data builders and QC config it used are vendored under
+`LAND_AS/daily_modeling/` so the package is self-contained. The vendored
+dataset already uses complete ISO weeks and doubles each reanalysis channel
+into within-week means plus within-week standard deviations. `LAND_AS` now
+also supports fold-local normalization, temporal year blocks, and
+`mean`/`median` fold aggregation in `tune.py`. The most useful remaining
+imports from the external `Daily_Modeling` project are optimization metrics
+beyond MAE/MSE (CSI and percentile bias), Tweedie/Bernoulli-Gamma losses, and
+more systematic architecture search. Do not compare its reported metrics
+directly with `LAND_AS`: it uses a different split and does not include the
+same rainfall-lag feature contract.
 
 ## Immediate finding: low-end target shift — QC applied
 
@@ -112,7 +115,7 @@ Audited in `eda_scripts/rainfall_train_test_deep_dive.py` and
 - **Missing encoded as zero?** Yes, at `afono_UH`: three flat-zero runs
   (2022-08-14..10-05, 2022-10-18..11-16, 2024-07-12..08-15) during which
   `vaipito_UH`, `aunuu_UH`, and both WRCC gauges recorded 3-6 mm/day. Now
-  masked in `Daily_Modeling/config.py::QC_MASK_DATE_RANGES`.
+  masked in `LAND_AS/daily_modeling/config.py::QC_MASK_DATE_RANGES`.
 - **Multi-day accumulation?** Moderate at `pioa_afono` (post-zero-run wet days
   exceed 4x the median wet day 18% of the time) — flagged, not yet removed.
 - **Zero rate changes at a record discontinuity?** Yes, dramatically at
@@ -124,19 +127,32 @@ Audited in `eda_scripts/rainfall_train_test_deep_dive.py` and
   minimum nonzero daily value is exactly 0.1 inch — **excluded**.
 
 Mechanism: `QC_EXCLUDE_STATIONS` / `QC_MASK_DATE_RANGES` in
-`Daily_Modeling/config.py`, applied in `load_daily_rainfall`, so
-`LAND_AS.prepare` and `Daily_Modeling` assemblies both inherit the rules.
+`LAND_AS/daily_modeling/config.py` (the canonical copy for this package,
+vendored from `Daily_Modeling/config.py`), applied in `load_daily_rainfall`.
 Pre-QC dataset preserved as `LAND_AS/data/weekly_dataset_pre_qc.npz`.
 
-### 1.2 Station-sensitivity ablation
+### 1.2 Station-sensitivity ablation — `pioa_afono` result: RETAIN
 
-The first exclusion set (`aunuu` + `vaipito2000`) is already applied. The next
-controlled run should test the remaining high-zero legacy gauges — start with
-`pioa_afono` (accumulation signature) and optionally `fagaitua`, `vaipito_res`,
-`satala`. Mechanism: add names to `QC_EXCLUDE_STATIONS`, rerun
-`LAND_AS.prepare`, train with a new run name, then restore `config.py` and the
-npz. Keep a copy of the minimal-QC npz first, e.g.
-`cp LAND_AS/data/weekly_dataset.npz LAND_AS/data/weekly_dataset_qc_minimal.npz`.
+The first exclusion set (`aunuu` + `vaipito2000`) is applied. The
+`pioa_afono` ablation has been run and answered
+(`weekly_land_v6_huber_rw_t36_qc_nopioa_v2`, same t36 config, 18 folds):
+
+| | RMSE | MAE | Bias | R2 |
+|---|---:|---:|---:|---:|
+| `t36_qc` (19 folds, pioa kept) | **49.32** | **35.46** | +2.54 | **0.480** |
+| `t36_qc_nopioa_v2` (18 folds) | 50.02 | 35.77 | +3.11 | 0.465 |
+
+Exclusion worsened every headline metric far beyond the ~0.01 mm run-to-run
+noise measured by an accidental identical-config rerun — pioa's 666 weeks
+carry more real signal than artifact, so it stays in
+`QC_EXCLUDE_STATIONS`-exempt status. Optional follow-ups on `fagaitua`,
+`vaipito_res`, `satala` are lower expected value; run them only if a specific
+new artifact is found, not as a batch.
+
+Mechanism for any future ablation: add names to `QC_EXCLUDE_STATIONS` in
+`LAND_AS/daily_modeling/config.py`, rerun `LAND_AS.prepare`, train with a new
+run name (never reuse a run dir — fold indexing changes and stale checkpoints
+would be incorrectly skipped/reused), then restore `config.py` and the npz.
 
 Sequencing caution: `load_data()` reads `weekly_dataset.npz` once at process
 start. Do not run an ablation npz swap while a tuning study (or any other
@@ -562,9 +578,9 @@ predictions.
    median fold aggregation). Validate its finalists under one common protocol
    (`--cv-mode both` or LOSO) before training winners; never compare raw
    objectives across `cv-mode` values.
-4. Station-sensitivity ablation on `pioa_afono` (then optionally `fagaitua`,
-   `vaipito_res`, `satala`) via `QC_EXCLUDE_STATIONS` — sequentially, never
-   concurrent with a tuning study, and restore the npz afterwards (see 1.2).
+4. ~~Station-sensitivity ablation on `pioa_afono`~~ — done: exclusion worsened
+   RMSE 49.32→50.02, so it is retained (see 1.2). Further gauge exclusions are
+   low priority without new artifact evidence.
 5. Add lagged `dry_days`/`wet_days` features, first to Ridge/GBM and then to
    LAND only if the baselines improve on OOF low-end diagnostics.
 6. Increase the leading formulation from three to five seeds.

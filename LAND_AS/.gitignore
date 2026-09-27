@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Notebooks
+.ipynb_checkpoints/
+ipynb_checkpoints/
+
+# Data and artifacts (large, reproducible or sensitive)
+raw_data/
+data/features/
+data/*.npz
+*.nc
+*.npz
+*.pt
+*.pth
+*.pkl
+
+# OS
+.DS_Store
