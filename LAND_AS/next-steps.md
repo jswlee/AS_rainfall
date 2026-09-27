@@ -1,8 +1,8 @@
 # Next experiments for `LAND_AS`
 
 This document separates experiments that are statistically defensible with the
-current 26-station dataset from exploratory ideas that need more data or a new
-validation design.
+current 24-station dataset (26 stations minus the QC exclusions below) from
+exploratory ideas that need more data or a new validation design.
 
 The governing rule remains:
 
@@ -33,58 +33,116 @@ bias), Tweedie/Bernoulli-Gamma losses, and more systematic architecture search.
 Do not compare its reported metrics directly with `LAND_AS`: it uses a
 different split and does not include the same rainfall-lag feature contract.
 
-## Immediate finding: low-end target shift
+## Immediate finding: low-end target shift — QC applied
 
-The data-prep notebook now includes a dedicated low-end audit
-(`notebooks/01_data_prep_eda.ipynb`). The key result is that the training/test
-difference is not just a temporal rainfall-regime difference:
+The data-prep notebook includes a dedicated low-end audit
+(`notebooks/01_data_prep_eda.ipynb`), and `eda_scripts/rainfall_*.py` trace the
+same question back to the raw daily files. The training/test difference is not
+a temporal rainfall-regime difference — it is station/source composition:
 
-- training: 197/6,686 exact-zero weeks (2.95%);
-- post-2016 test stations: 17/1,188 exact-zero weeks (1.43%);
-- post-2016 rows for the two training WRCC stations: 2/734 (0.27%);
-- those same WRCC stations had a 0.73% pre-2017 zero rate.
+- pre-QC: training 197/6,686 exact-zero weeks (2.95%), test 17/1,188 (1.43%);
+- post-QC: training 143/6,078 (2.35%), test 3/1,170 (0.26%), bridge 2/734 (0.27%);
+- wet-week conditional means were nearly identical all along (77.3 vs 76.8 mm);
+  the entire shift was low-end mass plus a slightly heavier train tail.
 
-Most training zeros come from a small set of legacy gauges; `pioa_afono`,
-`vaipito2000`, `aunuu`, `fagaitua`, and `vaipito_res` contribute about 66% of
-them. Complete-week aggregation looks correct. The dominant issue is therefore
-station/network heterogeneity plus a smaller temporal component.
+Root causes found in the raw daily records:
 
-This changes the experiment order: source/site quality control and
-station-sensitivity ablations are now higher priority than another scalar loss
-sweep. A hurdle/Bernoulli-Gamma model remains possible, but a leakage-free
-occurrence classifier improves existing OOF amount predictions by only about
-0.2-0.3 mm MAE and still predicts tens of millimeters on dry weeks.
+- `aunuu` reports in 0.1-inch increments (min nonzero = 2.54 mm/day), so
+  drizzle reads as zero — **excluded** via `QC_EXCLUDE_STATIONS`.
+- `vaipito2000` degrades across decades (1970s-90s daily median = 0, weekly
+  mean ~40 mm vs ~82 mm at co-located `vaipito_res`/`vaipito_UH`) —
+  **excluded**.
+- `afono_UH` has three flat-zero runs of 30-53 days that neighbouring stations
+  contradict (gauge-offline stored as 0.000) — **masked to missing** via
+  `QC_MASK_DATE_RANGES`, which drops the affected incomplete weeks.
+- Remaining legacy zeros (`pioa_afono`, `fagaitua`, `vaipito_res`, `satala`,
+  `aasufou80`, `malaeimi_1691`: ~90% of what is left) are largely real dry
+  weeks — they co-occur across neighbouring stations at 3-15x the independence
+  rate — but are inflated by 0.01-inch reporting floors.
+
+This changes the experiment order: the QC is done; station-sensitivity
+ablation on the remaining high-zero gauges is the next controlled experiment,
+and another scalar loss sweep stays low priority. A hurdle/Bernoulli-Gamma
+model remains possible, but a leakage-free occurrence classifier improves
+existing OOF amount predictions by only about 0.2-0.3 mm MAE and still predicts
+tens of millimeters on dry weeks — and after QC there are only 143 training
+zeros to learn occurrence from anyway.
+
+### Post-QC model outcome
+
+The three leading configurations were retrained on the cleaned dataset
+(`_qc` runs) and all baselines were refit on the cleaned training rows
+(1,170-week test set):
+
+| Model | RMSE | MAE | Bias | R2 |
+|---|---:|---:|---:|---:|
+| Ridge | **48.37** | 34.71 | -2.07 | **0.500** |
+| GBM | 48.81 | **33.50** | -4.68 | 0.490 |
+| `weekly_land_v6_huber_rw_t36_qc` | 49.32 | 35.46 | +2.54 | 0.480 |
+| `v5_qc_gamma_huber_cv_mse` (blend) | 50.30 | 35.71 | +1.05 | 0.459 |
+| `weekly_land_v5_qc` | 50.59 | 35.91 | +0.76 | 0.453 |
+| `weekly_land_v5_huber_rw_msemon_qc` | 50.62 | 36.10 | +1.76 | 0.452 |
+
+Two conclusions:
+
+1. **The QC did not close the neural-vs-baseline gap; it widened it.** All
+   models improved because ~14 fake-dry `afono_UH` weeks (large misses for
+   everyone) were removed, but Ridge gained more than the best neural model
+   (49.35 to 48.37 vs 49.58 to 49.32 RMSE). The dominant open question is no
+   longer target cleanliness — it is whether the neural spatial features add
+   anything over pooled tabular regression.
+2. **The neural ordering did not change.** Weighted Huber still beats Gamma
+   and plain Huber; temporal-CV tuning still beats spatial k-fold (t36 remains
+   best). The `_qc` blend selected Huber weight 0.288 on OOF — mostly Gamma —
+   and still sits mid-pack.
+
+The active experiment is therefore a `--search-space broad` Optuna study
+(`weekly_land_v7_huber_rw_temporal_broad`) that finally retunes model width,
+dropout, batch size, and `dem_size` — the axes frozen since v5. Command and
+per-knob rationale are in `README.md` section 7 ("v7: broad architecture
+search on cleaned data").
 
 ## 1. Highest-priority controlled experiments
 
-### 1.1 Source and site quality control
+### 1.1 Source and site quality control — DONE (2026-09-26)
 
-Before deleting stations or adding an occurrence head, inspect the high-zero
-legacy records directly:
+Audited in `eda_scripts/rainfall_train_test_deep_dive.py` and
+`rainfall_npz_and_artifact_checks.py`. Answers to the planned questions:
 
-- `aunuu`
-- `vaipito2000`
-- `pioa_afono`
-- `fagaitua`
-- `vaipito_res`
+- **Missing encoded as zero?** Yes, at `afono_UH`: three flat-zero runs
+  (2022-08-14..10-05, 2022-10-18..11-16, 2024-07-12..08-15) during which
+  `vaipito_UH`, `aunuu_UH`, and both WRCC gauges recorded 3-6 mm/day. Now
+  masked in `Daily_Modeling/config.py::QC_MASK_DATE_RANGES`.
+- **Multi-day accumulation?** Moderate at `pioa_afono` (post-zero-run wet days
+  exceed 4x the median wet day 18% of the time) — flagged, not yet removed.
+- **Zero rate changes at a record discontinuity?** Yes, dramatically at
+  `vaipito2000`: 0% zeros + ~30 mm/day in 1958-60, then 51-70% zeros and a
+  median of 0 in the 1970s-90s — **excluded**.
+- **Are dry weeks physically plausible?** Mostly yes for the retained legacy
+  gauges: zero weeks co-occur across neighbours at 3-15x the independence rate.
+- **Why does `aunuu` differ from `aunuu_UH`?** Reporting resolution: `aunuu`'s
+  minimum nonzero daily value is exactly 0.1 inch — **excluded**.
 
-Questions to answer:
-
-- are missing observations encoded as zero?
-- are multi-day accumulations represented by zeros followed by a large total?
-- does the zero rate change at a gauge move, source change, or unit change?
-- are dry weeks physically plausible given neighboring stations and atmosphere?
-- why does `aunuu` differ so sharply from `aunuu_UH`?
-
-The output should be a station-level QC table with evidence, not merely a list
-of stations to drop.
+Mechanism: `QC_EXCLUDE_STATIONS` / `QC_MASK_DATE_RANGES` in
+`Daily_Modeling/config.py`, applied in `load_daily_rainfall`, so
+`LAND_AS.prepare` and `Daily_Modeling` assemblies both inherit the rules.
+Pre-QC dataset preserved as `LAND_AS/data/weekly_dataset_pre_qc.npz`.
 
 ### 1.2 Station-sensitivity ablation
 
-After QC, train a controlled run excluding the stations whose dry behavior is
-least trustworthy or least transferable. Start with the smallest defensible
-removal set (for example `aunuu` and `vaipito2000`) rather than dropping all
-high-zero stations.
+The first exclusion set (`aunuu` + `vaipito2000`) is already applied. The next
+controlled run should test the remaining high-zero legacy gauges — start with
+`pioa_afono` (accumulation signature) and optionally `fagaitua`, `vaipito_res`,
+`satala`. Mechanism: add names to `QC_EXCLUDE_STATIONS`, rerun
+`LAND_AS.prepare`, train with a new run name, then restore `config.py` and the
+npz. Keep a copy of the minimal-QC npz first, e.g.
+`cp LAND_AS/data/weekly_dataset.npz LAND_AS/data/weekly_dataset_qc_minimal.npz`.
+
+Sequencing caution: `load_data()` reads `weekly_dataset.npz` once at process
+start. Do not run an ablation npz swap while a tuning study (or any other
+training run) is in flight — the two processes would silently train on
+different station pools. Run the swap, `prepare`, and ablation train
+sequentially, then restore.
 
 Evaluation should include:
 
@@ -136,7 +194,7 @@ lucky initialization.
 
 ```powershell
 .\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_rw_msemon `
+  --run weekly_land_v5_huber_rw_msemon_qc `
   --loss-type huber_weighted `
   --monitor mse `
   --seeds 5 --epochs 500 --patience 50 --workers 4
@@ -155,7 +213,7 @@ down-weighting their information.
 
 ```powershell
 .\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_rw_msemon_balanced `
+  --run weekly_land_v5_huber_rw_msemon_balanced_qc `
   --loss-type huber_weighted `
   --monitor mse `
   --balanced-stations `
@@ -168,9 +226,10 @@ pooled OOF metrics.
 ### 1.7 Compare checkpoint monitors under paired folds
 
 `--monitor mae` and `--monitor mse` do not change the loss; they choose which
-validation score retains the checkpoint. The weighted-Huber/MSE-monitor run is
-currently the best neural standalone RMSE candidate, but monitor selection
-should be compared using the same seeds and folds across delta values.
+validation score retains the checkpoint. MSE monitoring has won every
+comparison so far (the two best neural runs pre- and post-QC, `t36` and
+`v5_huber_rw_msemon`, both use it), but monitor selection should still be
+compared using the same seeds and folds across delta values.
 
 A useful summary is a paired table:
 
@@ -263,8 +322,8 @@ A two-head model can predict:
 weekly American Samoa target is only mildly zero-inflated:
 
 ```text
-training weeks: 197 / 6686 exact zeros (2.95%)
-test weeks:      17 / 1188 exact zeros (1.43%)
+training weeks: 143 / 6078 exact zeros (2.35%)   # post-QC; was 197/6686 (2.95%)
+test weeks:        3 / 1170 exact zeros (0.26%)  # post-QC; was 17/1188 (1.43%)
 ```
 
 The existing Gamma loss drops dry weeks from the amount fit. A Bernoulli-Gamma
@@ -298,7 +357,7 @@ pinball loss. Advantages:
 
 Risks:
 
-- many outputs with only 21 spatial training folds;
+- many outputs with only 19 spatial training folds;
 - crossing quantiles unless constrained;
 - the 98th percentile may still be poorly estimated because extreme test weeks
   are scarce.
@@ -387,12 +446,15 @@ This is more scientifically informative than blindly increasing DEM model size.
 
 ### 5.1 Add temporal CV within the training period
 
-The original repository used year folds as well as station omission
-(`LocationAgnosticNeuralDownscaling/README.md`). `LAND_AS` currently uses only
-LOSO validation within pre-2017 years, while the test requires both spatial and
-temporal transfer.
+Partly implemented: `tune.py` already supports `--cv-mode temporal` and
+`--cv-mode both` (LOSO + temporal), temporal CV produced the two best neural
+models (`t36` pre- and post-QC), and the active v7 study uses temporal folds
+for search. What remains is making joint station × year evaluation a standard
+*finalist* protocol rather than only a tuning screen: trained runs still use
+LOSO alone for OOF predictions and checkpoint selection, while the test
+requires both spatial and temporal transfer.
 
-A stronger validation scheme would evaluate:
+The remaining stronger validation scheme would evaluate:
 
 ```text
 LOSO station folds                  → spatial transfer
@@ -400,8 +462,8 @@ pre-2017 blocked year folds         → temporal transfer
 nested station-year folds           → joint transfer
 ```
 
-No new test evaluation is needed to implement this. It is a better selection
-criterion for methods intended to work after 2016.
+No new test evaluation is needed to extend this to finalists. It is a better
+selection criterion for methods intended to work after 2016.
 
 The unused post-2016 WRCC rows should remain a diagnostic bridge, not be folded
 into training before evaluation. They are useful for checking whether a selected
@@ -471,7 +533,7 @@ test stations.
 
 The original LAND comparison used GLM+GP for unseen sites. An American Samoa
 analog could model residuals as a function of coordinates, elevation, and DEM
-summary features. With only 26 stations this may be unstable, but it is a useful
+summary features. With only 24 stations this may be unstable, but it is a useful
 spatial-interpolation reference.
 
 ### 7.2 Quantile or generalized additive baseline
@@ -487,21 +549,32 @@ predictions.
 
 ## 8. Recommended order
 
-1. Complete station/source QC for the high-zero legacy gauges and document
-   whether their zeros are physical observations or reporting artifacts.
-2. Run the smallest defensible station-sensitivity ablation; keep the removed
-   stations in validation reports rather than silently dropping them.
-3. Evaluate the completed v6 spatial and temporal candidates under one common
-   LOSO finalist protocol. Do not compare raw spatial and temporal tuning MSE.
-4. Add lagged `dry_days`/`wet_days` features, first to Ridge/GBM and then to
+1. ~~Complete station/source QC for the high-zero legacy gauges~~ — done;
+   `aunuu`/`vaipito2000` excluded and `afono_UH` offline runs masked (see 1.1).
+2. ~~Retrain the retained finalists on the cleaned dataset and regenerate
+   baselines~~ — done: `weekly_land_v5_qc`, `weekly_land_v5_huber_rw_msemon_qc`,
+   `weekly_land_v6_huber_rw_t36_qc`, and the `v5_qc_gamma_huber_cv_mse` blend;
+   pre-QC baseline metrics preserved in `output/baselines_pre_qc/`. Post-QC
+   Ridge still beats every neural run, so the open question is architecture,
+   not data cleanliness.
+3. **Active:** run the `weekly_land_v7_huber_rw_temporal_broad` Optuna study
+   (see README 7 — broad architecture space, temporal CV, `mse_ratio`,
+   median fold aggregation). Validate its finalists under one common protocol
+   (`--cv-mode both` or LOSO) before training winners; never compare raw
+   objectives across `cv-mode` values.
+4. Station-sensitivity ablation on `pioa_afono` (then optionally `fagaitua`,
+   `vaipito_res`, `satala`) via `QC_EXCLUDE_STATIONS` — sequentially, never
+   concurrent with a tuning study, and restore the npz afterwards (see 1.2).
+5. Add lagged `dry_days`/`wet_days` features, first to Ridge/GBM and then to
    LAND only if the baselines improve on OOF low-end diagnostics.
-5. Increase the leading formulation from three to five seeds.
-6. Build OOF predictions for Ridge/GBM and test a leakage-free multi-model
-   blend.
-7. Add station-year and expanding-window temporal validation summaries.
-8. Revisit daily atmospheric encoding under the v5-sized scalar setup.
-9. Consider neural Tweedie, quantile regression, or a controlled hurdle head.
-10. Consider Hawaii transfer only after the AS source/validation issues are
+6. Increase the leading formulation from three to five seeds.
+7. Build OOF predictions for Ridge/GBM and test a leakage-free multi-model
+   blend — the Ridge stack is now the most promising ensemble member given
+   the post-QC leaderboard.
+8. Add station-year and expanding-window temporal validation summaries.
+9. Revisit daily atmospheric encoding under the v5-sized scalar setup.
+10. Consider neural Tweedie, quantile regression, or a controlled hurdle head.
+11. Consider Hawaii transfer only after the AS source/validation issues are
     stable enough that domain shift can be interpreted.
 
 ## 9. Promotion criteria

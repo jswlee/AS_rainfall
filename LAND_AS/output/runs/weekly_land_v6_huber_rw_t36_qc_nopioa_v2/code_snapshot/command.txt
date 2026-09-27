@@ -1,0 +1,1 @@
+C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\train.py --study weekly_land_v6_huber_rw_temporal_mse --trial 36 --run weekly_land_v6_huber_rw_t36_qc_nopioa_v2 --seeds 3 --epochs 500 --patience 50 --workers 4

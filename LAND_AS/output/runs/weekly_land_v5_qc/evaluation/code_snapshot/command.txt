@@ -1,0 +1,1 @@
+C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\evaluate.py --run weekly_land_v5_qc
