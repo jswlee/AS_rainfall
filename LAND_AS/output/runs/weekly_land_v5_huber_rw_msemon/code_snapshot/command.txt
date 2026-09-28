@@ -1,1 +1,0 @@
-C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\train_v5_huber.py --run weekly_land_v5_huber_rw_msemon --loss-type huber_weighted --monitor mse --seeds 3 --epochs 500 --patience 50 --workers 4

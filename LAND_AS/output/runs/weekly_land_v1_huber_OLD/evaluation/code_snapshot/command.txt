@@ -1,0 +1,1 @@
+C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\s5_evaluate\evaluate.py --run weekly_land_v1_huber

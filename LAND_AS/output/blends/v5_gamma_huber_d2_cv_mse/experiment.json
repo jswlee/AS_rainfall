@@ -1,7 +1,0 @@
-{
-  "experiment": "Gamma/Huber blend selected on LOSO out-of-fold predictions",
-  "gamma_run": "weekly_land_v5",
-  "huber_run": "weekly_land_v5_huber_d2",
-  "primary_objective": "mse",
-  "leakage_control": "test predictions are blended only after the weight is selected on held-out training-station predictions"
-}

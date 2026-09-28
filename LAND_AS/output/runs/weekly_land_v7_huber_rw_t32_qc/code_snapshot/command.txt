@@ -1,1 +1,0 @@
-C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\train.py --study weekly_land_v7_huber_rw_temporal_broad --trial 32 --run weekly_land_v7_huber_rw_t32_qc --seeds 3 --epochs 500 --patience 50 --workers 4

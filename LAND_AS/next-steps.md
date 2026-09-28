@@ -25,7 +25,7 @@ most relevant ideas are:
 
 `Daily_Modeling` is also relevant, though `LAND_AS` no longer imports it at
 runtime: the data builders and QC config it used are vendored under
-`LAND_AS/daily_modeling/` so the package is self-contained. The vendored
+`LAND_AS/s1_prepare/` so the package is self-contained. The vendored
 dataset already uses complete ISO weeks and doubles each reanalysis channel
 into within-week means plus within-week standard deviations. `LAND_AS` now
 also supports fold-local normalization, temporal year blocks, and
@@ -115,7 +115,7 @@ Audited in `eda_scripts/rainfall_train_test_deep_dive.py` and
 - **Missing encoded as zero?** Yes, at `afono_UH`: three flat-zero runs
   (2022-08-14..10-05, 2022-10-18..11-16, 2024-07-12..08-15) during which
   `vaipito_UH`, `aunuu_UH`, and both WRCC gauges recorded 3-6 mm/day. Now
-  masked in `LAND_AS/daily_modeling/config.py::QC_MASK_DATE_RANGES`.
+  masked in `LAND_AS/s1_prepare/config.py::QC_MASK_DATE_RANGES`.
 - **Multi-day accumulation?** Moderate at `pioa_afono` (post-zero-run wet days
   exceed 4x the median wet day 18% of the time) — flagged, not yet removed.
 - **Zero rate changes at a record discontinuity?** Yes, dramatically at
@@ -127,7 +127,7 @@ Audited in `eda_scripts/rainfall_train_test_deep_dive.py` and
   minimum nonzero daily value is exactly 0.1 inch — **excluded**.
 
 Mechanism: `QC_EXCLUDE_STATIONS` / `QC_MASK_DATE_RANGES` in
-`LAND_AS/daily_modeling/config.py` (the canonical copy for this package,
+`LAND_AS/s1_prepare/config.py` (the canonical copy for this package,
 vendored from `Daily_Modeling/config.py`), applied in `load_daily_rainfall`.
 Pre-QC dataset preserved as `LAND_AS/data/weekly_dataset_pre_qc.npz`.
 
@@ -150,7 +150,7 @@ carry more real signal than artifact, so it stays in
 new artifact is found, not as a batch.
 
 Mechanism for any future ablation: add names to `QC_EXCLUDE_STATIONS` in
-`LAND_AS/daily_modeling/config.py`, rerun `LAND_AS.prepare`, train with a new
+`LAND_AS/s1_prepare/config.py`, rerun `LAND_AS.s1_prepare.prepare`, train with a new
 run name (never reuse a run dir — fold indexing changes and stale checkpoints
 would be incorrectly skipped/reused), then restore `config.py` and the npz.
 

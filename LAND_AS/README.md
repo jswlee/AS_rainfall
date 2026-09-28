@@ -41,7 +41,7 @@ Thus test predictions require generalization to both unseen locations and a
 later climate period. Randomly mixing stations or years would overstate
 performance because nearby station-years are highly correlated.
 
-The split is implemented in `LAND_AS/config.py` and `LAND_AS/data.py`:
+The split is implemented in `LAND_AS/config.py` and `LAND_AS/s2_dataset/data.py`:
 
 - `TRAIN_YEAR_END = 2016`
 - `TEST_STATIONS = ["aasu_UH", "afono_UH", "aunuu_UH", "poloa_UH", "vaipito_UH"]`
@@ -51,14 +51,14 @@ The split is implemented in `LAND_AS/config.py` and `LAND_AS/data.py`:
   the rainfall QC exclusions described in section 3.1)
 
 No test sample is used for architecture selection, objective selection,
-checkpoint selection, blend-weight selection, or calibration.
+checkpoint selection, or calibration.
 
 ## 3. Data pipeline
 
 ### 3.1 Raw inputs
 
-`LAND_AS.prepare` calls the data builders vendored under
-`LAND_AS/daily_modeling/` (copied from `Daily_Modeling` so this package is
+`LAND_AS.s1_prepare.prepare` calls the data builders vendored under
+`LAND_AS/s1_prepare/` (copied from `Daily_Modeling` so this package is
 self-contained). It expects:
 
 - station metadata: `raw_data/AS/station_locations.csv`
@@ -73,8 +73,8 @@ Station metadata supplies latitude, longitude, elevation, source, and record
 bounds. Rainfall CSVs are converted to millimeters when needed.
 
 Two data-quality rules are applied at load time by
-`LAND_AS.daily_modeling.data_utils.load_raw.load_daily_rainfall` (rules live
-in `LAND_AS/daily_modeling/config.py`, evidence in
+`LAND_AS.s1_prepare.load_raw.load_daily_rainfall` (rules live
+in `LAND_AS/s1_prepare/config.py`, evidence in
 `eda_scripts/rainfall_*.py`):
 
 - `aunuu` and `vaipito2000` are excluded entirely. `aunuu` reports in 0.1-inch
@@ -117,7 +117,7 @@ Runtime hyperparameters can crop or subsample these patches.
 
 ### 3.3 Weekly assembly
 
-`LAND_AS.daily_modeling.data_utils.assemble_dataset.assemble(..., freq="weekly")` then
+`LAND_AS.s1_prepare.assemble_dataset.assemble(..., freq="weekly")` then
 joins reanalysis, terrain, rainfall, and calendar fields and aggregates daily
 samples to ISO weeks.
 
@@ -139,7 +139,7 @@ LAND_AS/data/weekly_dataset.npz
 Rebuild it with:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.prepare `
+.\venv\Scripts\python.exe -m LAND_AS.s1_prepare.prepare `
   --start-date 1980-01-01 `
   --end-date 2024-12-31 `
   --rebuild
@@ -147,7 +147,7 @@ Rebuild it with:
 
 ### 3.4 Runtime lag and normalization
 
-`LAND_AS.data.load_data()` adds lag information at load time.
+`LAND_AS.s2_dataset.data.load_data()` adds lag information at load time.
 
 - `LAG_WEEKS = 3` prior weeks are materialized in the raw lag array.
 - For each lag, the model receives prior observed rainfall and a validity flag.
@@ -169,7 +169,7 @@ For cross-validation, `normalized_bundle()` rebuilds these statistics using each
 fold's own training rows. This mirrors `Daily_Modeling`'s fold-local
 normalization and prevents a temporal or LOSO validation fold from influencing
 its own feature scaling. New checkpoints write `seed_<N>_normalization.json`;
-evaluation and OOF blending use that per-checkpoint marker to select fold-local
+evaluation uses that per-checkpoint marker to select fold-local
 scaling. Older checkpoints without the marker retain their original
 global-training normalization for backward compatibility.
 
@@ -178,7 +178,7 @@ settings for reproduction.
 
 ## 4. LAND_AS architecture
 
-The implementation is in `LAND_AS/model.py`.
+The implementation is in `LAND_AS/s3_model/model.py`.
 
 ### 4.1 Branch design
 
@@ -263,7 +263,7 @@ American Samoa totals are rarely exactly dry:
 - test rows: 3 exact zeros in 1,170 samples (0.26%).
 
 (Counts are post-QC; before QC they were 197/6,686 (2.95%) and 17/1,188
-(1.43%) -- see section 12.)
+(1.43%) -- see section 11.)
 
 The current Gamma loss already excludes those rare dry weeks from the amount fit.
 A Bernoulli occurrence head would therefore receive sparse weekly supervision and
@@ -279,8 +279,8 @@ Gamma without leakage-free validation showing an improvement.
 The baseline code is in:
 
 ```text
-LAND_AS/baselines/models.py
-LAND_AS/baselines/evaluate.py
+LAND_AS/s5_evaluate/baselines/models.py
+LAND_AS/s5_evaluate/baselines/evaluate.py
 ```
 
 All learned test baselines are pooled across stations, like LAND. This matters
@@ -398,10 +398,10 @@ It is saved in `fold_metrics.json` but is not a valid final test baseline.
 
 ## 6. Baseline output files
 
-Regenerate all baseline metrics and include every evaluated run/blend with:
+Regenerate all baseline metrics and include every evaluated run with:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.baselines.evaluate `
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.baselines.evaluate `
   --all-runs `
   --folds
 ```
@@ -411,12 +411,12 @@ Outputs:
 ```text
 LAND_AS/output/baselines/
 ├── test_metrics.json              # pooled test-set baselines
-├── test_metrics_by_station.json   # strict JSON: baselines + runs/blends by station
+├── test_metrics_by_station.json   # strict JSON: baselines + runs by station
 ├── test_metrics_by_station.csv    # long-form table for Excel/pandas
 ├── test_metrics_by_station.md     # stations x models metric tables
 ├── test_predictions.npz           # baseline predictions only
-├── model_metrics.json             # overall metrics for runs and blends
-├── model_predictions.npz          # aligned predictions for runs and blends
+├── model_metrics.json             # overall metrics for runs
+├── model_predictions.npz          # aligned predictions for runs
 └── fold_metrics.json              # optimistic LOSO station climatology
 ```
 
@@ -463,7 +463,7 @@ Inspect the study with `LAND_AS/notebooks/02_tuning_eda.ipynb`.
 
 ### New controlled tuning rounds
 
-`LAND_AS.tune` now supports the `Daily_Modeling`-inspired controls that matter
+`LAND_AS.s4_train.tune` now supports the `Daily_Modeling`-inspired controls that matter
 most here: spatial versus temporal validation folds, mean/median fold
 aggregation, Gamma versus scalar Huber heads, weighted losses, Huber delta, and
 station-balanced sampling.
@@ -472,7 +472,7 @@ A fast spatial screen, using the same three-station-group style as the retained
 v5 study:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.tune `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.tune `
   --study weekly_land_v6_gamma_kfold_mse `
   --model-type gamma `
   --rainfall-weight `
@@ -485,7 +485,7 @@ v5 study:
 A temporal screen for the current weighted-Huber loss:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.tune `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.tune `
   --study weekly_land_v6_huber_rw_temporal_mse `
   --model-type huber `
   --loss-type huber_weighted `
@@ -497,10 +497,10 @@ A temporal screen for the current weighted-Huber loss:
 ```
 
 After a study finishes, train its selected configuration under the standard
-LOSO protocol (19 folds after the rainfall QC exclusions):
+LOSO protocol (20 folds on the current 25-station dataset):
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
   --study weekly_land_v6_huber_rw_temporal_mse `
   --trial 36 `
   --run weekly_land_v6_huber_rw_t36 `
@@ -528,13 +528,17 @@ finalists under one common validation protocol.
 
 If a post-hoc fold-normalized ranking selects a non-default Optuna trial, train it
 explicitly with `--trial N` instead of relying on the raw-objective best trial.
+`python -m LAND_AS.s5_evaluate.evaluate --study NAME` automates that ranking: it
+scores the top trials by raw objective, mean per-fold rank, and worst-fold
+score, then prints the composite winner. Omitting `--trial` from `train.py`
+now applies the same selection automatically.
 
 ### v7: broad architecture search on cleaned data
 
 The post-QC study is:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.tune `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.tune `
   --study weekly_land_v7_huber_rw_temporal_broad `
   --model-type huber `
   --loss-type huber_weighted `
@@ -587,7 +591,7 @@ When the study finishes, prefer the fold-normalized ranking in `trials.csv`
 over the raw-objective best trial, then train the winner under LOSO:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
   --study weekly_land_v7_huber_rw_temporal_broad `
   --trial <N> `
   --run weekly_land_v7_huber_rw_t<N>_qc `
@@ -599,12 +603,12 @@ over the raw-objective best trial, then train the winner under LOSO:
 ### 8.1 Original Gamma v5
 
 The v5 run is complete and should remain frozen. Its training entry point was
-`LAND_AS.train`, which delegates fold-level work to `LAND_AS.parallelize`.
+`LAND_AS.s4_train.train`, which delegates fold-level work to `LAND_AS.s4_train.parallelize`.
 
 Reconstructed command:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
   --study weekly_land_v5 `
   --run weekly_land_v5 `
   --seeds 3 `
@@ -616,9 +620,11 @@ Reconstructed command:
 Evaluate:
 
 ```powershell
-.\venv\Scripts\python.exe -m LAND_AS.evaluate `
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
   --run weekly_land_v5
 ```
+
+**Note:** `train_v5_huber.py` has been removed from the package; sections 8.2-8.5 are kept as a record of the v5-era controlled experiments only.
 
 ### 8.2 Ordinary v5-sized Huber
 
@@ -633,7 +639,7 @@ Evaluate:
   --patience 50 `
   --workers 4
 
-.\venv\Scripts\python.exe -m LAND_AS.evaluate `
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
   --run weekly_land_v5_huber
 ```
 
@@ -649,7 +655,7 @@ Evaluate:
   --patience 50 `
   --workers 4
 
-.\venv\Scripts\python.exe -m LAND_AS.evaluate `
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
   --run weekly_land_v5_huber_rw
 ```
 
@@ -665,7 +671,7 @@ Evaluate:
   --patience 50 `
   --workers 4
 
-.\venv\Scripts\python.exe -m LAND_AS.evaluate `
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
   --run weekly_land_v5_huber_rw_msemon
 ```
 
@@ -700,12 +706,12 @@ Each variant should use a new run name so prior experiments remain comparable.
 The three leading configurations were retrained on the cleaned dataset after
 the QC rebuild (section 3.1). Pre-QC `output/baselines/` metrics were first
 copied to `output/baselines_pre_qc/` (the evaluation rewrites
-`model_metrics.json`), and `LAND_AS.baselines.evaluate --folds` was rerun so
+`model_metrics.json`), and `LAND_AS.s5_evaluate.baselines.evaluate --folds` was rerun so
 the baselines refit on the cleaned training rows.
 
 ```powershell
 # Gamma v5 (study best trial, equivalent to the retained v5 config)
-.\venv\Scripts\python.exe -m LAND_AS.train `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
   --study weekly_land_v5 --run weekly_land_v5_qc `
   --seeds 3 --epochs 500 --patience 50 --workers 4
 
@@ -716,58 +722,22 @@ the baselines refit on the cleaned training rows.
   --seeds 3 --epochs 500 --patience 50 --workers 4
 
 # v6 temporal-study trial 36 (best neural configuration)
-.\venv\Scripts\python.exe -m LAND_AS.train `
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
   --study weekly_land_v6_huber_rw_temporal_mse --trial 36 `
   --run weekly_land_v6_huber_rw_t36_qc `
   --seeds 3 --epochs 500 --patience 50 --workers 4
 
-.\venv\Scripts\python.exe -m LAND_AS.evaluate --run weekly_land_v5_qc
-.\venv\Scripts\python.exe -m LAND_AS.evaluate --run weekly_land_v5_huber_rw_msemon_qc
-.\venv\Scripts\python.exe -m LAND_AS.evaluate --run weekly_land_v6_huber_rw_t36_qc
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run weekly_land_v5_qc
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run weekly_land_v5_huber_rw_msemon_qc
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run weekly_land_v6_huber_rw_t36_qc
 ```
 
 Each `_qc` run skips existing checkpoints, so never reuse a pre-QC run name for
 a post-QC retrain — the fold count and row alignment differ.
 
-## 9. Blend workflow
+## 9. Current experiments and results
 
-`LAND_AS/blend_v5_huber.py` creates held-out predictions for every LOSO fold,
-averages seeds within each fold, scans a Huber weight from 0 to 1, and selects
-that weight using only training-station validation predictions. The selected
-weight is then applied to the already-evaluated test predictions.
-
-Example (post-QC members):
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.blend_v5_huber `
-  --gamma-run weekly_land_v5_qc `
-  --huber-run weekly_land_v5_huber_rw_msemon_qc `
-  --objective mse `
-  --output v5_qc_gamma_huber_cv_mse
-```
-
-Blend members must be trained on the same dataset version: the OOF fold count
-and row alignment are checked at blend time, so mixing pre- and post-QC runs
-fails or silently produces misaligned predictions.
-
-A blend output contains:
-
-```text
-selection.json
-oof_metrics.json
-oof_predictions.npz
-oof_weight_grid.csv
-test_metrics.json
-test_predictions.npz
-experiment.json
-code_snapshot/
-```
-
-The test set is not used to select the weight.
-
-## 10. Current experiments and results
-
-### 10.1 Completed model runs
+### 9.1 Completed model runs
 
 | Run | Change from v5 | Selection monitor |
 |---|---|---|
@@ -804,7 +774,7 @@ weight 0.288, i.e. mostly Gamma). Do not mix pre- and post-QC checkpoints,
 predictions, or metrics in comparisons: normalization statistics, lag-week
 alignment, and test observations all differ.
 
-### 10.2 Overall test metrics
+### 9.2 Overall test metrics
 
 Metrics below evaluate each retained checkpoint with the normalization
 statistics saved for that run. New runs will instead use per-checkpoint
@@ -861,7 +831,7 @@ differ.
 | Gamma + weighted-Huber blend | 50.521 | 35.772 | -0.073 | 0.455 | 0.665 | -23.91% | 0.638 |
 | Gamma + weighted-Huber-MSE blend | 50.469 | 35.793 | +0.282 | 0.456 | 0.665 | -24.05% | 0.636 |
 
-### 10.3 Interpretation
+### 9.3 Interpretation
 
 Post-QC interpretation (cleaned dataset):
 
@@ -913,7 +883,7 @@ The leading candidates on the cleaned dataset depend on the intended objective:
 - best neural CSI: `weekly_land_v6_huber_rw_t36_qc` (0.659);
 - best neural calibration (bias, 98th-pct): `weekly_land_v5_qc`.
 
-## 11. Per-station differences
+## 10. Per-station differences
 
 Overall scores hide station-level differences. Use either of these files:
 
@@ -945,7 +915,7 @@ Use `LAND_AS/notebooks/04_results_comparison.ipynb` to inspect station heatmaps,
 per-station errors, observed/predicted variance, QQ plots, and time-series
 behavior.
 
-## 12. Low-end rainfall audit
+## 11. Low-end rainfall audit
 
 `LAND_AS/notebooks/01_data_prep_eda.ipynb` contains a dedicated low-end
 distribution diagnostic. It compares the pre-2017 training rows, post-2016 test
@@ -1035,7 +1005,7 @@ Promotion should therefore include low-end diagnostics, not just pooled MAE:
 - conditional bias and MAE by observed-rainfall bins;
 - station/source-group sensitivity.
 
-## 13. Historical experiments not retained
+## 12. Historical experiments not retained
 
 Earlier exploratory code and outputs were removed from the active tree. The
 main lessons were:
@@ -1052,14 +1022,13 @@ main lessons were:
 Those deleted experiments are not represented in the current output tree and
 should not be cited as active model candidates.
 
-## 14. Reproducibility
+## 13. Reproducibility
 
-Training, evaluation, and blending write source snapshots:
+Training and evaluation write source snapshots:
 
 ```text
 <run>/code_snapshot/
 <run>/evaluation/code_snapshot/
-<blend>/code_snapshot/
 ```
 
 Each manifest records:
@@ -1082,14 +1051,14 @@ Run metadata also includes:
 The original `weekly_land_v5` predates the snapshot system, so it has
 `reproduction.json` documenting the reconstructed command and Optuna provenance.
 
-## 15. Notebook guide
+## 14. Notebook guide
 
 ```text
 LAND_AS/notebooks/
 ├── 01_data_prep_eda.ipynb          # raw/prepared data + low-end shift audit
 ├── 02_tuning_eda.ipynb             # v5 Optuna study and split diagnostics
 ├── 03_training_eda.ipynb           # LOSO histories and run evaluation
-├── 04_results_comparison.ipynb     # baselines, runs, and blends together
+├── 04_results_comparison.ipynb     # baselines and runs together
 └── 05_land_style_figures.ipynb     # LAND-style figures adapted to American Samoa
 ```
 
@@ -1098,13 +1067,12 @@ The fifth notebook adapts figure ideas from the original repository's
 `results_III.ipynb`, `topography_alignment.ipynb`, and `rah_comparison.ipynb`.
 It uses American Samoa data rather than the Hawaii-specific map/GCM files.
 
-## 16. Output map
+## 15. Output map
 
 ```text
 LAND_AS/output/
 ├── baselines/        # pooled baselines + aligned model comparisons (post-QC)
 ├── baselines_pre_qc/ # preserved pre-QC baseline metrics (historical)
-├── blends/           # leakage-free Gamma/Huber blend outputs
 ├── figures/          # notebook-generated diagnostic figures
 ├── runs/             # retained LOSO ensembles and evaluations
 └── tuning/           # retained Optuna studies
@@ -1113,24 +1081,22 @@ LAND_AS/output/
 The main entry points are:
 
 ```text
-LAND_AS/prepare.py            # build feature caches and weekly NPZ
-LAND_AS/daily_modeling/       # vendored Daily_Modeling data builders + QC config
-LAND_AS/data.py               # split, lag features, crops, loaders, LOSO
-LAND_AS/model.py              # Gamma and Huber LAND heads/losses
-LAND_AS/engine.py             # fit, predict, metrics helpers
-LAND_AS/parallelize.py        # fold/seed orchestration
-LAND_AS/train.py              # Gamma study/hyperparameter training
-LAND_AS/train_v5_huber.py     # controlled v5 scalar-Huber experiments
-LAND_AS/evaluate.py           # ensemble evaluation
-LAND_AS/blend_v5_huber.py     # OOF-selected Gamma/Huber blend
-LAND_AS/baselines/models.py   # baseline implementations
-LAND_AS/baselines/evaluate.py # baseline and aligned-model metrics
+LAND_AS/s1_prepare/prepare.py            # build feature caches and weekly NPZ
+LAND_AS/s1_prepare/       # vendored Daily_Modeling data builders + QC config
+LAND_AS/s2_dataset/data.py               # split, lag features, crops, loaders, LOSO
+LAND_AS/s3_model/model.py              # Gamma and Huber LAND heads/losses
+LAND_AS/s3_model/engine.py             # fit, predict, metrics helpers
+LAND_AS/s4_train/parallelize.py        # fold/seed orchestration
+LAND_AS/s4_train/train.py              # Gamma study/hyperparameter training
+LAND_AS/s5_evaluate/evaluate.py           # ensemble evaluation
+LAND_AS/s5_evaluate/baselines/models.py   # baseline implementations
+LAND_AS/s5_evaluate/baselines/evaluate.py # baseline and aligned-model metrics
 ```
 
 `LAND_AS/next-steps.md` documents the recommended future experiments and the
 validation controls required before any new candidate is promoted.
 
-## 17. Practical decision rule
+## 16. Practical decision rule
 
 A candidate should not be promoted on one metric. Compare at least:
 
