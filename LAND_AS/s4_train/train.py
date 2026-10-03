@@ -11,6 +11,7 @@ Usage: python -m LAND_AS.s4_train.train --study NAME --trial N --run NAME
 import argparse
 import json
 import os
+from pathlib import Path
 
 from LAND_AS import config
 from LAND_AS.s2_dataset.data import cv_folds, load_data
@@ -93,20 +94,39 @@ def main():
                              "post-LOSO_RECENT_YEAR_START years only (matches the test protocol)")
     parser.add_argument("--daily", action="store_true",
                         help="train on daily_dataset.npz (must match the study's dataset_freq)")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="dataset NPZ to train on (default: the config path for the freq)")
     args = parser.parse_args()
 
     if not args.hyperparameters and not args.study:
         parser.error("Must provide either --hyperparameters or --study")
 
     freq = "daily" if args.daily else "weekly"
-    bundle = load_data(freq=freq)
+    dataset_path = Path(args.dataset) if args.dataset else config.dataset_path_for(freq)
+    bundle = load_data(path=dataset_path, freq=freq)
     hp = _load_hyperparameters(args, bundle)
     if hp.get("dataset_freq", freq) != freq:
         raise ValueError(
             f"Hyperparameters were tuned on {hp['dataset_freq']} data; rerun with "
             f"{'--daily' if hp['dataset_freq'] == 'daily' else 'no --daily'} or fix dataset_freq"
         )
+    dem_cell_km = bundle.metadata.get("dem_cell_km", 1.0)
+    if abs(hp.get("dem_cell_km", dem_cell_km) - dem_cell_km) > 1e-9:
+        raise ValueError(
+            f"Hyperparameters were tuned on {hp['dem_cell_km']} km DEM cells but "
+            f"{dataset_path.name} has {dem_cell_km} km cells; local/regional_dem_cfg "
+            f"indices are resolution-specific -- retune on this dataset"
+        )
     hp["dataset_freq"] = freq
+    hp["dem_cell_km"] = dem_cell_km
+    hp["dataset_path"] = str(dataset_path)
+    # Record the resolved (size, km) crops so the run does not depend on the
+    # choice-table indices if dem_choices() changes later.
+    if "local_dem_crop" not in hp and "local_dem_cfg" in hp:
+        from LAND_AS.s2_dataset.data import dem_choices
+        local_choices, regional_choices = dem_choices(dem_cell_km)
+        hp["local_dem_crop"] = list(local_choices[hp["local_dem_cfg"]])
+        hp["regional_dem_crop"] = list(regional_choices[hp["regional_dem_cfg"]])
     hp["train_cv_mode"] = args.cv_mode
     if args.balanced_stations:
         hp["balanced_stations"] = True
@@ -118,7 +138,7 @@ def main():
     folds = cv_folds(bundle, count=args.folds, mode=args.cv_mode)
     output = config.RUNS_DIR / args.run
     output.mkdir(parents=True, exist_ok=True)
-    snapshot_code(output / "code_snapshot", TRAIN_SOURCE_FILES, dataset_path=config.dataset_path_for(freq))
+    snapshot_code(output / "code_snapshot", TRAIN_SOURCE_FILES, dataset_path=dataset_path)
     workers = args.workers if args.workers is not None else min(4, os.cpu_count() or 1)
     workers = max(1, min(workers, len(folds)))
     print(f"using device: {device()}")

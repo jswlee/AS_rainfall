@@ -1,0 +1,2 @@
+- Use the least code to solve the problem
+- Update the README.md after each code change

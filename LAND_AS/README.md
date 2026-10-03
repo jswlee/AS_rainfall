@@ -167,10 +167,32 @@ terrain patches with four channels:
 
 The maximum stored terrain extents are:
 
-- local DEM: `11 x 11` at 1-km spacing
-- regional DEM: `25 x 25` at 1-km spacing
+- local DEM: `11 x 11` at 1-km spacing (~11 km)
+- regional DEM: `25 x 25` at 1-km spacing (~25 km)
 
 Runtime hyperparameters can crop or subsample these patches.
+
+The base cell size is selectable via `prepare.py --dem-cell-km`. A non-default
+value rebuilds the base patches at that resolution over the same ~11/25 km
+extents and writes tagged files instead of overwriting the 1 km caches:
+
+```powershell
+.\venv\Scripts\python.exe -m LAND_AS.s1_prepare.prepare --dem-cell-km 0.25
+# -> data/features/dem_0p25km.npz  (45x45 local, 101x101 regional)
+# -> data/weekly_dataset_0p25km.npz
+```
+
+The dataset NPZ records `dem_cell_km`; `data.py` maps the tunable
+`(patch_size, km_per_cell)` DEM crop choices to cell strides. On the 1 km
+grid the candidates vary both size and spacing; on a finer base grid every
+candidate uses native cell spacing (e.g. all `(size, 0.25)` on the 0.25 km
+dataset — only the window size varies, spanning 0.75-11.25 km local and
+2.25-24.25 km regional). Runs also record the resolved crop as
+`local_dem_crop`/`regional_dem_crop` in `hyperparameters.json`, so a run is
+immune to later choice-table changes. Downstream stages select the dataset
+with `--dataset PATH` (`tune.py`, `train.py`, `evaluate.py`, and
+`baselines/evaluate.py`; baselines on a non-default grid write to
+`output/baselines_dem<X>km/`).
 
 ### 3.3 Weekly assembly
 
@@ -559,8 +581,8 @@ terrain model with no antecedent-rainfall input.
 The `--search-space broad` flag searches model width (`climate_multiplier`,
 `dem_units`, `month_units`, `hidden_units`), `dropout` over `[0.1, 0.7]`,
 `batch_size` over `[64 … 2048]`, optimizer settings, DEM crop configs
-(`local_dem_cfg`/`regional_dem_cfg` index `DEM_LOCAL_CANDIDATES` /
-`DEM_REGIONAL_CANDIDATES` in `s1_prepare/config.py`), and the three
+(`local_dem_cfg`/`regional_dem_cfg` index `DEM_LOCAL_CHOICES` /
+`DEM_REGIONAL_CHOICES` in `s2_dataset/data.py`), and the three
 architecture-ablation switches of section 4.7 (`lightweight`, `use_lag`,
 `dem_elev_only`). `climate_lag_weeks` and `rain_lag_weeks` are sampled
 independently over `0..LAG_WEEKS` — all asymmetric combinations are reachable.
@@ -589,6 +611,14 @@ Why these choices:
 - **`--model-type huber --loss-type huber_weighted`**: the weighted scalar
   head has been the strongest neural variant on this dataset; the Gamma head
   is covered by its own earlier studies.
+
+A companion study, `weekly_land_v3_huber_dem025_temporal_broad`, repeats the
+same protocol on `data/weekly_dataset_0p25km.npz` (`--dataset`, 0.25 km DEM
+cells). Robust selection picked trial 39 (`mse_ratio = 0.538`). NOTE: this
+study ran under an interim choice table that mixed strides — trial 39 chose
+a 5x5 @ 0.5 km local window. The table was subsequently restricted to
+native 0.25 km spacing only, so this study/run is superseded and its
+`local_dem_cfg` index no longer resolves to the same crop.
 
 ### Trial selection and retraining
 
@@ -709,6 +739,8 @@ post-2016 years.
 | `weekly_land_v3_huber_recent_bal_2` | same HPs, rerun | `loso_recent` | station-balanced |
 | `weekly_land_v3_huber_recent_bal_lowlr` | same HPs, `--learning-rate 9.13e-5`, 1000 epochs | `loso_recent` | station-balanced |
 | `weekly_land_v3_huber_rw_recent_broad` | raw-objective best trial (lags enabled: rain=3, climate=3; `dem_elev_only`) | `loso_recent` | station-balanced |
+| `weekly_land_v3_huber_rw_recent_broad_notbal` | same HPs | `loso_recent` | unweighted |
+| `weekly_land_v3_huber_dem025_recent_bal` | dem025 study trial-39 HPs, trained on `weekly_dataset_0p25km.npz` (0.25 km DEM cells) | `loso_recent` | station-balanced |
 
 Baselines (`s5_evaluate/baselines/models.py`) are refit on the same training
 rows: OLS, GBM, Tweedie GLM, persistence, pooled mean, month climatology.
@@ -748,13 +780,40 @@ LAND leads only on `poloa_UH` (by <1 mm). The spread on `aunuu_UH`
 seed-sensitivity in the table: that station has only ~51 test weeks, so a
 single seed can move its RMSE by 5 mm.
 
+#### DEM-resolution ablation (0.25 km cells)
+
+`weekly_land_v3_huber_dem025_recent_bal` was tuned and trained on
+`data/weekly_dataset_0p25km.npz` (`prepare --dem-cell-km 0.25`: 45x45 local /
+101x101 regional base patches covering the same extents; see section 3.2).
+Test rows and targets are identical to the 1 km dataset, so metrics are
+directly comparable; baselines below are refit on the 0.25 km features
+(`output/baselines_dem0p25km/`).
+
+| Model | RMSE | MAE | Bias | R2 | Spearman | CSI >=50 mm |
+|---|---:|---:|---:|---:|---:|---:|
+| **`weekly_land_v3_huber_dem025_recent_bal`** | **48.079** | 34.258 | -1.31 | **0.486** | 0.695 | **0.667** |
+| GBM baseline | 48.824 | 33.579 | -8.96 | 0.470 | 0.704 | - |
+| OLS baseline | 49.942 | 35.182 | -10.77 | 0.445 | 0.692 | - |
+| Tweedie GLM baseline | 59.477 | 37.075 | -14.88 | 0.213 | 0.705 | - |
+
+Caveat: this run predates the native-spacing-only choice table — its trial
+used a 5x5 @ 0.5 km local crop (stride 2 cells), so it does not isolate
+0.25 km sampling. A rerun under the corrected table is pending.
+Per-station RMSE: `aasu_UH` 52.0, `aunuu_UH` 35.6,
+`poloa_UH` 48.4, `vaipito_UH` 46.6.
+
 ### 9.3 Interpretation
 
-- **The neural model does not beat tuned tabular baselines.** GBM, OLS, and
-  the best LAND ensemble sit within ~0.7 mm RMSE of each other (49.2–49.9),
-  with R² ~0.45–0.46. This is the central empirical result: at ~20 training
-  stations on one orographically complex island, the location-agnostic CNN
-  branches add no measurable skill over pooled tabular regression.
+- **The neural model roughly ties tuned tabular baselines at 1 km DEM
+  resolution, and edges ahead at 0.25 km.** On the 1 km dataset GBM, OLS,
+  and the LAND ensembles sit within ~0.7 mm RMSE (49.2–49.9, R² ~0.45–0.46).
+  On the 0.25 km dataset the tuned LAND run reaches 48.08 / R² 0.486 vs
+  GBM's 48.82 / 0.470 — the first configuration to lead on RMSE and R²,
+  though GBM still has the better MAE (33.6 vs 34.3) and the gap (~0.7 mm)
+  is within the ~0.4–0.9 mm spread seen across identical-config reruns.
+  Tellingly, the tuner chose a sub-km local window (5x5 @ 0.5 km) that only
+  exists on the finer grid — consistent with the hypothesis that 1 km cells
+  oversmooth the island's <1 km-wide ridge line.
 - **The tuned winner went minimal.** The v3 broad search landed on
   `lightweight=1`, `rain_lag_weeks=0`, `climate_lag_weeks=0`, dropout ~0.16 —
   the Optuna basin itself migrated away from the heavier original

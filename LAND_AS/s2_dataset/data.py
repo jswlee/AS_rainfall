@@ -137,8 +137,9 @@ def _crop_patch(patch, size, stride=1):
     """Center-crop a (C, H, W) patch, sampling cells ``stride`` apart.
 
     Indices are clamped to the patch edge (same convention as
-    Daily_Modeling.crop_dem_patch). ``stride`` on a 1 km base patch acts as
-    km-per-cell, so (size, stride) controls both resolution and extent.
+    Daily_Modeling.crop_dem_patch). ``stride`` is in base-grid cells;
+    crop_from_hp() converts the tunable km-per-cell choices to cell strides
+    using the dataset's stored dem_cell_km.
     """
     h, w = patch.shape[-2], patch.shape[-1]
     ch, cw = h // 2, w // 2
@@ -148,26 +149,67 @@ def _crop_patch(patch, size, stride=1):
     return patch[..., rows, :][..., :, cols]
 
 
-# Tunable (size, stride) DEM crops. Extent = (size - 1) * stride + 1 cells,
-# which must fit the stored base patches (local 11x11 @1km, regional 25x25 @1km).
+# Tunable (size, km_per_cell) DEM crops. Extent ~= (size - 1) * km_per_cell,
+# which must fit the stored base patches (~11 km local, ~25 km regional).
+# crop_from_hp() converts km_per_cell to a cell stride via the dataset's
+# dem_cell_km, so these keep the same physical meaning at any base resolution.
 DEM_LOCAL_CHOICES = [(3, 1), (5, 1), (7, 1), (9, 1), (11, 1), (3, 2), (5, 2), (3, 3)]
 DEM_REGIONAL_CHOICES = [(9, 1), (13, 1), (17, 1), (21, 1), (25, 1), (9, 2), (11, 2), (7, 3), (9, 3), (5, 4), (7, 4)]
 
 
-def crop_from_hp(hp):
+def dem_choices(dem_cell_km=1.0):
+    """(size, km_per_cell) DEM crop candidates for a dataset's base cell size.
+
+    The base lists assume the 1 km grid. On a finer base grid the crop is
+    fixed to native cell spacing -- only the window size varies -- so every
+    candidate reads pixels at dem_cell_km resolution (sizes span the stored
+    ~11 km / ~25 km base extents).
+    """
+    if dem_cell_km >= 1.0:
+        return DEM_LOCAL_CHOICES, DEM_REGIONAL_CHOICES
+    local = [(n, dem_cell_km) for n in (3, 5, 7, 9, 11, 15, 21, 29, 45)
+             if n * dem_cell_km <= 11.5]
+    regional = [(n, dem_cell_km) for n in (9, 13, 17, 21, 25, 33, 49, 65, 97)
+                if n * dem_cell_km <= 25.5]
+    return local, regional
+
+
+def crop_from_hp(hp, dem_cell_km=None):
     """Resolve a per-sample crop spec from hyperparameters, or None.
 
-    Keys: ``local_dem_cfg`` / ``regional_dem_cfg`` (indices into the CHOICES
-    tables above), ``climate_patch`` (center-crop side length, stride 1),
+    Keys: ``local_dem_cfg`` / ``regional_dem_cfg`` (indices into the tables
+    from dem_choices()), ``climate_patch`` (center-crop side length, stride 1),
     ``climate_lag_weeks`` / ``rain_lag_weeks`` (lag depths to expose; "weeks"
     means lag periods -- days for the daily dataset. Requests deeper than the
     stored depth are clamped by RainDataset/model_metadata to lag_max).
+
+    ``dem_cell_km`` is the base-grid cell size recorded in the dataset NPZ
+    (``bundle.metadata['dem_cell_km']``; 1.0 for legacy datasets). It converts
+    the km-per-cell choices above into cell strides and selects the matching
+    choice table. Falls back to ``hp['dem_cell_km']`` then 1.0.
     """
+    if dem_cell_km is None:
+        dem_cell_km = hp.get("dem_cell_km", 1.0)
+    local_choices, regional_choices = dem_choices(dem_cell_km)
+
+    def _stride(km):
+        return max(1, int(round(km / dem_cell_km)))
+
     crop = {}
-    if "local_dem_cfg" in hp:
-        crop["local"] = DEM_LOCAL_CHOICES[hp["local_dem_cfg"]]
-    if "regional_dem_cfg" in hp:
-        crop["regional"] = DEM_REGIONAL_CHOICES[hp["regional_dem_cfg"]]
+    # Explicit (size, km) crops (stored in run hyperparameters.json) take
+    # precedence over the resolution-dependent choice-table indices.
+    if "local_dem_crop" in hp:
+        size, km = hp["local_dem_crop"]
+        crop["local"] = (size, _stride(km))
+    elif "local_dem_cfg" in hp:
+        size, km = local_choices[hp["local_dem_cfg"]]
+        crop["local"] = (size, _stride(km))
+    if "regional_dem_crop" in hp:
+        size, km = hp["regional_dem_crop"]
+        crop["regional"] = (size, _stride(km))
+    elif "regional_dem_cfg" in hp:
+        size, km = regional_choices[hp["regional_dem_cfg"]]
+        crop["regional"] = (size, _stride(km))
     if hp.get("climate_patch"):
         crop["climate"] = (hp["climate_patch"], 1)
     if "climate_lag_weeks" in hp:
@@ -213,6 +255,8 @@ def load_data(path=None, freq="weekly"):
         "stations": stations, "years": years, "months": raw["months"].astype(int),
         "variables": raw.get("variables", np.asarray([])), "roles": roles,
         "freq": freq,
+        "dataset_path": str(path),
+        "dem_cell_km": float(raw["dem_cell_km"]) if "dem_cell_km" in raw else 1.0,
         "climate_block": int(raw["reanalysis_patches"].shape[1]),
         "lag_max": n_lags,
         "_lag_index": lag_index,

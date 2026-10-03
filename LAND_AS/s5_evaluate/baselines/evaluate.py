@@ -168,15 +168,20 @@ def main():
     parser.add_argument("--folds", action="store_true", help="also run per-LOSO-fold station climatology")
     parser.add_argument("--daily", action="store_true",
                         help="evaluate on daily_dataset.npz; writes to output/baselines_daily")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="dataset NPZ to evaluate on (default: the config path for the freq)")
     args = parser.parse_args()
 
     freq = "daily" if args.daily else "weekly"
     threshold_mm = EXTREME_THRESHOLDS_MM[freq]
-    bundle = load_data(freq=freq)
+    bundle = load_data(path=args.dataset, freq=freq)
     train_idx, test_idx = bundle.splits["train"], bundle.splits["test"]
     observed = bundle.arrays["target"][test_idx].numpy()
     test_stations = bundle.metadata["stations"][test_idx]
     output = config.OUTPUT_DIR / ("baselines_daily" if freq == "daily" else "baselines")
+    dem_cell_km = bundle.metadata.get("dem_cell_km", 1.0)
+    if dem_cell_km != 1.0:
+        output = output.parent / f"{output.name}_dem{f'{dem_cell_km:g}'.replace('.', 'p')}km"
     output.mkdir(parents=True, exist_ok=True)
 
     results, predictions = {}, {}

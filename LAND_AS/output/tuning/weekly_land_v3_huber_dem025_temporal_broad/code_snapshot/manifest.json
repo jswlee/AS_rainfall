@@ -1,0 +1,123 @@
+{
+  "created_utc": "2026-10-03T19:21:46.145979+00:00",
+  "command": [
+    "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\LAND_AS\\s4_train\\tune.py",
+    "--study",
+    "weekly_land_v3_huber_dem025_temporal_broad",
+    "--model-type",
+    "huber",
+    "--loss-type",
+    "huber_weighted",
+    "--huber-delta",
+    "0.5",
+    "--opt-metric",
+    "mse_ratio",
+    "--cv-mode",
+    "temporal",
+    "--folds",
+    "3",
+    "--fold-agg",
+    "median",
+    "--search-space",
+    "broad",
+    "--trials",
+    "40",
+    "--epochs",
+    "500",
+    "--patience",
+    "50",
+    "--min-epochs",
+    "30",
+    "--dataset",
+    "LAND_AS/data/weekly_dataset_0p25km.npz"
+  ],
+  "cwd": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall",
+  "python": {
+    "executable": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\venv\\Scripts\\python.exe",
+    "version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "implementation": "CPython"
+  },
+  "platform": "Windows-10-10.0.26200-SP0",
+  "git": {
+    "commit": "4c379e49df4dce8a2bf4055f4e1c3480cd9c5bb0",
+    "dirty": true,
+    "status": "M LAND_AS/README.md\n M LAND_AS/s1_prepare/assemble_dataset.py\n M LAND_AS/s1_prepare/config.py\n M LAND_AS/s1_prepare/prepare.py\n M LAND_AS/s2_dataset/data.py\n M LAND_AS/s4_train/parallelize.py\n M LAND_AS/s4_train/train.py\n M LAND_AS/s4_train/tune.py\n M LAND_AS/s5_evaluate/baselines/evaluate.py\n M LAND_AS/s5_evaluate/evaluate.py\n?? AGENTS.md\n?? LAND_AS/output/tuning/weekly_land_v3_huber_dem025_temporal_broad/\n?? nul"
+  },
+  "dataset": {
+    "path": "LAND_AS\\data\\weekly_dataset_0p25km.npz",
+    "exists": true,
+    "sha256": "fb2405c3645a47d80d8e2409ebe138c57bbf2ede43b7a0d8436c5e27fbc3fb57",
+    "size_bytes": 10828417
+  },
+  "packages": {
+    "numpy": "2.3.3",
+    "pandas": "2.3.2",
+    "scikit-learn": "1.7.2",
+    "torch": "2.8.0+cu129",
+    "optuna": "4.5.0",
+    "xarray": "2025.9.0",
+    "scipy": "1.16.2"
+  },
+  "source_files": [
+    {
+      "path": "LAND_AS/s4_train/train.py",
+      "sha256": "ec58e21c5fd7da9a512b650d1707fd526621e77e1b80558e1d058d95628f17c4"
+    },
+    {
+      "path": "LAND_AS/s4_train/parallelize.py",
+      "sha256": "3f36942e9c2072710d5bfa906d67804eda82cfe7c1f811401a4f6a657a908c7d"
+    },
+    {
+      "path": "LAND_AS/s4_train/tune.py",
+      "sha256": "0b731233eff7ba987e7e12299d787d67e1c58bb5c911bba2662e24499025c8ce"
+    },
+    {
+      "path": "LAND_AS/s3_model/model.py",
+      "sha256": "8fd45bd232d2de97979892633be5b2dc8b6207e5a0fe239adb89ffc664c4bc9d"
+    },
+    {
+      "path": "LAND_AS/s3_model/engine.py",
+      "sha256": "7afc064e2d626ae4c3f29a4ba5537ae4f1e927b35db27d69d4b24e08c948ad6a"
+    },
+    {
+      "path": "LAND_AS/s3_model/metrics.py",
+      "sha256": "c6d6c9b060421afff907284dc856a99e116a7788d4a3d8e1abc4366ff980f2c7"
+    },
+    {
+      "path": "LAND_AS/s5_evaluate/evaluate.py",
+      "sha256": "cf6540ced67d249e88717cf1b7278618b04731d0b7febb8386da36f065b03cbf"
+    },
+    {
+      "path": "LAND_AS/s2_dataset/data.py",
+      "sha256": "fc61e07f3400fafc8037cb7a0a113463fde688de9c49af6ce12d664695bdcb7f"
+    },
+    {
+      "path": "LAND_AS/config.py",
+      "sha256": "fed4d3b5fd75cc88c83b35c2a4a463ef10a9fc36307b298cc20320b64d61277a"
+    },
+    {
+      "path": "LAND_AS/provenance.py",
+      "sha256": "fc10d7301574a8fc1b1774a0e3c3beba3db3a3e6f18df82d4eaf83365c347522"
+    },
+    {
+      "path": "LAND_AS/s1_prepare/prepare.py",
+      "sha256": "ab3ae785f0f95581baf58e844248e1b624c0613d500ae2adc2aef7fbd8ed4f7c"
+    },
+    {
+      "path": "LAND_AS/s1_prepare/config.py",
+      "sha256": "f317e54fe7b7f83e565581104b58c41badcd974c85853bc72ab1542cae365f6a"
+    },
+    {
+      "path": "LAND_AS/s1_prepare/assemble_dataset.py",
+      "sha256": "a47725320b86be5bd6f4eec03a9c03610616955e6fa95fd2a7604220701b6cc4"
+    },
+    {
+      "path": "LAND_AS/s1_prepare/build_features.py",
+      "sha256": "063c2a673cab18fbf7793eb2b8d88634e3835cb04283cbcaaab311de74c5465d"
+    },
+    {
+      "path": "LAND_AS/s1_prepare/load_raw.py",
+      "sha256": "d63962200ecc16f80c889b1b0732d0f08aaae7711112adeff5f8d8492fded3e5"
+    }
+  ]
+}
