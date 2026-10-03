@@ -15,13 +15,14 @@ Usage: python -m LAND_AS.s5_evaluate.baselines.evaluate [--all-runs] [--run NAME
 
 import argparse
 import csv
+import json
 
 import numpy as np
 
 from LAND_AS import config
 from LAND_AS.s2_dataset.data import cv_folds, load_data
 from LAND_AS.s3_model.engine import save_json
-from LAND_AS.s3_model.metrics import extreme_metrics, regression_metrics
+from LAND_AS.s3_model.metrics import EXTREME_THRESHOLDS_MM, extreme_metrics, regression_metrics
 from LAND_AS.s5_evaluate.baselines.models import TEST_BASELINES, station_climatology
 
 
@@ -40,7 +41,7 @@ def per_station(observed, predicted, stations):
     return out
 
 
-def write_station_tables(by_station, output_dir):
+def write_station_tables(by_station, output_dir, freq="weekly"):
     """Write long-form CSV and model-by-station Markdown comparison tables."""
     fields = [
         "model", "station", "n", "mse", "rmse", "mae", "bias", "r2",
@@ -84,7 +85,7 @@ def write_station_tables(by_station, output_dir):
     lines = [
         "# Test metrics by station",
         "",
-        "Each table is stations x models. Rainfall units are mm/week.",
+        f"Each table is stations x models. Rainfall units are mm/{'day' if freq == 'daily' else 'week'}.",
     ]
     for metric in table_metrics:
         lines.extend(["", f"## {metric}", ""])
@@ -101,20 +102,32 @@ def write_station_tables(by_station, output_dir):
     return csv_path, md_path
 
 
-def _prediction_sources(include_all, run_names):
-    """Yield ``(display_name, kind, prediction_path)`` for evaluated outputs."""
+def _prediction_sources(include_all, run_names, freq="weekly"):
+    """Yield ``(display_name, kind, prediction_path)`` for evaluated outputs.
+
+    Runs are matched against ``freq`` via the ``dataset_freq`` recorded in
+    their hyperparameters.json (absent = weekly), so daily evaluation never
+    mixes in weekly run predictions (and vice versa).
+    """
     for name in run_names or []:
         yield name, "run", config.RUNS_DIR / name / "evaluation" / "test_predictions.npz"
     if not include_all:
         return
     for path in sorted(config.RUNS_DIR.glob("*/evaluation/test_predictions.npz")):
+        hp_path = path.parents[1] / "hyperparameters.json"
+        hp_freq = "weekly"
+        if hp_path.exists():
+            hp_freq = json.loads(hp_path.read_text()).get("dataset_freq", "weekly")
+        if hp_freq != freq:
+            continue
         yield path.parents[1].name, "run", path
 
 
-def _load_model_predictions(observed, stations, years, include_all, run_names):
+def _load_model_predictions(observed, stations, years, include_all, run_names, freq="weekly",
+                            threshold_mm=50.0):
     """Load aligned run predictions and compute consistent metrics."""
     model_metrics, by_station, predictions = {}, {}, {}
-    for name, kind, path in _prediction_sources(include_all, run_names):
+    for name, kind, path in _prediction_sources(include_all, run_names, freq):
         if name in model_metrics:
             continue
         if not path.exists():
@@ -125,7 +138,7 @@ def _load_model_predictions(observed, stations, years, include_all, run_names):
             current_stations = z["stations"]
             current_years = z["years"] if "years" in z.files else None
             predicted = z["predicted"]
-        if not np.allclose(current_observed, observed):
+        if current_observed.shape != np.shape(observed) or not np.allclose(current_observed, observed):
             print(f"skipping {name}: observations do not align with baseline test set")
             continue
         if not np.array_equal(current_stations.astype(str), stations.astype(str)):
@@ -140,7 +153,7 @@ def _load_model_predictions(observed, stations, years, include_all, run_names):
         model_metrics[name] = {
             "kind": kind,
             **regression_metrics(current_observed, predicted),
-            **extreme_metrics(current_observed, predicted),
+            **extreme_metrics(current_observed, predicted, threshold_mm=threshold_mm),
         }
         by_station[name] = per_station(current_observed, predicted, current_stations)
     return model_metrics, by_station, predictions
@@ -153,20 +166,25 @@ def main():
     parser.add_argument("--all-runs", action="store_true",
                         help="include every evaluated output under runs/")
     parser.add_argument("--folds", action="store_true", help="also run per-LOSO-fold station climatology")
+    parser.add_argument("--daily", action="store_true",
+                        help="evaluate on daily_dataset.npz; writes to output/baselines_daily")
     args = parser.parse_args()
 
-    bundle = load_data()
+    freq = "daily" if args.daily else "weekly"
+    threshold_mm = EXTREME_THRESHOLDS_MM[freq]
+    bundle = load_data(freq=freq)
     train_idx, test_idx = bundle.splits["train"], bundle.splits["test"]
     observed = bundle.arrays["target"][test_idx].numpy()
     test_stations = bundle.metadata["stations"][test_idx]
-    output = config.OUTPUT_DIR / "baselines"
+    output = config.OUTPUT_DIR / ("baselines_daily" if freq == "daily" else "baselines")
     output.mkdir(parents=True, exist_ok=True)
 
     results, predictions = {}, {}
     for name, predict_fn in TEST_BASELINES.items():
         pred = np.asarray(predict_fn(bundle, train_idx, test_idx), dtype=float)
         predictions[name] = pred
-        results[name] = {**regression_metrics(observed, pred), **extreme_metrics(observed, pred)}
+        results[name] = {**regression_metrics(observed, pred),
+                         **extreme_metrics(observed, pred, threshold_mm=threshold_mm)}
         print(f"{name:>18s}: MAE={results[name]['mae']:6.2f}  R2={results[name]['r2']:6.3f}  "
               f"rho={results[name]['spearman_r']:6.3f}  bias={results[name]['bias']:+6.2f}")
     save_json(results, output / "test_metrics.json")
@@ -180,11 +198,12 @@ def main():
     # predictions, so dispersion/variance differences are directly comparable.
     by_station = {name: per_station(observed, pred, test_stations) for name, pred in predictions.items()}
     model_metrics, model_by_station, model_predictions = _load_model_predictions(
-        observed, test_stations, bundle.metadata["years"][test_idx], args.all_runs, args.run
+        observed, test_stations, bundle.metadata["years"][test_idx], args.all_runs, args.run,
+        freq=freq, threshold_mm=threshold_mm,
     )
     by_station.update(model_by_station)
     save_json(by_station, output / "test_metrics_by_station.json")
-    station_csv, station_md = write_station_tables(by_station, output)
+    station_csv, station_md = write_station_tables(by_station, output, freq=freq)
     save_json(model_metrics, output / "model_metrics.json")
     if model_predictions:
         np.savez_compressed(
@@ -198,8 +217,7 @@ def main():
               f"rho={metrics['spearman_r']:6.3f}  bias={metrics['bias']:+6.2f}")
 
     # Compact per-station MAE / dispersion table for the strongest references.
-    preferred = ["gbm", "tweedie_glm", "ridge", "weekly_land_v5",
-                 "weekly_land_v5_huber_rw_msemon"]
+    preferred = ["gbm", "tweedie_glm", "ols"]
     rows = [name for name in preferred if name in by_station]
     rows += [name for name in args.run if name in by_station and name not in rows]
     rows = [r for r in rows if r in by_station]

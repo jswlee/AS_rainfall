@@ -1,17 +1,23 @@
 # LAND_AS: Weekly Rainfall Downscaling for American Samoa
 
 `LAND_AS` adapts the Location-Agnostic Neural Downscaler (LAND) from
-`LocationAgnosticNeuralDownscaling` to weekly station rainfall in American Samoa.
-The package currently supports two controlled variants of the same architecture:
+`LocationAgnosticNeuralDownscaling` to station rainfall in American Samoa.
+The package supports three output heads on the same architecture:
 
-1. `gamma`: the original-style distributional LAND model used by `weekly_land_v5`.
-2. `huber`: a v5-sized scalar model that predicts positive weekly rainfall and is
-   trained with Huber or rainfall-weighted Huber loss.
+1. `gamma`: the original-style distributional LAND head (Gamma NLL).
+2. `huber`: a scalar model with the same default architecture that predicts
+   positive weekly rainfall, trained with Huber or rainfall-weighted Huber loss.
+3. `bern_gamma`: a Bernoulli occurrence + Gamma amount hurdle head, used for the
+   zero-inflated daily dataset (section 8.7).
 
-The purpose of this directory is not merely to maximize a leaderboard score. It
-is to determine whether location-agnostic spatial feature learning is useful for
-a very small, spatially heterogeneous rainfall problem, and to compare it fairly
-against simpler climatological and tabular baselines.
+The package is organized by pipeline stage: `s1_prepare` (raw data to dataset
+NPZ), `s2_dataset` (splits, lags, normalization, CV folds, loaders),
+`s3_model` (architectures, losses, metrics), `s4_train` (Optuna tuning and
+LOSO ensemble training), and `s5_evaluate` (run evaluation and baselines).
+
+The purpose of this directory is to determine whether location-agnostic spatial feature
+learning is useful for a very small, spatially heterogeneous rainfall problem, and to compare
+it fairly against simpler climatological and tabular baselines.
 
 ## 1. Scientific problem
 
@@ -33,22 +39,27 @@ The current test split is deliberately harder than random row splitting.
 
 - Training stations: all stations not listed in `config.TEST_STATIONS`.
 - Training years: `year <= 2016`.
-- Test stations: `aasu_UH`, `afono_UH`, `aunuu_UH`, `poloa_UH`, `vaipito_UH`.
+- Test stations: `aasu_UH`, `aunuu_UH`, `poloa_UH`, `vaipito_UH`.
 - Test years: `year > 2016`.
 - Validation: leave-one-station-out over training stations only.
 
 Thus test predictions require generalization to both unseen locations and a
-later climate period. Randomly mixing stations or years would overstate
-performance because nearby station-years are highly correlated.
+later climate period.
 
 The split is implemented in `LAND_AS/config.py` and `LAND_AS/s2_dataset/data.py`:
 
 - `TRAIN_YEAR_END = 2016`
-- `TEST_STATIONS = ["aasu_UH", "afono_UH", "aunuu_UH", "poloa_UH", "vaipito_UH"]`
+- `TEST_STATIONS = ["aasu_UH", "aunuu_UH", "poloa_UH", "vaipito_UH"]`
 - `_station_roles()` enforces station-role separation
 - `_split()` applies the year cutoff
-- `cv_folds(..., mode="loso")` creates 19 training-station folds (21 before
-  the rainfall QC exclusions described in section 3.1)
+- `cv_folds(..., mode="loso")` creates one fold per training station on the
+  current dataset (23 stations load after the `aunuu`/`afono_UH` exclusions;
+  the vaipito2000 windowing and GML_SMO addition are in section 3.1)
+- `cv_folds(..., mode="loso_recent")` is a stricter LOSO variant: each fold's
+  validation is restricted to the held-out station's years >=
+  `config.LOSO_RECENT_YEAR_START` (2010), so early stopping measures
+  unseen-station *and* late-era generalization, matching the test protocol.
+  Train indices are identical to `loso`.
 
 No test sample is used for architecture selection, objective selection,
 checkpoint selection, or calibration.
@@ -57,9 +68,8 @@ checkpoint selection, or calibration.
 
 ### 3.1 Raw inputs
 
-`LAND_AS.s1_prepare.prepare` calls the data builders vendored under
-`LAND_AS/s1_prepare/` (copied from `Daily_Modeling` so this package is
-self-contained). It expects:
+`LAND_AS.s1_prepare.prepare` runs the data builders in `LAND_AS/s1_prepare/`
+(`load_raw.py` → `build_features.py` → `assemble_dataset.py`). It expects:
 
 - station metadata: `raw_data/AS/station_locations.csv`
 - daily station rainfall CSVs: `raw_data/AS/final_rainfall_per_station/`
@@ -72,23 +82,70 @@ Raw data is located at `<repo root>/raw_data/AS` (monorepo layout) or
 Station metadata supplies latitude, longitude, elevation, source, and record
 bounds. Rainfall CSVs are converted to millimeters when needed.
 
-Two data-quality rules are applied at load time by
-`LAND_AS.s1_prepare.load_raw.load_daily_rainfall` (rules live
-in `LAND_AS/s1_prepare/config.py`, evidence in
-`eda_scripts/rainfall_*.py`):
+Two station-cleaning rules are applied at load time, before any tuning or
+training, by `LAND_AS.s1_prepare.load_raw.load_daily_rainfall`. The rules and
+the evidence behind them live in `LAND_AS/s1_prepare/config.py`
+(`QC_EXCLUDE_STATIONS`, `QC_VALID_DATE_RANGES`, `QC_MASK_DATE_RANGES`). The
+supporting numbers and figures are reproduced by
+`notebooks/00_qc_evidence.ipynb` (figures saved to
+`output/figures/qc_evidence/`):
 
-- `aunuu` and `vaipito2000` are excluded entirely. `aunuu` reports in 0.1-inch
-  increments (its minimum nonzero daily value is 2.54 mm), so drizzle days read
-  as zero; `vaipito2000`'s record collapses over time (1970s-90s daily median
-  of 0 and a weekly mean about half of co-located `vaipito_res`/`vaipito_UH`).
-- Three `afono_UH` flat-zero runs (2022-08-14..2022-10-05,
-  2022-10-18..2022-11-16, 2024-07-12..2024-08-15) are masked to missing: the
-  gauge recorded exactly 0.000 for 30-53 consecutive days while neighbouring
-  stations recorded 3-6 mm/day, i.e. gauge-offline stored as zero, not drought.
+- `aunuu` and `afono_UH` are excluded entirely (`load_raw.py` returns `None`
+  for names in `QC_EXCLUDE_STATIONS`). `aunuu` reports strictly in 0.1-inch
+  increments: its minimum nonzero daily value is 2.54 mm and 100% of nonzero
+  values are exact 0.1-inch multiples, so drizzle days read as zero (59% of
+  days, 12.4% of weeks) -- and the same site is covered by the modern
+  `aunuu_UH` gauge (0.254 mm resolution), so the exclusion loses no unique
+  location. `afono_UH` recorded exactly 0.000 for 30-53 consecutive days in
+  three runs (2022-08-14..10-05, 2022-10-18..11-16, 2024-07-12..08-15) while
+  its nearest gauges with data (toa_ridge_WRCC, vaipito_UH, siufaga_WRCC,
+  GML_SMO) recorded real rainfall and shared none of those "dry" spells --
+  gauge-offline stored as zero. The record is inconsistent enough that the
+  station is dropped outright rather than masked; since `afono_UH` was a
+  held-out *test* station, this shrinks the test set to four stations
+  (`aasu_UH`, `aunuu_UH`, `poloa_UH`, `vaipito_UH`), it does not touch the
+  training pool.
+- `vaipito2000` is **partially** retained via `QC_VALID_DATE_RANGES`, keeping
+  only 1976-01-01..1989-09-30 (4,374 daily rows). Rows before 1976 are
+  dropped because the early era (~17 mm/day mean in 1958-69, vs 5.7 in
+  1970-91) is uncorroborated -- no other station has pre-1970 data to check
+  it against. Rows after 1989-09-30 are dropped because where `vaipito2000`
+  overlaps `vaipito_res` (1989-90) the records are identical (weekly
+  r = 1.000) -- the same site reported twice, so the overlap belongs to
+  `vaipito_res`. See `notebooks/00_qc_evidence.ipynb` §2 for the
+  corroboration scan, cadence/quantization forensics, and overlap test.
 
-The assembled `weekly_dataset.npz` therefore contains 24 stations and 7,982
-weekly samples. The pre-QC dataset is preserved as
-`LAND_AS/data/weekly_dataset_pre_qc.npz`.
+`pioa_afono` was audited as a third exclusion candidate and **retained**: a
+controlled ablation run showed removing it costs more signal than artifact
+(see section 11).
+
+`GML_SMO` (NOAA GML Samoa Observatory, Cape Matatula; -14.2474, -170.5644,
+42 masl, daily inches, 1976-2024) was added after those cleaning rules were
+established. The station had
+a valid `GML_SMO.csv` but was invisible to the pipeline because station
+discovery is metadata-driven: `load_all_station_rainfall` iterates over
+`station_locations.csv`, and no `GML_SMO` row existed. After adding the row:
+
+- weekly comparison against the co-located `matatula` gauge over 46
+  overlapping complete weeks (2001-2002): Pearson r = 0.989, mean absolute
+  difference 4.8 mm/week on ~48 mm means -- consistent and suitable;
+- `raw_data/AS/fill_gml_smo_missing.py` audited the NOAA hourly files
+  (`raw_data/missing_rainfall/`, field 14 = precipitation intensity, -99 =
+  missing) and found zero recoverable days: every day with all 24 valid hours
+  was already present, and 2019-2020 are genuine full-year outages. The
+  original file is preserved as `GML_SMO_OLD.csv`.
+
+The assembled `weekly_dataset.npz` therefore contains 25 stations and 9,445
+weekly samples (GML_SMO contributes 1,463 station-weeks; it is a train-pool
+station, not a test station, so it adds a 20th LOSO fold). Note GML_SMO is the
+driest train station (37.7 mm/week mean vs 47-104 elsewhere) and ~16% of
+training rows; `--balanced-stations` exists partly to counteract that weight.
+
+The previous dataset snapshot is preserved as
+`LAND_AS/data/weekly_dataset_OLD.npz`. Passing `--daily` to the same
+command instead writes `data/daily_dataset.npz`: one sample per station-day
+(69,384 rows), 15 current-day climate channels (no within-week std block),
+and no aggregation.
 
 ### 3.2 Feature-cache construction
 
@@ -153,11 +210,12 @@ Rebuild it with:
 - For each lag, the model receives prior observed rainfall and a validity flag.
 - Missing lag weeks are zero-filled and flagged rather than treated as observed
   dry weeks.
-- Reanalysis lag blocks are also materialized, but the selected v5
-  hyperparameters use `climate_lag_weeks=0`, so only current-week atmosphere is
-  used.
-- The selected v5 hyperparameters use `rain_lag_weeks=2`, so only the first two
-  rainfall lags remain in the runtime feature vector.
+- Reanalysis lag blocks are also materialized. `climate_lag_weeks` (0-3,
+  tuned) selects how many prior-week blocks are appended to the conv input
+  channels; `rain_lag_weeks` (0-3, tuned) selects how many rainfall lags
+  remain in the runtime lag vector. The two depths are sampled independently
+  by Optuna, so mixed combinations like climate=1/rain=0 are covered; the
+  only coupling is that `use_lag=0` forces `rain_lag_weeks=0`.
 
 The default bundle uses only the pre-2017 training split for normalization:
 
@@ -166,8 +224,8 @@ The default bundle uses only the pre-2017 training split for normalization:
 - target: standard deviation of training rainfall.
 
 For cross-validation, `normalized_bundle()` rebuilds these statistics using each
-fold's own training rows. This mirrors `Daily_Modeling`'s fold-local
-normalization and prevents a temporal or LOSO validation fold from influencing
+fold's own training rows. This fold-local normalization prevents a temporal
+or LOSO validation fold from influencing
 its own feature scaling. New checkpoints write `seed_<N>_normalization.json`;
 evaluation uses that per-checkpoint marker to select fold-local
 scaling. Older checkpoints without the marker retain their original
@@ -217,9 +275,9 @@ the batch.
 
 ### 4.3 Scalar Huber head
 
-`model_type: "huber"` preserves every v5 branch and dimension but changes the
-output to one scalar transformed by softplus. Training uses Huber loss on the
-normalized target.
+`model_type: "huber"` preserves every branch and dimension of the Gamma model
+but changes the output to one scalar transformed by softplus. Training uses
+Huber loss on the normalized target.
 
 Huber is used because it sits between MSE and MAE:
 
@@ -262,17 +320,33 @@ American Samoa totals are rarely exactly dry:
 - training rows: 143 exact zeros in 6,078 samples (2.35%);
 - test rows: 3 exact zeros in 1,170 samples (0.26%).
 
-(Counts are post-QC; before QC they were 197/6,686 (2.95%) and 17/1,188
-(1.43%) -- see section 11.)
+(Counts measured on the cleaned dataset; before cleaning they were
+197/6,686 (2.95%) and 17/1,188 (1.43%) -- see section 11.)
 
 The current Gamma loss already excludes those rare dry weeks from the amount fit.
 A Bernoulli occurrence head would therefore receive sparse weekly supervision and
 add another output, threshold, and calibration decision for a phenomenon that is
-not currently the dominant error source. `Daily_Modeling` makes the same
-practical distinction: Bernoulli-Gamma is the daily default, while ordinary Gamma
-is the weekly default. Its weekly tuning also favored Gamma over Bernoulli-Gamma.
+not currently the dominant error source. The package therefore applies the
+same distinction internally: ordinary Gamma is the weekly default and weekly
+tuning favored it over Bernoulli-Gamma.
 Bernoulli-Gamma remains a valid controlled challenger, but it should not replace
-Gamma without leakage-free validation showing an improvement.
+Gamma without leakage-free validation showing an improvement. On daily data, about 43% of training days are exactly dry, so
+`model_type: "bern_gamma"` is implemented for that comparison.
+
+### 4.7 Architecture ablation switches
+
+Three hyperparameters toggle structural choices without a separate model class
+(all searchable in `--search-space broad`):
+
+- `lightweight` (0/1): a slimmer build -- single linear
+  stage in the DEM and month branches with `dropout/2` inside each branch, and
+  a single-hidden-layer fusion head. Default 0 keeps the deeper branches.
+- `use_lag` (0/1): 0 sets `rain_lag_weeks=0`, dropping the antecedent-rainfall
+  input entirely (the lag vector becomes width-0). Tests whether the lag branch
+  earns its parameters or just leaks station identity.
+- `dem_elev_only` (0/1): 1 sets `dem_channels=1`, slicing the DEM inputs to the
+  elevation channel only (dropping slope, sin/cos aspect) in
+  `RainDataset`; the DEM conv input narrows accordingly.
 
 ## 5. Baselines and why they are included
 
@@ -303,18 +377,19 @@ beyond conventional regression on the same information.
 
 Predicts the mean of all training weeks for every test sample.
 
+Inputs: training targets only; no features.
+
 Purpose:
 
 - lower-bound benchmark;
 - tests whether a constant climatological mean is already adequate;
 - reveals whether other models explain variance around a common climatology.
 
-It is important because rainfall forecasting can appear useful while doing no
-better than a global mean.
-
 ### 5.2 `month_climatology`
 
 Predicts the pooled month-of-year mean across all training stations.
+
+Inputs: month-of-year of each sample + training targets grouped by month.
 
 Purpose:
 
@@ -329,6 +404,11 @@ This is the simplest realistic seasonal forecast reference.
 Predicts the previous observed weekly rainfall total. If the previous week is
 missing, it falls back to the pooled training mean.
 
+Inputs: the lag-1 observed rainfall value and its validity flag from the lag
+vector; nothing else -- no atmosphere, terrain, or seasonality. (The lag
+vector holds `rain_lag_weeks` prior values followed by their validity flags;
+persistence reads the first of each.)
+
 Purpose:
 
 - tests short-term autocorrelation;
@@ -338,10 +418,15 @@ Purpose:
 Persistence is a standard forecast baseline but is weak here because the test
 is about spatial transfer and the target period occurs years after fitting.
 
-### 5.4 `ridge`
+### 5.4 `ols`
 
 A standardized-feature linear regression trained on all pre-test training
-samples.
+samples (`StandardScaler` + `sklearn.LinearRegression`, i.e. ordinary least
+squares, no L2 penalty).
+
+Inputs: the flattened feature vector above -- patch-mean and center-cell
+values of the 30 current-week climate channels, means of the 4 local and 4
+regional DEM channels, month one-hot, and rainfall lags + validity flags.
 
 Purpose:
 
@@ -350,13 +435,16 @@ Purpose:
   rainfall;
 - shows whether complicated nonlinear spatial features are necessary.
 
-Ridge is especially important in this problem because it performs strongly on
+OLS is especially important in this problem because it performs strongly on
 the held-out test stations.
 
 ### 5.5 `tweedie_glm`
 
 A pooled log-linked Tweedie generalized linear model with `power=2`, chosen as
 an approximately Gamma-like positive continuous regression model.
+
+Inputs: same flattened feature vector as `ols`; predictions are clipped at
+zero and training targets floored at 0.01 mm for the log link.
 
 Purpose:
 
@@ -369,7 +457,10 @@ LAND architecture.
 
 ### 5.6 `gbm`
 
-A pooled `HistGradientBoostingRegressor` trained on the same flattened inputs.
+A pooled `HistGradientBoostingRegressor` (400 trees, learning rate 0.05)
+trained on the same flattened inputs.
+
+Inputs: same flattened feature vector as `ols`.
 
 Purpose:
 
@@ -386,6 +477,8 @@ simpler to train and interpret.
 This baseline is only evaluated inside LOSO folds and is optimistic by design:
 it computes each validation station's month-of-year means from the same weeks
 it predicts.
+
+Inputs: month-of-year + the held-out station's own target values (in-sample).
 
 Purpose:
 
@@ -424,464 +517,273 @@ LAND_AS/output/baselines/
 uses the same observed values, station labels, and metric function for every
 model.
 
-## 7. v5 tuning
+## 7. Tuning
 
-The retained Optuna study is:
+Hyperparameter search lives in `LAND_AS.s4_train.tune` (Optuna, SQLite-backed
+so studies are resumable). The current weekly study is:
 
 ```text
-LAND_AS/output/tuning/weekly_land_v5/study.db
+LAND_AS/output/tuning/weekly_land_v3_huber_rw_temporal_broad/
 ```
 
-Best trial: trial 5, objective value approximately `1560.18`. The study used
-spatial cross-validation and minimized validation MSE. Selected parameters:
+It was run on the post-cleaning dataset (23 stations, `afono_UH`/`aunuu`
+excluded, `vaipito2000` windowed, `GML_SMO` included) with `--search-space
+broad`. Best trial: 34, `mse_ratio = 0.529`. Selected parameters:
 
 ```json
 {
   "climate_lag_weeks": 0,
-  "rain_lag_weeks": 2,
-  "climate_multiplier": 13,
-  "dem_units": 64,
-  "month_units": 64,
-  "hidden_units": 320,
-  "dropout": 0.30000000000000004,
-  "batch_size": 128,
-  "learning_rate": 0.00011476582119489201,
-  "weight_decay": 0.000187422109855557,
-  "dem_size": 10,
-  "local_dem_cfg": 4,
-  "regional_dem_cfg": 9,
-  "climate_patch": 3,
-  "rainfall_weight": true
+  "rain_lag_weeks": 0,
+  "climate_multiplier": 15,
+  "dem_units": 32,
+  "month_units": 16,
+  "hidden_units": 128,
+  "dropout": 0.16065140657974433,
+  "batch_size": 512,
+  "learning_rate": 0.0006417206952582433,
+  "weight_decay": 0.0003402795493710169,
+  "dem_size": 7,
+  "local_dem_cfg": 1,
+  "regional_dem_cfg": 4,
+  "lightweight": 1,
+  "use_lag": 1,
+  "dem_elev_only": 0
 }
 ```
 
-`climate_multiplier=13` expands to `climate_units=390` because the model has 30
-current-week atmospheric channels and no climate lag. The persisted run
-hyperparameters already contain `climate_units=390`.
+Note the ablation switches landed on the lighter end: `lightweight=1` and
+`rain_lag_weeks=0` (`use_lag=1` leaves the switch on but the sampled depth is
+zero), so the winning config is effectively a current-week atmosphere +
+terrain model with no antecedent-rainfall input.
 
-Inspect the study with `LAND_AS/notebooks/02_tuning_eda.ipynb`.
+The `--search-space broad` flag searches model width (`climate_multiplier`,
+`dem_units`, `month_units`, `hidden_units`), `dropout` over `[0.1, 0.7]`,
+`batch_size` over `[64 … 2048]`, optimizer settings, DEM crop configs
+(`local_dem_cfg`/`regional_dem_cfg` index `DEM_LOCAL_CANDIDATES` /
+`DEM_REGIONAL_CANDIDATES` in `s1_prepare/config.py`), and the three
+architecture-ablation switches of section 4.7 (`lightweight`, `use_lag`,
+`dem_elev_only`). `climate_lag_weeks` and `rain_lag_weeks` are sampled
+independently over `0..LAG_WEEKS` — all asymmetric combinations are reachable.
 
-### New controlled tuning rounds
-
-`LAND_AS.s4_train.tune` now supports the `Daily_Modeling`-inspired controls that matter
-most here: spatial versus temporal validation folds, mean/median fold
-aggregation, Gamma versus scalar Huber heads, weighted losses, Huber delta, and
-station-balanced sampling.
-
-A fast spatial screen, using the same three-station-group style as the retained
-v5 study:
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.s4_train.tune `
-  --study weekly_land_v6_gamma_kfold_mse `
-  --model-type gamma `
-  --rainfall-weight `
-  --opt-metric mse `
-  --cv-mode kfold --folds 3 --fold-agg median `
-  --search-space core `
-  --trials 40 --epochs 500 --patience 50 --min-epochs 30
-```
-
-A temporal screen for the current weighted-Huber loss:
+Command used:
 
 ```powershell
 .\venv\Scripts\python.exe -m LAND_AS.s4_train.tune `
-  --study weekly_land_v6_huber_rw_temporal_mse `
-  --model-type huber `
-  --loss-type huber_weighted `
-  --huber-delta 0.5 `
-  --opt-metric mse `
-  --cv-mode temporal --folds 3 --fold-agg median `
-  --search-space core `
-  --trials 40 --epochs 500 --patience 50 --min-epochs 30
+  --study weekly_land_v3_huber_rw_temporal_broad `
+  --model-type huber --loss-type huber_weighted --huber-delta 0.5 `
+  --opt-metric mse_ratio --cv-mode temporal --folds 3 --fold-agg median `
+  --search-space broad --trials 40 --epochs 500 --patience 50 --min-epochs 30
 ```
 
-After a study finishes, train its selected configuration under the standard
-LOSO protocol (20 folds on the current 25-station dataset):
+Why these choices:
+
+- **`--opt-metric mse_ratio`**: validation MSE divided by the fold's
+  train-mean climatology MSE — dimensionless and comparable across folds of
+  different difficulty, where raw MSE rewards lucky fold assignments.
+- **`--cv-mode temporal`**: the test task is spatial *and* temporal transfer;
+  temporal folds inside the training era approximate that. `loso` /
+  `loso_recent` / `both` are correct but too expensive for a 40-trial
+  search — reserve them for final training and finalist checks.
+- **`--fold-agg median`**: one seed per fold, so the median keeps a single
+  bad fold from dominating the aggregate.
+- **`--model-type huber --loss-type huber_weighted`**: the weighted scalar
+  head has been the strongest neural variant on this dataset; the Gamma head
+  is covered by its own earlier studies.
+
+### Trial selection and retraining
+
+Do not compare raw Optuna objectives across `cv-mode` values — spatial and
+temporal folds differ in difficulty. Within a study, prefer the
+fold-normalized ranking over the raw-objective best:
+`python -m LAND_AS.s5_evaluate.evaluate --study NAME` scores top trials by
+raw objective, mean per-fold rank, and worst-fold score and prints the
+composite winner. `train.py --study NAME` (no `--trial`) applies the same
+robust selection automatically; pass `--trial N` to override.
 
 ```powershell
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --study weekly_land_v3_huber_rw_temporal_broad
+
 .\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
-  --study weekly_land_v6_huber_rw_temporal_mse `
-  --trial 36 `
-  --run weekly_land_v6_huber_rw_t36 `
+  --study weekly_land_v3_huber_rw_temporal_broad `
+  --cv-mode loso --balanced-stations `
+  --run weekly_land_v3_huber_loso_bal `
   --seeds 3 --epochs 500 --patience 50 --workers 4
 ```
 
-The completed v6 studies are:
+Sequencing caution: `load_data()` reads `weekly_dataset.npz` at process
+start, so never run tuning while that file is being rebuilt.
 
-| Study | CV mode | Raw winner | Fold-normalized winner | Trained run |
-|---|---|---:|---:|---|
-| `weekly_land_v6_gamma_kfold_mse` | spatial 3-fold | trial 18 | trial 18 | `weekly_land_v6_gamma_kfold_t18` |
-| `weekly_land_v6_gamma_temporal_mse` | temporal 3-fold | trial 12 | trial 17 | `weekly_land_v6_gamma_temporal_mse` (trial 12) |
-| `weekly_land_v6_huber_rw_temporal_mse` | temporal 3-fold | trial 22 | trial 36 | `weekly_land_v6_huber_rw_temporal_mse` (trial 22), `weekly_land_v6_huber_rw_t36` |
+## 8. Training and evaluation commands
 
-`--cv-mode both` is available but expensive: it combines 19 LOSO folds with the
-requested number of temporal folds. Prefer it only for finalist validation, not
-broad Optuna search.
+### 8.1 Weekly training
 
-Do not compare raw Optuna objectives across `cv-mode` values. Spatial groups and
-temporal blocks have different validation variance, station coverage, and
-difficulty, so a temporal MSE around 3,200 is not directly worse than a spatial
-MSE around 1,600. Use `--opt-metric mse_ratio` for a dimensionless score equal
-to validation MSE divided by the fold's train-mean climatology MSE, or evaluate
-finalists under one common validation protocol.
+`LAND_AS.s4_train.train` trains one model per CV fold (LOSO by default) and
+per seed, then writes an ensemble prediction. Key flags:
 
-If a post-hoc fold-normalized ranking selects a non-default Optuna trial, train it
-explicitly with `--trial N` instead of relying on the raw-objective best trial.
-`python -m LAND_AS.s5_evaluate.evaluate --study NAME` automates that ranking: it
-scores the top trials by raw objective, mean per-fold rank, and worst-fold
-score, then prints the composite winner. Omitting `--trial` from `train.py`
-now applies the same selection automatically.
+- `--study NAME` pulls hyperparameters from an Optuna study; without
+  `--trial N` it applies the composite robust-trial selector (section 7).
+- `--cv-mode {loso,loso_recent}`: `loso` holds out each training station on
+  all its years; `loso_recent` holds out the same stations but validates only
+  on their post-`LOSO_RECENT_YEAR_START` (2010) weeks, matching the
+  unseen-station + late-era test protocol. Train indices are identical.
+- `--balanced-stations` equalizes per-station sampling weight in batches.
+- `--hyperparameters path/to.json` runs a fixed config merged over
+  `config.DEFAULTS` (no study needed).
+- `--daily` switches everything to the daily dataset and `bern_gamma` head.
 
-### v7: broad architecture search on cleaned data
-
-The post-QC study is:
+Current runs:
 
 ```powershell
+# LOSO, station-balanced
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
+  --study weekly_land_v3_huber_rw_temporal_broad `
+  --cv-mode loso --balanced-stations `
+  --run weekly_land_v3_huber_loso_bal `
+  --seeds 3 --epochs 500 --patience 50 --workers 4
+
+# loso_recent variant (early stopping on the held-out station's recent years)
+.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
+  --study weekly_land_v3_huber_rw_temporal_broad `
+  --cv-mode loso_recent --balanced-stations `
+  --run weekly_land_v3_huber_recent_bal `
+  --seeds 3 --epochs 500 --patience 50 --workers 4
+
+# evaluate + refit baselines on the same train rows
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run <run>
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.baselines.evaluate --all-runs --folds
+```
+
+### 8.2 Daily Bernoulli-Gamma
+
+`--daily` switches the pipeline to `data/daily_dataset.npz`: one sample per
+station-day, 15 current-day climate channels (no within-week std block), and
+`config.LAG_DAYS = 7` daily lag depth, so the `climate_lag_weeks` /
+`rain_lag_weeks` hyperparameters count days. Daily totals are zero-inflated
+(~43% dry training days vs ~2% dry weeks), so the daily head is
+`--model-type bern_gamma`: Bernoulli occurrence + Gamma amount NLL
+(`bernoulli_gamma_nll` in `s3_model/model.py`)
+with a fold-local `pos_weight = n_dry / n_wet` and `--lambda-bce` scaling the
+occurrence term. The point prediction is `sigmoid(p) * alpha * scale`.
+
+```powershell
+# build the daily NPZ (reuses the shared feature caches)
+.\venv\Scripts\python.exe -m LAND_AS.s1_prepare.prepare --daily
+
+# tune
 .\venv\Scripts\python.exe -m LAND_AS.s4_train.tune `
-  --study weekly_land_v7_huber_rw_temporal_broad `
-  --model-type huber `
-  --loss-type huber_weighted `
+  --daily --study daily_land_v1_bern_gamma `
+  --model-type bern_gamma --rainfall-weight `
   --opt-metric mse_ratio `
   --cv-mode temporal --folds 3 --fold-agg median `
   --search-space broad `
   --trials 40 --epochs 500 --patience 50 --min-epochs 30
-```
 
-Why each choice:
-
-- **`--search-space broad` is the point of the study.** All previous studies
-  (v5, all three v6) searched only the `core` space: learning rate, weight
-  decay, rainfall lag, and DEM crop configurations. Model width
-  (`climate_units`, `dem_units`, `month_units`, `hidden_units`), `dropout`,
-  `batch_size`, and `dem_size` have never been retuned since the original v5
-  study. Post-QC, Ridge still beats every neural run, which suggests the v5
-  architecture's capacity/regularization tradeoff — not its optimizer settings
-  — is the largest unexplored source of the gap.
-- **`--model-type huber --loss-type huber_weighted`**: the weighted scalar
-  Huber family produced the best neural models in both the pre-QC and post-QC
-  leaderboards (`t36` twice). Re-litigating the Gamma/Huber head question costs
-  trials better spent on architecture. Gamma remains represented by the
-  retained `weekly_land_v5_qc` run and the `_qc` blend.
-- **`--cv-mode temporal`**: the test task is spatial *and* temporal transfer.
-  Temporal folds within pre-2017 were the protocol that produced t36, the best
-  neural model under both dataset versions; spatial k-fold produced a finalist
-  that did not improve on v5. LOSO (19 folds/trial) and `both` (22 folds/trial)
-  are correct but too expensive for a 40-trial search — reserve them for
-  finalist validation.
-- **`--opt-metric mse_ratio`**: validation MSE divided by the fold's
-  train-mean climatology MSE. Fold difficulty varies enormously across
-  stations/years, so raw MSE rewards lucky fold assignments; the ratio is
-  dimensionless, comparable across folds and protocols, and also sets the
-  checkpoint monitor to MSE, matching the squared-error target of the
-  comparison.
-- **`--fold-agg median`**: each trial trains one seed per fold, so individual
-  fold scores are seed-noisy; the median keeps a single bad fold or seed from
-  dominating a 3-fold aggregate.
-- **`--trials 40 --epochs 500 --patience 50 --min-epochs 30`**: same budget and
-  early-stopping contract as the v5/v6 studies so results are comparable; the
-  Optuna SQLite store makes the study resumable and incremental.
-
-Sequencing caution: `load_data()` reads `weekly_dataset.npz` at process start.
-Do not run this study while the npz is swapped out for a `QC_EXCLUDE_STATIONS`
-ablation (see `next-steps.md` 1.2), or the study and the ablation run will
-silently tune on different data.
-
-When the study finishes, prefer the fold-normalized ranking in `trials.csv`
-over the raw-objective best trial, then train the winner under LOSO:
-
-```powershell
+# train / evaluate / baselines (train auto-picks the robust trial)
 .\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
-  --study weekly_land_v7_huber_rw_temporal_broad `
-  --trial <N> `
-  --run weekly_land_v7_huber_rw_t<N>_qc `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
+  --daily --study daily_land_v1_bern_gamma --run daily_land_v1_bern_gamma `
+  --seeds 3 --workers 2
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --daily --run daily_land_v1_bern_gamma
+.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.baselines.evaluate --daily --all-runs --folds
 ```
 
-## 8. Training and evaluation commands
-
-### 8.1 Original Gamma v5
-
-The v5 run is complete and should remain frozen. Its training entry point was
-`LAND_AS.s4_train.train`, which delegates fold-level work to `LAND_AS.s4_train.parallelize`.
-
-Reconstructed command:
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
-  --study weekly_land_v5 `
-  --run weekly_land_v5 `
-  --seeds 3 `
-  --epochs 500 `
-  --patience 50 `
-  --workers 4
-```
-
-Evaluate:
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
-  --run weekly_land_v5
-```
-
-**Note:** `train_v5_huber.py` has been removed from the package; sections 8.2-8.5 are kept as a record of the v5-era controlled experiments only.
-
-### 8.2 Ordinary v5-sized Huber
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber `
-  --loss-type huber `
-  --monitor mae `
-  --huber-delta 0.5 `
-  --seeds 3 `
-  --epochs 500 `
-  --patience 50 `
-  --workers 4
-
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
-  --run weekly_land_v5_huber
-```
-
-### 8.3 Rainfall-weighted Huber
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_rw `
-  --loss-type huber_weighted `
-  --monitor mae `
-  --seeds 3 `
-  --epochs 500 `
-  --patience 50 `
-  --workers 4
-
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
-  --run weekly_land_v5_huber_rw
-```
-
-### 8.4 Rainfall-weighted Huber with MSE monitoring
-
-```powershell
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_rw_msemon `
-  --loss-type huber_weighted `
-  --monitor mse `
-  --seeds 3 `
-  --epochs 500 `
-  --patience 50 `
-  --workers 4
-
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate `
-  --run weekly_land_v5_huber_rw_msemon
-```
-
-### 8.5 Other controlled variants
-
-The script also supports:
-
-```powershell
-# More MSE-like Huber loss
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_d1 `
-  --huber-delta 1.0 `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
-
-# Equal expected station representation in training batches
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_balanced `
-  --balanced-stations `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
-
-# Resume an existing run and add two seeds
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber `
-  --seeds 5 `
-  --epochs 500 --patience 50 --workers 4
-```
-
-Each variant should use a new run name so prior experiments remain comparable.
-
-### 8.6 Post-QC retrains
-
-The three leading configurations were retrained on the cleaned dataset after
-the QC rebuild (section 3.1). Pre-QC `output/baselines/` metrics were first
-copied to `output/baselines_pre_qc/` (the evaluation rewrites
-`model_metrics.json`), and `LAND_AS.s5_evaluate.baselines.evaluate --folds` was rerun so
-the baselines refit on the cleaned training rows.
-
-```powershell
-# Gamma v5 (study best trial, equivalent to the retained v5 config)
-.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
-  --study weekly_land_v5 --run weekly_land_v5_qc `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
-
-# Weighted Huber + MSE monitor (v5-sized)
-.\venv\Scripts\python.exe -m LAND_AS.train_v5_huber `
-  --run weekly_land_v5_huber_rw_msemon_qc `
-  --loss-type huber_weighted --monitor mse `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
-
-# v6 temporal-study trial 36 (best neural configuration)
-.\venv\Scripts\python.exe -m LAND_AS.s4_train.train `
-  --study weekly_land_v6_huber_rw_temporal_mse --trial 36 `
-  --run weekly_land_v6_huber_rw_t36_qc `
-  --seeds 3 --epochs 500 --patience 50 --workers 4
-
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run weekly_land_v5_qc
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run weekly_land_v5_huber_rw_msemon_qc
-.\venv\Scripts\python.exe -m LAND_AS.s5_evaluate.evaluate --run weekly_land_v6_huber_rw_t36_qc
-```
-
-Each `_qc` run skips existing checkpoints, so never reuse a pre-QC run name for
-a post-QC retrain — the fold count and row alignment differ.
+Daily baselines write to `output/baselines_daily/` (CSI threshold 25 mm/day
+vs 50 mm/week). Runs record `dataset_freq` in `hyperparameters.json`;
+`--all-runs` only pulls runs matching the requested frequency, and
+train/evaluate raise when the flag disagrees with a run's `dataset_freq`.
 
 ## 9. Current experiments and results
 
 ### 9.1 Completed model runs
 
-| Run | Change from v5 | Selection monitor |
-|---|---|---|
-| `weekly_land_v5` | Original Gamma NLL | v5-era MAE early stopping |
-| `weekly_land_v5_huber` | Scalar softplus output + Huber (`delta=0.5`) | MAE |
-| `weekly_land_v5_huber_d025` | Scalar Huber, `delta=0.25` | MAE |
-| `weekly_land_v5_huber_d1` | Scalar Huber, `delta=1.0` | MAE |
-| `weekly_land_v5_huber_d2` | Scalar Huber, `delta=2.0` | MAE |
-| `weekly_land_v5_huber_rw` | `huber_weighted` loss | MAE |
-| `weekly_land_v5_huber_rw_msemon` | `huber_weighted` loss | MSE |
-| `weekly_land_v6_gamma_kfold_t18` | Retuned Gamma from spatial k-fold trial 18 | MSE |
-| `weekly_land_v6_gamma_temporal_mse` | Retuned Gamma from temporal raw-MSE trial | MSE |
-| `weekly_land_v6_huber_rw_temporal_mse` | Retuned weighted Huber, raw temporal best | MSE |
-| `weekly_land_v6_huber_rw_t36` | Retuned weighted Huber, fold-normalized temporal trial 36 | MSE |
+All current runs are trained on the post-cleaning dataset (23 stations,
+`afono_UH`/`aunuu` excluded, `vaipito2000` windowed to 1976-01-01..
+1989-09-30, `GML_SMO` included) under the strict split of section 2 — 4
+held-out test stations (`aasu_UH`, `aunuu_UH`, `poloa_UH`, `vaipito_UH`),
+post-2016 years.
 
-The seven v5 variants use the same v5 atmospheric, terrain, month, and lag
-feature settings. The four v6 finalists use tuned hyperparameters but are all
-trained and evaluated under the standard LOSO protocol.
+| Run | Config | CV mode | Sampling |
+|---|---|---|---|
+| `weekly_land_v3_huber_loso_bal` | v3 study trial-34 HPs (lightweight, no rain/climate lag) | `loso` | station-balanced |
+| `weekly_land_v3_huber_loso_bal_2` | same HPs, rerun | `loso` | station-balanced |
+| `weekly_land_v3_huber_recent_bal` | same HPs | `loso_recent` | station-balanced |
+| `weekly_land_v3_huber_recent_bal_2` | same HPs, rerun | `loso_recent` | station-balanced |
+| `weekly_land_v3_huber_recent_bal_lowlr` | same HPs, `--learning-rate 9.13e-5`, 1000 epochs | `loso_recent` | station-balanced |
+| `weekly_land_v3_huber_rw_recent_broad` | raw-objective best trial (lags enabled: rain=3, climate=3; `dem_elev_only`) | `loso_recent` | station-balanced |
 
-All runs listed above predate the rainfall QC (section 3.1): they were trained
-on the 21-train-station / 6,686-week dataset and evaluated on the 1,188-week
-test set that still contained the `afono_UH` offline-as-zero weeks. The three
-leading configurations were retrained on the cleaned dataset with `_qc` run
-names (19 training folds, 6,078 training weeks, 1,170 test weeks):
-
-| Run | Change from v5 | Selection monitor |
-|---|---|---|
-| `weekly_land_v5_qc` | Original Gamma NLL on cleaned data | v5-era MAE early stopping |
-| `weekly_land_v5_huber_rw_msemon_qc` | `huber_weighted` loss on cleaned data | MSE |
-| `weekly_land_v6_huber_rw_t36_qc` | v6 temporal-study trial 36 config on cleaned data | MSE |
-
-The post-QC Gamma+Huber blend is `v5_qc_gamma_huber_cv_mse` (OOF-selected Huber
-weight 0.288, i.e. mostly Gamma). Do not mix pre- and post-QC checkpoints,
-predictions, or metrics in comparisons: normalization statistics, lag-week
-alignment, and test observations all differ.
+Baselines (`s5_evaluate/baselines/models.py`) are refit on the same training
+rows: OLS, GBM, Tweedie GLM, persistence, pooled mean, month climatology.
 
 ### 9.2 Overall test metrics
 
-Metrics below evaluate each retained checkpoint with the normalization
-statistics saved for that run. New runs will instead use per-checkpoint
-fold-local normalization. Baselines are rebuilt on the corrected training-station
-scaler.
-
-#### Post-QC test metrics (current dataset)
-
-These metrics were computed on the cleaned 1,170-week test set by models
-trained on the cleaned 19-station / 6,078-week training set. Baselines were
-refit on the cleaned training rows.
+Evaluated on the held-out test set (4 stations x post-2016 weeks) by
+`evaluate --run` and `baselines.evaluate --all-runs`; identical observed
+values, station labels, and metric function for every model.
 
 | Model | RMSE | MAE | Bias | R2 | Spearman | 98th-pct bias | CSI >=50 mm |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Ridge baseline | 48.368 | 34.714 | -2.067 | 0.500 | 0.702 | -22.95% | 0.662 |
-| GBM baseline | 48.811 | 33.502 | -4.675 | 0.490 | 0.709 | -27.66% | 0.648 |
-| Tweedie GLM baseline | 55.217 | 35.398 | -11.494 | 0.348 | 0.727 | -13.96% | 0.654 |
-| Persistence | 91.254 | 65.143 | +0.020 | -0.781 | 0.109 | -0.33% | 0.397 |
-| Pooled mean | 68.402 | 51.546 | +1.738 | -0.001 | - | -70.56% | 0.541 |
-| Month climatology | 67.223 | 50.408 | +1.964 | 0.034 | 0.211 | -63.88% | 0.541 |
-| Gamma v5 (`_qc`) | 50.589 | 35.910 | +0.764 | 0.453 | 0.672 | -20.08% | 0.653 |
-| Weighted Huber + MSE monitor (`_qc`) | 50.618 | 36.097 | +1.760 | 0.452 | 0.668 | -22.36% | 0.639 |
-| v6 weighted Huber temporal t36 (`_qc`) | 49.317 | 35.457 | +2.539 | 0.480 | 0.686 | -20.37% | 0.659 |
-| Gamma + weighted-Huber blend (`_qc`) | 50.300 | 35.707 | +1.051 | 0.459 | 0.674 | -21.32% | 0.649 |
+| GBM baseline | 49.175 | 33.181 | -12.23 | 0.462 | 0.707 | -26.6% | 0.637 |
+| OLS baseline | 49.379 | 36.378 | +0.79 | 0.458 | 0.680 | -24.6% | 0.644 |
+| `weekly_land_v3_huber_recent_bal` | 49.479 | 35.871 | +2.70 | 0.456 | 0.685 | -26.5% | 0.639 |
+| `weekly_land_v3_huber_loso_bal` | 49.484 | 35.841 | +2.11 | 0.456 | 0.687 | -27.2% | 0.642 |
+| `weekly_land_v3_huber_recent_bal_lowlr` | 49.568 | 36.448 | +4.05 | 0.454 | 0.679 | -23.5% | 0.655 |
+| `weekly_land_v3_huber_loso_bal_2` | 49.857 | 35.998 | -0.07 | 0.447 | 0.669 | -27.7% | 0.646 |
+| `weekly_land_v3_huber_recent_bal_2` | 49.865 | 36.291 | +1.89 | 0.447 | 0.674 | -25.0% | 0.654 |
+| `weekly_land_v3_huber_rw_recent_broad` | 50.941 | 34.834 | -9.29 | 0.423 | 0.699 | -32.7% | 0.650 |
+| Tweedie GLM baseline | 59.391 | 37.166 | -15.40 | 0.216 | 0.701 | -22.8% | 0.617 |
+| Month climatology | 66.461 | 48.653 | -6.02 | 0.018 | 0.182 | -66.4% | 0.538 |
+| Pooled mean | 67.341 | 49.816 | -6.11 | -0.008 | - | -73.5% | 0.538 |
+| Persistence | 88.379 | 64.313 | -0.13 | -0.737 | 0.122 | -0.6% | 0.396 |
 
-#### Pre-QC test metrics (historical)
+Per-station RMSE (`output/baselines/test_metrics_by_station.md`):
 
-The table below was computed on the pre-QC test set (1,188 weeks, including the
-`afono_UH` offline-as-zero weeks) by models trained on the pre-QC training set.
-Keep it for relative comparisons between the old runs only; it is not
-comparable with the post-QC table because both the models and the test rows
-differ.
+| Station | OLS | GBM | LAND range (5 runs) |
+|---|---:|---:|---:|
+| `aasu_UH` | **49.58** | 52.92 | 52.82–54.16 |
+| `aunuu_UH` | **34.10** | 37.80 | 34.16–39.34 |
+| `poloa_UH` | 50.00 | 50.78 | **49.16**–49.46 |
+| `vaipito_UH` | 50.89 | **46.34** | 48.29–50.14 |
 
-| Model | RMSE | MAE | Bias | R2 | Spearman | 98th-pct bias | CSI >=50 mm |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Ridge baseline | 49.353 | 35.902 | +1.021 | 0.480 | 0.683 | -22.32% | 0.646 |
-| GBM baseline | 50.365 | 34.293 | -6.641 | 0.458 | 0.671 | -23.48% | 0.632 |
-| Tweedie GLM baseline | 55.322 | 35.528 | -12.044 | 0.346 | 0.724 | -14.93% | 0.660 |
-| Gamma v5 | 50.829 | 36.067 | +0.101 | 0.448 | 0.661 | -23.16% | 0.642 |
-| Huber (`delta=0.5`) | 50.746 | 34.970 | -6.927 | 0.450 | 0.664 | -25.55% | 0.636 |
-| Huber (`delta=0.25`) | 50.695 | 35.929 | +1.266 | 0.451 | 0.665 | -25.65% | 0.628 |
-| Huber (`delta=1.0`) | 50.873 | 36.152 | +0.734 | 0.447 | 0.656 | -23.85% | 0.632 |
-| Huber (`delta=2.0`) | 50.838 | 36.170 | +0.562 | 0.448 | 0.657 | -25.33% | 0.636 |
-| Weighted Huber | 50.495 | 35.561 | -0.653 | 0.455 | 0.666 | -24.15% | 0.632 |
-| Weighted Huber + MSE monitor | 50.373 | 35.749 | +0.827 | 0.458 | 0.667 | -24.20% | 0.632 |
-| v6 Gamma spatial k-fold t18 | 51.035 | 35.412 | -4.480 | 0.444 | 0.666 | -28.31% | 0.636 |
-| v6 Gamma temporal | 50.702 | 35.433 | -3.091 | 0.451 | 0.676 | -28.73% | 0.652 |
-| v6 weighted Huber temporal | 50.285 | 35.846 | -0.143 | 0.460 | 0.668 | -26.26% | 0.642 |
-| v6 weighted Huber temporal t36 | 49.584 | 35.612 | +1.719 | 0.475 | 0.675 | -22.76% | 0.644 |
-| Gamma + Huber blend | 50.353 | 35.017 | -4.594 | 0.458 | 0.667 | -26.00% | 0.638 |
-| Gamma + Huber `d025` blend | 50.498 | 35.802 | +0.463 | 0.455 | 0.665 | -24.09% | 0.635 |
-| Gamma + Huber `d1` blend | 50.565 | 35.849 | +0.271 | 0.454 | 0.663 | -23.61% | 0.635 |
-| Gamma + Huber `d2` blend | 50.568 | 35.853 | +0.213 | 0.454 | 0.664 | -23.77% | 0.637 |
-| Gamma + weighted-Huber blend | 50.521 | 35.772 | -0.073 | 0.455 | 0.665 | -23.91% | 0.638 |
-| Gamma + weighted-Huber-MSE blend | 50.469 | 35.793 | +0.282 | 0.456 | 0.665 | -24.05% | 0.636 |
+LAND leads only on `poloa_UH` (by <1 mm). The spread on `aunuu_UH`
+(34.2–39.3 mm across identically configured runs) is the largest
+seed-sensitivity in the table: that station has only ~51 test weeks, so a
+single seed can move its RMSE by 5 mm.
 
 ### 9.3 Interpretation
 
-Post-QC interpretation (cleaned dataset):
+- **The neural model does not beat tuned tabular baselines.** GBM, OLS, and
+  the best LAND ensemble sit within ~0.7 mm RMSE of each other (49.2–49.9),
+  with R² ~0.45–0.46. This is the central empirical result: at ~20 training
+  stations on one orographically complex island, the location-agnostic CNN
+  branches add no measurable skill over pooled tabular regression.
+- **The tuned winner went minimal.** The v3 broad search landed on
+  `lightweight=1`, `rain_lag_weeks=0`, `climate_lag_weeks=0`, dropout ~0.16 —
+  the Optuna basin itself migrated away from the heavier original
+  architecture toward a thin current-week model, consistent with the
+  small-spatial-support interpretation.
+- **`loso` vs `loso_recent` made no difference** on this config (49.484 vs
+  49.479 RMSE); the early-stopping protocol change was neutral here. The two
+  `_2` reruns land at 49.86 in both CV modes, so identical configs span
+  ~0.4 mm RMSE — real differences below that are not meaningful.
+- **Lowering the learning rate ~7x (`_lowlr`) did not help** (49.57 RMSE):
+  slightly better extremes (98th-pct bias -23.5%, best neural CSI 0.655) at
+  the cost of a larger positive bias (+4.05 mm), i.e. a tradeoff, not a gain.
+- **Bias structure differs by model class.** LAND runs are near-unbiased
+  (+2.1 / -0.1 mm), GBM underpredicts systematically (-12.2 mm bias, best
+  MAE 33.2 but worst 98th-pct error), OLS sits between. Model choice
+  trades calibration for typical-case accuracy.
+- **Tweedie underperforms on this split** (0.216 R2): with only 4 test
+  stations and post-2016 years the GLM's strong negative bias (-15.4 mm)
+  dominates. Earlier splits where Tweedie nearly tied LAND had more test
+  stations and different era coverage — split composition matters.
 
-- The QC did not close the neural-vs-baseline gap; it widened it. Every model
-  improved because ~14 fake-dry `afono_UH` weeks that all models badly missed
-  were removed, but Ridge gained more than the neural models (49.35 to 48.37
-  RMSE versus t36's 49.58 to 49.32). Ridge now leads the best neural model by
-  ~0.95 mm RMSE and leads on MAE, R2, and Spearman too.
-- `weekly_land_v6_huber_rw_t36_qc` remains the best neural RMSE/R2 model and is
-  nearly unbiased relative to the other neural runs; it also has the best
-  neural 98th-percentile bias and CSI.
-- The `_qc` Gamma/Huber blend selected a Huber weight of 0.288 (mostly Gamma)
-  on OOF, versus the pre-QC blend family that leaned more evenly; the blend is
-  still mid-pack and does not beat its members decisively.
-- GBM retains the lowest MAE (33.50) but the largest negative bias (-4.68);
-  Ridge's bias shrank post-QC (-2.07). Neural models are now slightly
-  positively biased (+0.76 to +2.54).
-- Conditional on the cleaned data, the ordering did not change: weighted-Huber
-  formulations still dominate plain Huber/Gamma among neural runs, temporal-CV
-  tuning still beats spatial k-fold tuning, and tabular baselines still beat
-  every neural model on aggregate metrics. This strengthens the conclusion that
-  the remaining gap is about what the neural spatial features add over pooled
-  tabular regression, not about dirty targets.
+The leading candidates on the current dataset:
 
-Pre-QC interpretation (kept because the mechanism lessons still hold):
-
-- `weekly_land_v5` was the clean Gamma reference: nearly unbiased and the best
-  neural model for high-end magnitude and CSI.
-- Ordinary Huber improved typical MAE but developed a consistent negative bias
-  and underpredicted extremes more strongly.
-- The `delta=0.25`, `1.0`, and `2.0` Huber sweep confirmed that the loss change
-  mostly moves the bias/extreme tradeoff rather than producing a large overall
-  accuracy gain.
-- Rainfall-weighted Huber mostly removed that negative bias and improved RMSE,
-  supporting the hypothesis that the scalar Huber objective needed more
-  wet-week influence.
-- MSE checkpoint selection further improved RMSE and produced the best neural
-  standalone squared-error profile.
-- The tuned spatial Gamma finalist did not improve on v5 and had more negative
-  bias, suggesting that the k-fold search was not producing a better
-  transferable configuration; the temporal studies produced the strongest
-  candidates (t36), which is why temporal CV is the default for new studies.
-
-The leading candidates on the cleaned dataset depend on the intended objective:
-
-- best overall RMSE/R2: `ridge` (48.37 / 0.500);
-- best neural RMSE/R2: `weekly_land_v6_huber_rw_t36_qc` (49.32 / 0.480);
-- lowest MAE: `gbm` (33.50);
-- best neural CSI: `weekly_land_v6_huber_rw_t36_qc` (0.659);
-- best neural calibration (bias, 98th-pct): `weekly_land_v5_qc`.
+- best overall RMSE/R2: `gbm` (49.17 / 0.462), statistically tied with
+  OLS and the LAND ensembles;
+- lowest MAE: `gbm` (33.18), at the cost of a -12.2 mm bias;
+- best CSI: `weekly_land_v3_huber_recent_bal_lowlr` (0.655), within noise of
+  the other LAND runs;
+- per-station wins: none decisive — LAND's only lead is `poloa_UH` by <1 mm.
 
 ## 10. Per-station differences
 
@@ -900,7 +802,7 @@ machine-readable source remains:
 LAND_AS/output/baselines/test_metrics_by_station.json
 ```
 
-This file now contains every baseline, every evaluated run, and every blend. It
+This file now contains every baseline and every evaluated run. It
 includes, for each test station:
 
 - MSE/RMSE/MAE;
@@ -922,7 +824,7 @@ distribution diagnostic. It compares the pre-2017 training rows, post-2016 test
 stations, and 734 unused post-2016 "bridge" rows for the two WRCC training
 stations (`siufaga_WRCC` and `toa_ridge_WRCC`).
 
-Key findings (pre-QC numbers; see below for the QC outcome):
+Key findings (raw-data audit, before the cleaning rules of section 3.1):
 
 - Training has 197/6,686 exact-zero weeks (2.95%); test has 17/1,188 (1.43%).
 - The post-2016 bridge group has only 2/734 exact-zero weeks (0.27%).
@@ -940,8 +842,9 @@ Key findings (pre-QC numbers; see below for the QC outcome):
   with less than ~1.3 mm of rain reads as zero.
 - `vaipito2000` shows a record collapse: 0% zero days and a ~30 mm/day mean in
   1958-60 (implausible), then daily medians of exactly 0 with 51-70% zero days
-  through the 1970s-90s, and a weekly mean (~40 mm) about half of co-located
-  `vaipito_res`/`vaipito_UH` (~82 mm).
+  through the 1970s-90s. Its 1989-90 overlap with `vaipito_res` is identical
+  (weekly r = 1.000), so it is the same site's earlier record; the earlier
+  "half the co-located mean" framing was era-confounded.
 - Nearly all test-set zeros are an `afono_UH` artifact: 14 of its 15 zero weeks
   fall inside three flat-zero runs of 30-53 consecutive days during which
   neighbouring gauges recorded 3-6 mm/day and shared none of the "dry" weeks.
@@ -957,9 +860,12 @@ zero rates, units, record length, and reporting resolution than the modern UH
 test stations. The strict split therefore asks the model to extrapolate across
 both location and observing network.
 
-QC actions applied (see section 3.1): `aunuu` and `vaipito2000` removed, and the
-three `afono_UH` flat-zero runs masked to missing. On the rebuilt dataset:
-training 143/6,078 exact-zero weeks (2.35%), test 3/1,170 (0.26%). The residual
+QC actions applied (see section 3.1): `aunuu` and `afono_UH` removed entirely
+(the latter's three flat-zero runs were gauge-offline artifacts), and
+`vaipito2000` windowed to 1976-01-01..1989-09-30 (its uncorroborated 1958-69
+block and its identical-to-`vaipito_res` overlap dropped). On the audit's
+rebuilt dataset: training 143/6,078 exact-zero weeks (2.35%), test 3/1,170
+(0.26%). The residual
 train excess lives mostly in `pioa_afono`, `fagaitua`, `vaipito_res`, `satala`,
 `aasufou80`, and `malaeimi_1691` (~90% of remaining zeros), whose zeros largely
 co-occur with neighbouring stations and look real but are inflated by 0.01-inch
@@ -981,10 +887,11 @@ reporting floors; whether to remove more is the station-sensitivity question in
   (`QC_EXCLUDE_STATIONS` + rebuild, 666 weeks / one LOSO fold lost) rather than
   removed outright.
 
-The ablation has now been run (`weekly_land_v6_huber_rw_t36_qc_nopioa_v2`,
-same t36 config, 18 folds): test RMSE worsened 49.32 to 50.02, MAE 35.46 to
-35.77, and R2 fell 0.480 to 0.465 — far above the ~0.01 mm run-to-run noise
-measured by an accidental identical-config rerun. Excluding `pioa_afono` loses
+A controlled exclusion ablation was run (same tuned Huber config, LOSO folds,
+`pioa_afono` dropped from `QC_EXCLUDE_STATIONS` + rebuild, losing 666 weeks /
+one fold): test RMSE worsened 49.32 to 50.02, MAE 35.46 to
+35.77, and R2 fell 0.480 to 0.465 — far above the ~0.4 mm run-to-run noise
+seen between identical-config reruns. Excluding `pioa_afono` loses
 more signal than artifact, so it is retained. The conclusion generalizes
 cautiously to the other co-occurring legacy gauges: further exclusions should
 be individually justified, not batched.
@@ -1011,12 +918,12 @@ Earlier exploratory code and outputs were removed from the active tree. The
 main lessons were:
 
 - adding a daily temporal atmospheric encoder changed many variables at once
-  and did not produce a defensible replacement for v5;
+  and did not produce a defensible replacement for the weekly model;
 - full-data retraining without a validation split removed the ability to select
   an independent best epoch;
 - the resulting models improved some ranking or MAE metrics but worsened bias,
   RMSE, and extreme-rainfall calibration;
-- the controlled v5-sized Huber experiments were retained because they changed
+- the controlled scalar-Huber experiments were retained because they changed
   fewer assumptions and produced more interpretable comparisons.
 
 Those deleted experiments are not represented in the current output tree and
@@ -1045,18 +952,16 @@ Run metadata also includes:
 - `hyperparameters.json`
 - `normalization.json`
 - `split.json`
-- `experiment.json` for v5 Huber variants
 - fold histories and checkpoints
-
-The original `weekly_land_v5` predates the snapshot system, so it has
-`reproduction.json` documenting the reconstructed command and Optuna provenance.
 
 ## 14. Notebook guide
 
 ```text
 LAND_AS/notebooks/
+├── 00_qc_evidence.ipynb            # figures proving each station-cleaning rule
+├── viz.ipynb                       # data coverage/zero-rate/maps/features/architecture/results tour
 ├── 01_data_prep_eda.ipynb          # raw/prepared data + low-end shift audit
-├── 02_tuning_eda.ipynb             # v5 Optuna study and split diagnostics
+├── 02_tuning_eda.ipynb             # Optuna study and split diagnostics
 ├── 03_training_eda.ipynb           # LOSO histories and run evaluation
 ├── 04_results_comparison.ipynb     # baselines and runs together
 └── 05_land_style_figures.ipynb     # LAND-style figures adapted to American Samoa
@@ -1071,26 +976,34 @@ It uses American Samoa data rather than the Hawaii-specific map/GCM files.
 
 ```text
 LAND_AS/output/
-├── baselines/        # pooled baselines + aligned model comparisons (post-QC)
-├── baselines_pre_qc/ # preserved pre-QC baseline metrics (historical)
+├── baselines/        # pooled baselines + aligned model comparisons
+├── baselines_daily/  # same layout for --daily runs (CSI 25 mm/day)
+├── baselines_OLD/    # preserved metrics from a prior dataset snapshot
 ├── figures/          # notebook-generated diagnostic figures
 ├── runs/             # retained LOSO ensembles and evaluations
 └── tuning/           # retained Optuna studies
+
+LAND_AS/scripts/      # one-off analysis helpers
+└── dm_baseline_check.py      # refit pooled baselines on a legacy weekly
+                              # dataset under its own station/year split
 ```
 
 The main entry points are:
 
 ```text
-LAND_AS/s1_prepare/prepare.py            # build feature caches and weekly NPZ
-LAND_AS/s1_prepare/       # vendored Daily_Modeling data builders + QC config
-LAND_AS/s2_dataset/data.py               # split, lag features, crops, loaders, LOSO
-LAND_AS/s3_model/model.py              # Gamma and Huber LAND heads/losses
-LAND_AS/s3_model/engine.py             # fit, predict, metrics helpers
-LAND_AS/s4_train/parallelize.py        # fold/seed orchestration
-LAND_AS/s4_train/train.py              # Gamma study/hyperparameter training
-LAND_AS/s5_evaluate/evaluate.py           # ensemble evaluation
-LAND_AS/s5_evaluate/baselines/models.py   # baseline implementations
-LAND_AS/s5_evaluate/baselines/evaluate.py # baseline and aligned-model metrics
+LAND_AS/s1_prepare/prepare.py              # build feature caches + weekly/daily NPZ
+LAND_AS/s1_prepare/load_raw.py             # raw station/climate/DEM ingestion + QC config
+LAND_AS/s1_prepare/build_features.py       # feature cache construction (reused by both freqs)
+LAND_AS/s1_prepare/assemble_dataset.py     # NPZ assembly (weekly + daily)
+LAND_AS/s2_dataset/data.py                 # split, lag features, crops, loaders, CV folds
+LAND_AS/s3_model/model.py                  # LAND architecture + Gamma/Huber/BernGamma heads
+LAND_AS/s3_model/engine.py                 # fit, predict, metrics helpers
+LAND_AS/s4_train/tune.py                   # Optuna studies (broad space incl. ablations)
+LAND_AS/s4_train/train.py                  # LOSO/loso_recent ensemble training
+LAND_AS/s4_train/parallelize.py            # fold/seed orchestration
+LAND_AS/s5_evaluate/evaluate.py            # ensemble eval + robust trial selector
+LAND_AS/s5_evaluate/baselines/models.py    # baseline implementations
+LAND_AS/s5_evaluate/baselines/evaluate.py  # baseline and aligned-model metrics
 ```
 
 `LAND_AS/next-steps.md` documents the recommended future experiments and the
@@ -1110,6 +1023,6 @@ A candidate should not be promoted on one metric. Compare at least:
 - station-level errors;
 - predicted variance by station.
 
-A neural candidate should also be checked against Ridge and GBM, because both
+A neural candidate should also be checked against OLS and GBM, because both
 are strong enough in this dataset to serve as legitimate alternatives rather
 than trivial baselines.

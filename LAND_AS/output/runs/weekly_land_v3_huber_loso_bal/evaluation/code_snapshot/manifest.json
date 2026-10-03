@@ -1,0 +1,65 @@
+{
+  "created_utc": "2026-09-28T21:46:10.243917+00:00",
+  "command": [
+    "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\LAND_AS\\s5_evaluate\\evaluate.py",
+    "--run",
+    "weekly_land_v3_huber_loso_bal"
+  ],
+  "cwd": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall",
+  "python": {
+    "executable": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\venv\\Scripts\\python.exe",
+    "version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "implementation": "CPython"
+  },
+  "platform": "Windows-10-10.0.26200-SP0",
+  "git": {
+    "commit": "4cec5d31d4fe71890d4f651bfaf3eb60816d660b",
+    "dirty": true,
+    "status": "M .gitignore\n M LAND_AS/README.md\n M LAND_AS/config.py\n M LAND_AS/output/baselines/fold_metrics.json\n M LAND_AS/output/baselines/model_metrics.json\n M LAND_AS/output/baselines/test_metrics.json\n M LAND_AS/output/baselines/test_metrics_by_station.csv\n M LAND_AS/output/baselines/test_metrics_by_station.json\n M LAND_AS/output/baselines/test_metrics_by_station.md\n M LAND_AS/provenance.py\n M LAND_AS/s1_prepare/config.py\n M LAND_AS/s1_prepare/load_raw.py\n M LAND_AS/s1_prepare/prepare.py\n M LAND_AS/s2_dataset/data.py\n M LAND_AS/s3_model/engine.py\n M LAND_AS/s3_model/metrics.py\n M LAND_AS/s3_model/model.py\n M LAND_AS/s4_train/parallelize.py\n M LAND_AS/s4_train/train.py\n M LAND_AS/s4_train/tune.py\n M LAND_AS/s5_evaluate/baselines/evaluate.py\n M LAND_AS/s5_evaluate/baselines/models.py\n M LAND_AS/s5_evaluate/evaluate.py\n?? LAND_AS/notebooks/00_qc_evidence.ipynb\n?? LAND_AS/output/baselines_OLD/\n?? LAND_AS/output/baselines_daily/\n?? LAND_AS/output/figures/\n?? LAND_AS/output/runs/daily_land_v1_bern_gamma/\n?? LAND_AS/output/runs/weekly_land_v2_huber_rw_temporal_broad/\n?? LAND_AS/output/runs/weekly_land_v3_huber_loso_bal/\n?? LAND_AS/output/runs/weekly_land_v3_huber_recent_bal/\n?? LAND_AS/output/tuning/daily_land_v1_bern_gamma/\n?? LAND_AS/output/tuning/weekly_land_v2_huber_rw_temporal_broad/\n?? LAND_AS/output/tuning/weekly_land_v3_huber_rw_temporal_broad/\n?? LAND_AS/scripts/\n?? nul\n?? raw_data/"
+  },
+  "dataset": {
+    "path": "C:\\Users\\JR\\Documents\\GitHub\\AS_rainfall\\LAND_AS\\data\\weekly_dataset.npz",
+    "exists": true,
+    "sha256": "9bf08d3a695a7bbef8e2f6affba121400be3c67fd241f7edf5827cb3be8d4437",
+    "size_bytes": 9771518
+  },
+  "packages": {
+    "numpy": "2.3.3",
+    "pandas": "2.3.2",
+    "scikit-learn": "1.7.2",
+    "torch": "2.8.0+cu129",
+    "optuna": "4.5.0",
+    "xarray": "2025.9.0",
+    "scipy": "1.16.2"
+  },
+  "source_files": [
+    {
+      "path": "LAND_AS/s5_evaluate/evaluate.py",
+      "sha256": "227587d9339a66ea0e91ac736aad5fcae45caa44b345fb9e08a51ccaf45a4967"
+    },
+    {
+      "path": "LAND_AS/s3_model/model.py",
+      "sha256": "8fd45bd232d2de97979892633be5b2dc8b6207e5a0fe239adb89ffc664c4bc9d"
+    },
+    {
+      "path": "LAND_AS/s3_model/engine.py",
+      "sha256": "7afc064e2d626ae4c3f29a4ba5537ae4f1e927b35db27d69d4b24e08c948ad6a"
+    },
+    {
+      "path": "LAND_AS/s3_model/metrics.py",
+      "sha256": "c6d6c9b060421afff907284dc856a99e116a7788d4a3d8e1abc4366ff980f2c7"
+    },
+    {
+      "path": "LAND_AS/s2_dataset/data.py",
+      "sha256": "b26b31a3f37ce4333b22193c4ea0cb0fbbafef863ff2d97135cf96451a4ce5cc"
+    },
+    {
+      "path": "LAND_AS/config.py",
+      "sha256": "fed4d3b5fd75cc88c83b35c2a4a463ef10a9fc36307b298cc20320b64d61277a"
+    },
+    {
+      "path": "LAND_AS/provenance.py",
+      "sha256": "fc10d7301574a8fc1b1774a0e3c3beba3db3a3e6f18df82d4eaf83365c347522"
+    }
+  ]
+}

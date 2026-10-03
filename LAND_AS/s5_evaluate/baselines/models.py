@@ -1,4 +1,4 @@
-"""Stage 5: pooled and site-specific baselines for the weekly LAND model.
+"""Stage 5: pooled and site-specific baselines for the LAND model.
 
 Baseline definitions only; they are fit and scored by evaluate.py in this
 package using the same s2_dataset splits as the LAND ensembles.
@@ -7,9 +7,9 @@ Test stations have no pre-2017 records, so test-set baselines are pooled
 (trained across stations, like LAND) or trivially computable (persistence).
 Site-specific baselines are evaluated per LOSO fold on train stations only.
 
-Features mirror the model inputs: current-week climate channels (patch mean
-and station's center cell), DEM channel means, month one-hot, and the lag
-vector (antecedent rainfall + availability masks).
+Features mirror the model inputs: current-period climate channels (patch
+mean and station's center cell), DEM channel means, month one-hot, and the
+lag vector (antecedent rainfall + availability masks).
 """
 
 import numpy as np
@@ -25,7 +25,7 @@ def build_features(bundle, indices):
     indices = np.asarray(indices, dtype=int)
     climate = bundle.arrays["climate"][indices]
     block = int(bundle.metadata["climate_block"])
-    current = climate[:, :block]  # current-week channels only
+    current = climate[:, :block]  # current-period channels only
     ch, cw = current.shape[2] // 2, current.shape[3] // 2
     dem = bundle.arrays["station_dem_idx"][indices]
     features = [
@@ -57,8 +57,8 @@ def month_climatology(bundle, train_idx, test_idx):
 
 
 def persistence(bundle, train_idx, test_idx):
-    """Previous week's observed rainfall; falls back to train mean when the
-    lag week is missing (record start/gap)."""
+    """Previous period's observed rainfall; falls back to train mean when the
+    lag period is missing (record start/gap)."""
     lag = bundle.arrays["lag"][test_idx]
     lag_max = int(bundle.metadata["lag_max"])
     scale = float(bundle.stats["target_scale"])
@@ -68,7 +68,7 @@ def persistence(bundle, train_idx, test_idx):
     return np.where(has_prev, rain_prev, fallback)
 
 
-def ridge(bundle, train_idx, test_idx):
+def ols(bundle, train_idx, test_idx):
     model = make_pipeline(StandardScaler(), LinearRegression())
     model.fit(build_features(bundle, train_idx), bundle.arrays["target"][train_idx].numpy())
     return np.clip(model.predict(build_features(bundle, test_idx)), 0, None)
@@ -107,7 +107,7 @@ TEST_BASELINES = {
     "pooled_mean": pooled_mean,
     "month_climatology": month_climatology,
     "persistence": persistence,
-    "ridge": ridge,
+    "ols": ols,
     "tweedie_glm": tweedie_glm,
     "gbm": gbm,
 }

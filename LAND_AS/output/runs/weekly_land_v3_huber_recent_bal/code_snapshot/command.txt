@@ -1,0 +1,1 @@
+C:\Users\JR\Documents\GitHub\AS_rainfall\LAND_AS\s4_train\train.py --study weekly_land_v3_huber_rw_temporal_broad --cv-mode loso_recent --balanced-stations --run weekly_land_v3_huber_recent_bal --seeds 3 --epochs 500 --patience 50 --workers 4

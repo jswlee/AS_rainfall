@@ -1,0 +1,20 @@
+{
+  "climate_units": 1920,
+  "dem_units": 64,
+  "month_units": 8,
+  "hidden_units": 384,
+  "dropout": 0.6065455513405552,
+  "dem_size": 6,
+  "climate_lag_weeks": 3,
+  "rain_lag_weeks": 3,
+  "batch_size": 64,
+  "learning_rate": 0.00040882485957526726,
+  "weight_decay": 0.00021657027339858182,
+  "local_dem_cfg": 6,
+  "regional_dem_cfg": 9,
+  "lightweight": 1,
+  "use_lag": 1,
+  "dem_elev_only": 1,
+  "dataset_freq": "weekly",
+  "train_cv_mode": "loso_recent"
+}
